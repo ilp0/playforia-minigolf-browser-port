@@ -1,0 +1,252 @@
+# Wire Protocol Reference
+
+Transport: WebSocket text frames. One packet per frame. No trailing `\n`.
+
+Every packet starts with a single-character type prefix and a space, then the
+body. Bodies are tab-separated where they have multiple fields.
+
+## Packet types
+
+| Prefix | Type      | Use                                                       |
+|--------|-----------|-----------------------------------------------------------|
+| `c`    | COMMAND   | Control frames (ping/pong, new, id, end, etc.)            |
+| `d`    | DATA      | Game logic. Carries a per-direction sequence number.       |
+| `s`    | STRING    | Telemetry. Rare. Currently unused inbound.                 |
+| `h`    | HEADER    | Initial handshake (`h 1`) sent by server on connect.       |
+
+DATA packets are the only ones with sequence numbers. Both directions count
+independently (server's outbound seq starts at 0, client's outbound seq starts
+at 0). A seq mismatch closes the connection — see `Connection.handleRawMessage`.
+
+## Connect handshake
+
+On WebSocket open the server sends three frames immediately:
+```
+h 1
+c crt 250
+c ctr
+```
+
+Then the client drives login. The handshake-banner values aren't checked by
+us (Java reads them) but we send them verbatim for compatibility.
+
+## Login flow
+
+```
+client → c new
+server → c id <int>            (assigned player id, monotonic)
+client → d 0 version<TAB>35    (35 = GOLF gametype version)
+server → d 0 status<TAB>login
+client → d 1 language<TAB>en   (en|fi|sv — server records, no reply)
+client → d 2 logintype<TAB>nr  (nr = guest; the only one we implement)
+server → d 1 status<TAB>login  (yes, twice — Java oddity)
+client → d 3 login
+server → d 2 basicinfo<TAB>t<TAB>0<TAB>t<TAB>t
+server → d 3 status<TAB>lobbyselect<TAB>300
+```
+
+After this the client is at the lobby-select screen.
+
+## Lobby select
+
+Polled every 5s by the lobbyselect panel for live counts:
+```
+client → d N lobbyselect<TAB>rnop
+server → d K lobbyselect<TAB>nop<TAB>{single}<TAB>{dual}<TAB>{multi}
+```
+
+To enter a lobby:
+```
+client → d N lobbyselect<TAB>select<TAB>{1|2|x}[<TAB>h]   (h = chat-hidden)
+server → d K status<TAB>lobby<TAB>{1|2|x}[h]
+server → d K+1 lobby<TAB>users[<TAB>{playerString}...]    (player list)
+server → d K+2 lobby<TAB>ownjoin<TAB>{playerString}        (self)
+server → d K+3 lobby<TAB>tagcounts<TAB>{all}<TAB>{c1}..{c6}  (port-extension)
+```
+
+Multi lobbies additionally get the game list right after `users`:
+```
+server → d K lobby<TAB>gamelist<TAB>full<TAB>{count}<TAB>{game0_f0}<TAB>...<TAB>{gameN_f14}
+```
+
+## Player string
+
+`Player.toString()` produces a caret-separated 6-tuple, prefixed with `3:`:
+```
+3:{nick}^{flags}^{ranking}^{lang}^{profileUrl|-}^{avatarUrl|-}
+```
+
+`flags` is one of `r`, `v`, `s`, `n` (registered/vip/sheriff/no-challenges)
+or `w` if none apply.
+
+## Game string (15 fields)
+
+Used in `lobby gamelist add/change` and friends. Tab-separated:
+```
+{id}<TAB>{name}<TAB>{passworded(t/f)}<TAB>{perms}<TAB>{numPlayers}<TAB>-1
+<TAB>{numTracks}<TAB>{trackType}<TAB>{maxStrokes}<TAB>{strokeTimeout}
+<TAB>{waterEvent}<TAB>{collision}<TAB>{trackScoring}<TAB>{trackScoringEnd}
+<TAB>{currentPlayers}
+```
+
+`-1` is a placeholder slot from the original Java. `trackType` is the
+category id (0=Mixed, 1=Basic, 2=Traditional, 3=Modern, 4=HIO, 5=Short,
+6=Long).
+
+## Lobby chat
+
+```
+client → d N lobby<TAB>say<TAB>{text}
+server → d K lobby<TAB>say<TAB>{text}<TAB>{senderNick}<TAB>{senderClan}
+   (broadcast to OTHERS only — sender echoes locally)
+
+client → d N lobby<TAB>sayp<TAB>{recipientNick}<TAB>{text}
+server → d K lobby<TAB>sayp<TAB>{senderNick}<TAB>{text}
+   (delivered to recipient only)
+```
+
+Game chat is symmetric:
+```
+client → d N game<TAB>say<TAB>{text}
+server → d K game<TAB>say<TAB>{playerId}<TAB>{text}
+```
+
+Newlines and tabs in chat text are stripped client-side (would break framing).
+
+## Single-player game (training)
+
+```
+client → d N {lobby|lobbyselect}<TAB>cspt<TAB>{numTracks}<TAB>{trackType}<TAB>{water}
+   (lobby = use this when already in lobby; lobbyselect = creates+joins
+    in one step)
+
+server → d K status<TAB>game
+server → d K+1 game<TAB>gameinfo<TAB>{15 fields, see below}
+server → d K+2 game<TAB>players                   (no other players → no fields)
+server → d K+3 game<TAB>owninfo<TAB>{numIdx}<TAB>{nick}<TAB>{clan}
+server → d K+4 game<TAB>start
+server → d K+5 game<TAB>resetvoteskip
+server → d K+6 game<TAB>starttrack<TAB>{playStatus}<TAB>{gameId}<TAB>{trackData}
+```
+
+`{trackData}` is the V1 networkSerialize body. Tab-separated lines:
+```
+V 1<TAB>A {author}<TAB>N {name}<TAB>T {map}<TAB>C {categories}
+<TAB>I {plays},{strokes},{bestPar},{numBestPar}<TAB>B {bestPlayer},{bestEpochMs}
+<TAB>R {r0},{r1},...,{r10}
+```
+The `B` line is omitted if `bestPar < 0`. The `C` line is OUR port extension —
+Java doesn't include it. Use `extractField(fields, "C ")` on the client.
+
+## Game info packet (15 fields)
+
+```
+game<TAB>gameinfo<TAB>{name}<TAB>{passworded(t/f)}<TAB>{gameId}<TAB>{numPlayers}
+<TAB>{numTracks}<TAB>{trackType}<TAB>{maxStrokes}<TAB>{strokeTimeout}
+<TAB>{waterEvent}<TAB>{collision}<TAB>{trackScoring}<TAB>{trackScoringEnd}<TAB>f
+```
+
+Field positions (0-indexed within the tab-split fields array, so `[0]=game`,
+`[1]=gameinfo`):
+- `[2]` name
+- `[3]` passworded
+- `[4]` gameId
+- `[5]` numPlayers
+- `[6]` numTracks
+- `[7]` trackType
+- `[8]` maxStrokes
+- `[9]` strokeTimeout
+- `[10]` waterEvent
+- `[11]` collision
+- `[12]` trackScoring
+- `[13]` trackScoringEnd
+- `[14]` "f"
+
+## Multi-player game
+
+Create:
+```
+client → d N lobby<TAB>cmpt<TAB>{name}<TAB>{password|-}<TAB>{perms=0}
+        <TAB>{numPlayers}<TAB>{numTracks}<TAB>{trackType}<TAB>{maxStrokes}
+        <TAB>{strokeTimeout=60}<TAB>{water}<TAB>{collision}
+        <TAB>{trackScoring=0}<TAB>{trackScoringEnd=0}
+```
+
+Server processes via `LobbyMultiplayerHandler`, broadcasts
+`lobby gamelist add <gameString>` to everyone in the lobby and adds the
+creator to the new game.
+
+Join:
+```
+client → d N lobby<TAB>jmpt<TAB>{gameId}[<TAB>{password}]
+   (if password is wrong, server replies `error wrongpassword` and bumps
+    the player back to the lobby)
+```
+
+When the game fills, server broadcasts `lobby gamelist remove <gameId>` and
+sends `game start` + `game starttrack` to all players.
+
+## Stroke flow (async, port-specific)
+
+Initiating a stroke:
+```
+client → d N game<TAB>beginstroke<TAB>{ballCoords}<TAB>{mouseCoords}
+   (client does NOT apply impulse — waits for the broadcast)
+server → d K game<TAB>beginstroke<TAB>{playerId}<TAB>{ballCoords}<TAB>{mouseCoords}<TAB>{seed}
+   (broadcast to ALL players including the shooter; seed is the server-assigned
+    32-bit per-stroke seed)
+```
+
+`ballCoords` and `mouseCoords` are base-36 4-character encodings of
+`x * 1500 + y * 4 + mode`.
+
+When the ball stops (any reason — at rest, in hole, on water/acid):
+```
+client → d N game<TAB>endstroke<TAB>{playerId}<TAB>{playStatusString}
+   (only the shooter sends this; playStatus is one char per player —
+    't' = in hole, 'p' = forfeited/passed, 'f' = still playing)
+server → d K game<TAB>endstroke<TAB>{playerId}<TAB>{strokesThisTrack}<TAB>{status: t|p|f}
+   (broadcast to ALL — server may flip 'f' to 'p' if the player just hit the
+    stroke cap; the strokes count is authoritative)
+```
+
+Forfeit:
+```
+client → d N game<TAB>forfeit
+server → d K game<TAB>endstroke<TAB>{playerId}<TAB>{maxStrokes}<TAB>p
+```
+
+When all players are non-`f`, server advances:
+```
+server → d K game<TAB>resetvoteskip
+server → d K+1 game<TAB>starttrack<TAB>{playStatus}<TAB>{gameId}<TAB>{trackData}
+   (a new per-stroke seed counter starts here too)
+```
+
+When the last track is done:
+```
+server → d K game<TAB>end[<TAB>{p0Result}<TAB>{p1Result}...]
+   (1 = winner, 0 = draw, -1 = loser; results omitted in single-player)
+```
+
+## Heartbeat
+
+Server side:
+- If no inbound for 15s → send `c ping`.
+- If no inbound for 60s → close with reason "idle-timeout".
+
+Client side:
+- Always reply pong to inbound `c ping` (auto-handled in `Connection`).
+- Proactive `c ping` every 15s regardless. This is what keeps a backgrounded
+  browser tab from being timed out (Chrome throttles JS in background tabs;
+  the auto-pong might miss the deadline; the proactive ping has more slack).
+
+## Quitting / leaving
+
+```
+client → d N game<TAB>back        (in-game: leave to lobby)
+server → d K status<TAB>lobby<TAB>{type}    (re-routes via app.setPanel)
+```
+
+`back` from the LAST player in a game also triggers `lobby gamelist remove
+<gameId>` for everyone in that lobby.

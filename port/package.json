@@ -1,0 +1,16 @@
+{
+  "name": "playforia-minigolf-port",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["shared", "server", "web"],
+  "scripts": {
+    "build:shared": "npm -w shared run build",
+    "build:server": "npm -w server run build",
+    "build:web": "npm -w web run build",
+    "build": "npm run build:shared && npm run build:server && npm run build:web",
+    "dev:server": "npm -w server run dev",
+    "dev:web": "npm -w web run dev",
+    "test": "npm -w shared test",
+    "assets": "node scripts/prepare-assets.mjs"
+  }
+}

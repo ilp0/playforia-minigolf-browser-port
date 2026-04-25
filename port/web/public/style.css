@@ -1,0 +1,425 @@
+/* Playforia Minigolf — browser port. Visual goal: pixel-faithful match to the
+   original Java AWT client (light-green background #99FF99, pastel buttons,
+   serif titles, AWT-style 3D-bevel widgets). */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #2a2d33;
+  color: #000;
+  font-family: "Verdana", Tahoma, Geneva, sans-serif;
+  font-size: 12px;
+}
+
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+#app {
+  width: 735px;
+  height: 525px;
+  background: #99ff99; /* GolfGameFrame.colourGameBackground */
+  border: 1px solid #000;
+  position: relative;
+  overflow: hidden;
+}
+
+/* ---------- AWT-style controls ---------- */
+
+input[type="text"],
+input[type="password"],
+select {
+  background: #fff;
+  color: #000;
+  border: 1px solid #000;
+  border-top-color: #7a7a7a;
+  border-left-color: #7a7a7a;
+  padding: 2px 4px;
+  font-family: "Dialog", "Verdana", Tahoma, sans-serif;
+  font-size: 12px;
+  border-radius: 0;
+  outline: none;
+}
+
+input[type="text"]:focus,
+select:focus {
+  outline: 1px dotted #000;
+  outline-offset: -3px;
+}
+
+button {
+  background: #d9d9d9; /* Dialog grey — matches AWT default */
+  color: #000;
+  border: 2px outset #d9d9d9;
+  padding: 3px 12px;
+  font-family: "Dialog", "Verdana", Tahoma, sans-serif;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 0;
+  min-height: 22px;
+}
+
+button:active:not(:disabled) {
+  border-style: inset;
+}
+
+button:disabled {
+  color: #888;
+  cursor: not-allowed;
+}
+
+/* Coloured AWT buttons: green / yellow / red / blue */
+button.btn-green  { background: #90e090; border-color: #90e090; }
+button.btn-yellow { background: #e0e090; border-color: #e0e090; }
+button.btn-red    { background: #e09090; border-color: #e09090; }
+button.btn-blue   { background: #9090e0; border-color: #9090e0; }
+
+/* AWT-style checkbox */
+.awt-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  user-select: none;
+}
+.awt-check input[type="checkbox"] {
+  margin: 0;
+}
+
+/* ---------- Loading ---------- */
+
+.panel-loading {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #99ff99;
+  color: #000;
+}
+
+.panel-loading h1 {
+  font-family: "Times New Roman", "Liberation Serif", serif;
+  font-size: 26px;
+  font-weight: bold;
+  margin: 0 0 16px 0;
+}
+
+.progress {
+  width: 320px;
+  height: 14px;
+  background: #fff;
+  border: 1px solid #000;
+  border-top-color: #7a7a7a;
+  border-left-color: #7a7a7a;
+  position: relative;
+}
+
+.progress-bar {
+  height: 100%;
+  width: 0%;
+  background: #408040;
+  transition: width 200ms linear;
+}
+
+/* ---------- Login ---------- */
+
+.panel-login {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #99ff99;
+  gap: 12px;
+}
+
+.panel-login h1 {
+  font-family: "Times New Roman", "Liberation Serif", serif;
+  font-size: 26px;
+  font-weight: bold;
+  margin: 0 0 8px 0;
+  color: #000;
+}
+
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.form-row label {
+  width: 90px;
+  text-align: right;
+  color: #000;
+  font-family: "Dialog", "Verdana", Tahoma, sans-serif;
+}
+
+/* ---------- Lobby select ---------- */
+
+.panel-lobbyselect {
+  width: 100%;
+  height: 100%;
+  background: #99ff99 url("/picture/agolf/bg-lobbyselect.gif") no-repeat top left;
+  position: relative;
+  font-family: "Dialog", "Verdana", Tahoma, sans-serif;
+  color: #000;
+}
+
+.panel-lobbyselect .lobby-titles {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 130px;
+  pointer-events: none;
+}
+
+.panel-lobbyselect .lobby-title {
+  position: absolute;
+  font-family: "Times New Roman", "Liberation Serif", serif;
+  font-weight: bold;
+  font-size: 26px;
+  text-align: center;
+  transform: translateX(-50%);
+  top: 50px;
+  white-space: nowrap;
+}
+
+.panel-lobbyselect .lobby-count {
+  position: absolute;
+  font-family: "Dialog", "Verdana", sans-serif;
+  font-size: 12px;
+  text-align: center;
+  transform: translateX(-50%);
+  top: 100px;
+}
+
+/* Three columns of buttons at the bottom of the bg image, mirroring
+   LobbySelectPanel.create() coordinates (height-150, height-95, etc). */
+.panel-lobbyselect .col {
+  position: absolute;
+  bottom: 0;
+  width: 33.333%;
+  height: 165px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding-top: 14px;
+}
+
+.panel-lobbyselect .col.col-1 { left: 0%; }
+.panel-lobbyselect .col.col-2 { left: 33.333%; }
+.panel-lobbyselect .col.col-3 { left: 66.666%; }
+
+.panel-lobbyselect .col button {
+  width: 150px;
+  font-weight: bold;
+}
+
+.panel-lobbyselect .col .btn-quick {
+  width: 100px;
+  font-weight: normal;
+}
+
+.panel-lobbyselect .footer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 18px;
+  font-size: 12px;
+}
+
+.panel-lobbyselect .footer select {
+  min-width: 180px;
+}
+
+/* ---------- Single-player lobby ---------- */
+
+.panel-lobby {
+  width: 100%;
+  height: 100%;
+  background: #99ff99 url("/picture/agolf/bg-lobby-single.gif") no-repeat top left;
+  position: relative;
+  font-family: "Dialog", "Verdana", Tahoma, sans-serif;
+  color: #000;
+}
+
+.panel-lobby .nameplate {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: "Times New Roman", "Liberation Serif", serif;
+  font-size: 16px;
+  font-weight: bold;
+  color: #000;
+}
+
+.panel-lobby .controls {
+  position: absolute;
+  bottom: 24px;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 0 18px;
+}
+
+.panel-lobby .control-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.55);
+  padding: 4px 8px;
+  border: 1px solid #000;
+}
+
+/* ---------- Game ---------- */
+
+.panel-game {
+  width: 100%;
+  height: 100%;
+  background: #99ff99;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  font-family: "Dialog", "Verdana", Tahoma, sans-serif;
+  color: #000;
+}
+
+/* Scoreboard above the canvas — fixed-height like the Java PlayerInfoPanel. */
+.panel-game .scoreboard {
+  height: 75px;
+  width: 100%;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: "Dialog", "Verdana", Tahoma, sans-serif;
+  color: #000;
+  overflow: hidden;
+}
+
+.panel-game .scoreboard .row {
+  display: grid;
+  grid-template-columns: 16px 140px 1fr 64px 80px;
+  gap: 6px;
+  align-items: center;
+  white-space: nowrap;
+  font-weight: bold;
+}
+
+.panel-game .scoreboard .row.you {
+  color: #000080;
+}
+.panel-game .scoreboard .row.them {
+  color: #406040;
+}
+
+.panel-game .canvas-frame {
+  margin: 0 auto;
+  /* Light-green tinted border around the playfield, mirroring the original. */
+  padding: 3px;
+  background: #c4f0c4;
+  border: 1px solid #000;
+}
+
+.panel-game canvas {
+  display: block;
+  background: #99ff99;
+  image-rendering: pixelated;
+  cursor: crosshair;
+}
+
+.panel-game .trackinfo {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: #000;
+  gap: 8px;
+}
+
+.panel-game .trackinfo .left,
+.panel-game .trackinfo .right {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.panel-game .trackinfo .right {
+  text-align: right;
+  align-items: flex-end;
+}
+
+.panel-game .trackinfo .center {
+  text-align: center;
+  font-weight: bold;
+}
+
+.panel-game .hud-status {
+  font-size: 11px;
+  color: #406040;
+  font-style: italic;
+  text-align: center;
+}
+
+/* ---------- Game-over overlay ---------- */
+
+.game-end-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  font-family: "Times New Roman", "Liberation Serif", serif;
+  font-size: 22px;
+  font-weight: bold;
+  z-index: 20;
+}
+
+.game-end-overlay button {
+  font-family: "Dialog", "Verdana", Tahoma, sans-serif;
+  font-size: 12px;
+  font-weight: normal;
+}
+
+/* ---------- Error banner ---------- */
+
+.error-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: #c04040;
+  color: #fff;
+  padding: 4px 10px;
+  font-size: 12px;
+  text-align: center;
+  z-index: 100;
+}
