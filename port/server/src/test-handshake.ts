@@ -75,6 +75,29 @@ function assertStartsWith(actual: string, prefix: string, label: string): void {
     console.log(`  ok: ${label}: ${describe(actual)}`);
 }
 
+/**
+ * Pull frames off the queue, discarding any that don't match, until one does.
+ * Used in phases where the server may interleave port-extension packets
+ * (e.g. `lobby tagcounts`) whose exact position we don't want to assert.
+ */
+async function awaitMatch(
+    queue: FrameQueue,
+    predicate: (s: string) => boolean,
+    label: string,
+    timeoutMs = 5000,
+): Promise<string> {
+    const start = Date.now();
+    for (;;) {
+        const remaining = timeoutMs - (Date.now() - start);
+        if (remaining <= 0) throw new Error(`timeout waiting for ${label}`);
+        const frame = await queue.next(remaining);
+        if (predicate(frame)) {
+            console.log(`  ok: ${label}: ${describe(frame)}`);
+            return frame;
+        }
+    }
+}
+
 async function run(): Promise<void> {
     const running: RunningServer = await startServer({
         host: HOST,
@@ -139,16 +162,17 @@ async function run(): Promise<void> {
         // Per Java's LobbyCreateSinglePlayerHandler comment, the client sends "lobby\tcspt..."
         // when already in the lobby, "lobbyselect\tcspt..." when jumping straight from lobbyselect.
         ws.send("d 5 lobby\tcspt\t1\t0\t0");
-        // Lobby part for STARTED_SP is broadcast to remaining lobby players (none here),
-        // so the next frames the client sees are the game-related ones from sendJoinMessages.
-        assertStartsWith(await queue.next(), "d 7 status\tgame", "status game");
-        assertStartsWith(await queue.next(), "d 8 game\tgameinfo\t", "game gameinfo");
-        assertStartsWith(await queue.next(), "d 9 game\tplayers", "game players");
-        assertStartsWith(await queue.next(), "d 10 game\towninfo\t0\t", "game owninfo");
-        assertStartsWith(await queue.next(), "d 11 game\tstart", "game start");
-        assertStartsWith(await queue.next(), "d 12 game\tresetvoteskip", "game resetvoteskip");
-        assertStartsWith(await queue.next(), "d 13 game\tstarttrack\t", "game starttrack");
-        assertStartsWith(await queue.next(), "d 14 game\tstartturn\t0", "game startturn");
+        // The server interleaves a port-extension `lobby tagcounts` packet on lobby join
+        // (see lobby.ts addPlayer), so d-seq numbers in this phase aren't stable. Match on
+        // content instead, draining any extra frames the server emits.
+        // Async-mode play: no `startturn` follows starttrack (see game.ts startGame).
+        await awaitMatch(queue, (s) => /^d \d+ status\tgame$/.test(s), "status game");
+        await awaitMatch(queue, (s) => /^d \d+ game\tgameinfo\t/.test(s), "game gameinfo");
+        await awaitMatch(queue, (s) => /^d \d+ game\tplayers/.test(s), "game players");
+        await awaitMatch(queue, (s) => /^d \d+ game\towninfo\t0\t/.test(s), "game owninfo");
+        await awaitMatch(queue, (s) => /^d \d+ game\tstart$/.test(s), "game start");
+        await awaitMatch(queue, (s) => /^d \d+ game\tresetvoteskip$/.test(s), "game resetvoteskip");
+        await awaitMatch(queue, (s) => /^d \d+ game\tstarttrack\t/.test(s), "game starttrack");
 
         console.log("\nALL PHASES PASSED");
         ws.close();
