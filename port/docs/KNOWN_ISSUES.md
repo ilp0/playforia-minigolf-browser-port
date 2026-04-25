@@ -5,25 +5,6 @@ future maintainer (or fresh-context Claude) can pick up where we left off.
 
 ## Bugs (reported by user during playtest)
 
-### 1. Same maps appear more often than chance suggests
-
-**Symptom:** Across multiple games with the same track-type filter, the same
-tracks recur faster than `1/poolSize` would predict.
-
-**Hypothesis:** `TrackManager.getRandomTracks` does a Fisher–Yates shuffle of
-the filtered pool and slices the first N. There's no memory of recently-served
-tracks, so the same tracks can hit several games in a row. Math.random()'s
-distribution is fine — the issue is "no anti-repeat memory."
-
-**Suggested fix:**
-- Maintain a per-server (or per-lobby) `recentTrackIds: ringbuffer` of the last
-  ~50 tracks served. In `getRandomTracks`, prefer tracks NOT in the ring; only
-  fall through to "any" when the filtered pool is exhausted.
-- Or: weight the random pick so a track served recently has a temporarily
-  reduced probability.
-
-**Files:** `port/server/src/tracks.ts` — `getRandomTracks`.
-
 ### 2. User disconnects unexpectedly
 
 **Symptom:** A player's tab gets disconnected mid-game with no obvious cause.
@@ -52,86 +33,24 @@ Likely candidates:
 **Files:** `port/server/src/connection.ts` (idle constants),
 `port/web/src/connection.ts` (keepalive interval).
 
-### 3. Chat formatting is inconsistent
+### 6. `test-fullflow.ts` and `test-handshake.ts` are stale (predate `lobby tagcounts`)
 
-**Symptom:** The way usernames render in chat differs between lobby chat,
-in-game chat, and the local-echo of one's own messages.
+**Symptom:** Both
+`node --experimental-strip-types --no-warnings server/src/test-fullflow.ts` and
+`node --experimental-strip-types --no-warnings server/src/test-handshake.ts`
+fail with: `expected status game to start with "d 7 status\tgame" but got
+"d 7 lobby\ttagcounts\t2062\t..."`. Pre-existing on master; not caused by
+current changes.
 
-**Locations:**
-- `port/web/src/panels/lobby-multi.ts` — `appendChat`. Local echo writes
-  `<you> {text}` for own messages, `<{senderNick}> {text}` for others.
-- `port/web/src/panels/game.ts` — `appendChat`. Local echo writes
-  `<{myNick}> {text}` (the actual nick, not literal "you").
+**Cause:** The lobby join sequence now interleaves a `lobby tagcounts` packet
+between `lobby ownjoin` and the `status game` triggered by `cspt`. The tests'
+strict-positional assertions still expect the old order.
 
-**Fix:** pick one convention and apply everywhere. Suggested: always use
-`<{nick}> {text}` and have `myNick` filled in for the local user. Whisper
-prefix `[whisper from {nick}]` is consistent already.
+**Fix:** rewrite the assertion to drain frames until `status game` arrives
+(the way `test-multi.ts`, `test-forfeit.ts`, `test-daily.ts` already do via
+`awaitFrame`/`waitFor`-style predicates).
 
-### 4. Ball spawn point sometimes wrong (centre instead of marker)
-
-**Symptom:** On certain tracks the ball spawns at the centre of the playfield
-(367.5, 187.5) instead of the marked start position. Suspected to be tracks
-that have multiple coloured spawn points.
-
-**Hypothesis:** `port/web/src/game/map.ts:buildMap` only collects start
-positions from special shape `24` (common start). It does collect colour
-starts (shapes 48–51) into `resetPositions`, but those are NEVER used by the
-client to initial-position a ball — they're used for water-shore reset for
-that colour player.
-
-In the original game, multi-player tracks have one common start (shape 24)
-that all players spawn at. Tracks with ONLY coloured spawns (no shape 24)
-fall through to the centre default in our code.
-
-**Suggested fix in `game/map.ts`:**
-```ts
-// If no common starts, fall back to coloured starts for the spawn pool.
-if (startPositions.length === 0) {
-  for (const p of resetPositions) if (p) startPositions.push(p);
-}
-```
-
-Then on the client (`game.ts:handleStartTrack`), instead of always picking by
-`gameId % startPositions.length`, give each player a consistent start:
-```ts
-const start = parsed.startPositions[i % parsed.startPositions.length] ?? [...];
-```
-where `i` is `myPlayerId` for the local ball. Other players' balls get their
-own `start[playerN % len]`. (This means each player can have a different start
-position on multi-spawn tracks.)
-
-**Files:** `port/web/src/game/map.ts`, `port/web/src/panels/game.ts`
-(handleStartTrack).
-
-### 5. Scoreboard doesn't show finished hole scores
-
-**Symptom:** After a hole completes, the previous holes show `·` instead of
-the player's final stroke count.
-
-**What it shows now:** Current hole strokes, dot for past holes, dash for
-future holes, total in the rightmost column.
-
-**What it should show:** Current hole strokes for the active hole, the FINAL
-stroke count for each finished hole, dash for future, total at the end.
-Matches the original Java scoreboard which kept per-hole tallies.
-
-**Suggested fix:** Add `holeScores: number[]` to `PlayerSlot` (length =
-numTracks; index = track index 0..N-1). On every `endstroke` broadcast for the
-current hole, write the latest stroke count into `holeScores[currentTrackIdx-1]`
-for that player. When `starttrack` arrives for the next track, the per-track
-stroke counter resets but the historical entry stays.
-
-In `renderScoreboard`:
-```ts
-for (let t = 0; t < this.numTracks; t++) {
-  if (t + 1 < this.currentTrackIdx) cells.push(String(p.holeScores[t]));
-  else if (t + 1 === this.currentTrackIdx) cells.push(String(p.strokesThisTrack));
-  else cells.push("—");
-}
-```
-
-**Files:** `port/web/src/panels/game.ts` — `PlayerSlot`,
-`handleEndStrokeBroadcast`, `renderScoreboard`.
+**Files:** `port/server/src/test-fullflow.ts`, `port/server/src/test-handshake.ts`.
 
 ## Gaps from a faithful 1:1 port
 
@@ -166,6 +85,15 @@ Things we deferred for MVP that the original Java game has:
   no UI; ratings aren't persisted (FileSystemStatsManager is read-only).
 - **Reconnect after network blip.** `c crt 250` advertises a 250-second
   reconnect window but we don't implement reconnect flow.
+- **Daily mode: resting-ghost sync for late joiners.** When a player joins the
+  daily room mid-play, they see existing players' balls at the spawn position
+  rather than wherever those balls have actually come to rest. The next stroke
+  by an existing player corrects this (the server's `beginstroke` broadcast
+  carries the authoritative ball coords). To fix: have the server track each
+  player's last-stop position (e.g. by recording `ballCoords` from each
+  `beginstroke`) and send a snapshot to newcomers via a new `game ghoststate`
+  packet inside `DailyGame.joinDaily`. Files: `port/server/src/game.ts`
+  (`DailyGame`), `port/web/src/panels/game.ts` (handler).
 
 ## Architecture notes for future-Claude
 
@@ -193,6 +121,24 @@ A few non-obvious pitfalls when modifying things:
 
 ## Resolved (kept for posterity)
 
+- **Same maps appeared too often.** Added a 50-entry recently-served ringbuffer
+  to `TrackManager` — `getRandomTracks` now prefers tracks not in the ring and
+  only falls through to recents when the filtered pool is too small.
+- **Inconsistent chat formatting between lobby and game.** Lobby chat used
+  `<you>` for self while game used `<{nick}>`. Lobby-multi now captures the
+  assigned nick from `lobby ownjoin` and renders local-echo as `<{myNick}>`
+  to match peers and the in-game format.
+- **Wrong spawn point on multi-spawn-marker tracks.** `handleStartTrack` now
+  resolves each player's spawn the way Java `resetPosition()` does:
+  `resetPositions[playerId]` (shapes 48..51) wins, common shape-24 start is the
+  fallback, centre is the last resort. Each `PlayerSlot` carries its own
+  `startX/startY` so water/acid resets in `handleBeginStroke` use the right
+  per-player spawn.
+- **Scoreboard didn't show finished hole scores.** Added `holeScores: number[]`
+  to `PlayerSlot`, populated on every `endstroke` broadcast (last write before
+  track advance becomes the recorded final). `renderScoreboard` now shows the
+  per-hole tally for past holes and derives the running total from the same
+  array. The `strokesTotal` field was removed (was double-counting risk).
 - Track-type form values were 0–5 instead of 1–6 (sent ALL when "Basic" was
   picked). Fixed in `lobby.ts` / `lobby-multi.ts`.
 - Bouncy blocks (18) returned a flat 0.84; now use the dynamic

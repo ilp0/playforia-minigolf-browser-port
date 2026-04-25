@@ -7,6 +7,7 @@ export const LobbyType = Object.freeze({
     SINGLE: "1",
     DUAL: "2",
     MULTI: "x",
+    DAILY: "d",
 } as const);
 
 export type LobbyType = (typeof LobbyType)[keyof typeof LobbyType];

@@ -115,7 +115,7 @@ register({
 
 register({
     type: PacketType.DATA,
-    pattern: /^lobbyselect\t(rnop|select|qmpt)(?:\t([12x])(h)?)?$/,
+    pattern: /^lobbyselect\t(rnop|select|qmpt|daily)(?:\t([12xd])(h)?)?$/,
     handle: (server, conn, match) => {
         const sub = match[1];
         const player = conn.player;
@@ -124,7 +124,10 @@ register({
             const single = server.getLobby(LobbyType.SINGLE).totalPlayerCount();
             const dual = server.getLobby(LobbyType.DUAL).totalPlayerCount();
             const multi = server.getLobby(LobbyType.MULTI).totalPlayerCount();
-            conn.sendData("lobbyselect", "nop", single, dual, multi);
+            const daily = server.getLobby(LobbyType.DAILY).totalPlayerCount();
+            // Existing 4-field reply (single/dual/multi); daily appended as a
+            // 5th, optional field — older clients ignore it.
+            conn.sendData("lobbyselect", "nop", single, dual, multi, daily);
         } else if (sub === "select") {
             const tag = match[2];
             if (!tag) return;
@@ -133,10 +136,21 @@ register({
                 ? (tag as LobbyType)
                 : null;
             if (!lobbyType) return;
+            if (lobbyType === LobbyType.DAILY) {
+                // Sticky-ref the lobby so `back` knows where they came from,
+                // then funnel them straight into the singleton daily game.
+                server.getLobby(LobbyType.DAILY).addPlayer(player, JoinType.NORMAL);
+                server.getDailyGame().joinDaily(player);
+                return;
+            }
             server.getLobby(lobbyType).addPlayer(player, JoinType.NORMAL);
         } else if (sub === "qmpt") {
             player.isChatHidden = match[3] === "h";
             server.getLobby(LobbyType.MULTI).addPlayer(player, JoinType.NORMAL);
+        } else if (sub === "daily") {
+            // Compatibility alias: `lobbyselect daily` does the same as `select d`.
+            server.getLobby(LobbyType.DAILY).addPlayer(player, JoinType.NORMAL);
+            server.getDailyGame().joinDaily(player);
         }
     },
 });
@@ -285,6 +299,29 @@ register({
         } else {
             // 'command' — admin commands; not implemented in MVP.
             console.log(`[chat] unhandled command from ${player.nick}: ${arg3} ${arg4 ?? ""}`);
+        }
+    },
+});
+
+// Live aim-preview cursor stream. Pure pass-through: the client throttles to
+// ~15 Hz while its ball is at rest, the server stamps the sender's playerId
+// and forwards to every other player in the game. Loss-tolerant by design —
+// the next tick just overwrites the previous one. Must come BEFORE the generic
+// `game .+` handler so the routing isn't swallowed.
+//   client → game \t cursor \t <x> \t <y>
+//   server → game \t cursor \t <playerId> \t <x> \t <y>
+register({
+    type: PacketType.DATA,
+    pattern: /^game\tcursor\t(\d+)\t(\d+)$/,
+    handle: (_server, conn, match) => {
+        const player = conn.player;
+        if (!player || !player.game) return;
+        const game = player.game;
+        const playerId = game.getPlayerId(player);
+        const body = tabularize("game", "cursor", playerId, match[1], match[2]);
+        for (const other of game.getPlayers()) {
+            if (other === player) continue;
+            other.connection.sendDataRaw(body);
         }
     },
 });

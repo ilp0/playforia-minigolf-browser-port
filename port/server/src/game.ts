@@ -99,9 +99,14 @@ export abstract class Game {
         this.sendGameInfo(player);
         this.sendPlayerNames(player);
         // Broadcast join to existing players (none for single-player on first add).
+        // Wire: `game join <newPlayerOrdinal> <nick> <clan>`. The client treats
+        // the ordinal as 1-based and subtracts 1 to get its slot index. We are
+        // about to push the new player to `this.players`, so playerCount() + 1
+        // is the correct ordinal to send (otherwise the existing players' first
+        // slot is overwritten with the newcomer's nick on every join).
         for (const p of this.players) {
             if (p !== player) {
-                p.connection.sendData("game", "join", this.playerCount(), player.nick, player.clan);
+                p.connection.sendData("game", "join", this.playerCount() + 1, player.nick, player.clan);
             }
         }
         // Self owninfo — Java sends `numberIndex` BEFORE incrementing, so first player sees 0.
@@ -483,6 +488,188 @@ export class GolfGame extends Game {
     }
 }
 
+/**
+ * Daily-challenge game — singleton room held by the server. Plays a single
+ * deterministic track for the day; everyone in the room sees each other's
+ * balls (existing async-MP broadcast already gives "ghost" semantics, since
+ * other players' beginstroke packets are relayed to all and each client sims
+ * each ball with its own seed).
+ *
+ * Differences from MultiGame:
+ *   - Joining is allowed at any time, no fill-to-start.
+ *   - `numTracks = 1`. After all players finish that one track, the room
+ *     stays alive for late joiners.
+ *   - When THIS player finishes (holes-in or forfeits), they get a personal
+ *     `game end` so the share dialog can appear; the room continues for others.
+ *   - On `back`, the player is sent straight to `lobbyselect` (no daily lobby
+ *     panel exists on the client).
+ *   - On a date roll-over, the track is swapped and per-player counters reset
+ *     so today's players see today's track.
+ */
+export class DailyGame extends GolfGame {
+    public dateKey: string;
+    private dailyTrackManager: TrackManager;
+
+    constructor(gameId: number, trackManager: TrackManager, dateKey: string) {
+        super(
+            gameId,
+            LobbyType.DAILY,
+            "Daily Cup",
+            null,
+            false,
+            1,                             // numberOfTracks
+            PERM_EVERYONE,
+            0,                             // tracksType (ALL — daily picks deterministically)
+            0,                             // maxStrokes (unlimited; forfeit always available)
+            STROKETIMEOUT_INFINITE,
+            0,                             // waterEvent
+            COLLISION_NO,
+            SCORING_STROKE,
+            SCORING_WEIGHT_END_NONE,
+            100,                           // numPlayers — effectively unbounded room cap
+            trackManager,
+        );
+        this.dateKey = dateKey;
+        this.dailyTrackManager = trackManager;
+        // Replace the random-pick tracks with today's deterministic one.
+        this.tracks = [trackManager.getDailyTrack(dateKey)];
+        // Initial playStatus for an empty room.
+        this.playStatus = "";
+        this.isPublic = false;
+    }
+
+    /** Swap track for the new UTC day if needed; reset per-player counters. */
+    rotateIfNewDay(currentDateKey: string): void {
+        if (this.dateKey === currentDateKey) return;
+        this.dateKey = currentDateKey;
+        this.tracks = [this.dailyTrackManager.getDailyTrack(currentDateKey)];
+        for (let i = 0; i < this.players.length; i++) {
+            this.playerStrokesThisTrack[i] = 0;
+            this.playerStrokesTotal[i] = 0;
+        }
+        this.strokeSeedCounter = 0;
+        this.playStatus = "f".repeat(this.players.length);
+        // Re-broadcast a fresh starttrack so everyone resets to spawn.
+        this.broadcastStartTrack();
+    }
+
+    /** Late-join entry. Called from the daily-select handler. */
+    joinDaily(player: Player): void {
+        if (this.players.includes(player)) return;
+        // super.addPlayer broadcasts `game join` to existing players, sends
+        // gameInfo/players/owninfo to the newcomer, and pushes the slot.
+        this.addPlayer(player);
+        // Grow per-player arrays to match the new size.
+        while (this.playerStrokesThisTrack.length < this.players.length) {
+            this.playerStrokesThisTrack.push(0);
+            this.playerStrokesTotal.push(0);
+        }
+        if (this.playStatus.length < this.players.length) {
+            this.playStatus = this.playStatus.padEnd(this.players.length, "f");
+        }
+        // Personal starttrack so the newcomer renders the map.
+        const stats = this.dailyTrackManager.getStats(this.tracks[0]);
+        const buff = "f".repeat(this.players.length);
+        player.connection.sendDataRaw(tabularize("game", "start"));
+        player.connection.sendDataRaw(tabularize("game", "resetvoteskip"));
+        player.connection.sendDataRaw(
+            tabularize("game", "starttrack", buff, this.gameId, networkSerialize(stats)),
+        );
+        // Tell the client to render this game in daily mode (ghosts, share
+        // overlay on end, etc.). Sent after starttrack so the panel is ready.
+        player.connection.sendDataRaw(tabularize("game", "dailymode", this.dateKey));
+    }
+
+    /** Re-broadcast starttrack to everyone (used after a day rotation). */
+    private broadcastStartTrack(): void {
+        const stats = this.dailyTrackManager.getStats(this.tracks[0]);
+        const buff = "f".repeat(this.players.length);
+        this.writeAll(tabularize("game", "resetvoteskip"));
+        this.writeAll(
+            tabularize("game", "starttrack", buff, this.gameId, networkSerialize(stats)),
+        );
+    }
+
+    /** Single track only — no auto-advance. */
+    protected override nextTrack(): void {
+        // No-op.
+    }
+
+    /** Standard endStroke logic, then send a personal `game end` to finishers. */
+    protected override endStroke(player: Player, newPlayStatus: string): void {
+        const id = this.getPlayerId(player);
+        const myStatus = newPlayStatus.charAt(id);
+        this.playerStrokesThisTrack[id] = (this.playerStrokesThisTrack[id] ?? 0) + 1;
+        const psArr = this.playStatus.split("");
+        while (psArr.length < this.players.length) psArr.push("f");
+        const resolvedStatus: "t" | "p" | "f" =
+            myStatus === "t" || myStatus === "p" ? myStatus : "f";
+        psArr[id] = resolvedStatus;
+        this.playStatus = psArr.join("");
+        this.writeAll(
+            tabularize("game", "endstroke", id, this.playerStrokesThisTrack[id], resolvedStatus),
+        );
+        if (resolvedStatus === "t" || resolvedStatus === "p") {
+            // Tell only this player their daily run is over (others keep playing).
+            player.connection.sendData("game", "end");
+        }
+    }
+
+    protected override forfeit(player: Player): void {
+        const id = this.getPlayerId(player);
+        if (!this.players[id]) return;
+        const cur = this.playStatus.charAt(id);
+        if (cur === "t" || cur === "p") return;
+        const cap = (this.playerStrokesThisTrack[id] ?? 0) + 1;
+        this.playerStrokesThisTrack[id] = cap;
+        const psArr = this.playStatus.split("");
+        while (psArr.length < this.players.length) psArr.push("f");
+        psArr[id] = "p";
+        this.playStatus = psArr.join("");
+        this.writeAll(tabularize("game", "endstroke", id, cap, "p"));
+        player.connection.sendData("game", "end");
+    }
+
+    override handlePacket(player: Player, fields: string[]): boolean {
+        if (fields.length >= 2 && fields[1] === "back") {
+            this.removePlayer(player);
+            // No daily lobby panel — bounce straight to lobbyselect.
+            player.connection.sendData("status", "lobbyselect", "300");
+            player.game = null;
+            return true;
+        }
+        return super.handlePacket(player, fields);
+    }
+
+    /**
+     * The configured `numPlayers` is a soft cap (100); reporting that to a
+     * newcomer would make their client allocate 100 empty scoreboard rows.
+     * Report `players.length + 1` instead — the realistic room size right
+     * after this player joins. The subsequent `starttrack` (whose `playStatus`
+     * length is authoritative) corrects this further.
+     */
+    override sendGameInfo(player: Player): void {
+        player.connection.sendData("status", "game");
+        player.connection.sendData(
+            "game",
+            "gameinfo",
+            this.name,
+            this.passworded,
+            this.gameId,
+            this.players.length + 1,
+            this.tracks.length,
+            this.tracksType,
+            this.maxStrokes,
+            this.strokeTimeout,
+            this.waterEvent,
+            this.collision,
+            this.trackScoring,
+            this.trackScoringEnd,
+            "f",
+        );
+    }
+}
+
 export class TrainingGame extends GolfGame {
     constructor(
         player: Player,
@@ -593,7 +780,9 @@ export class MultiGame extends GolfGame {
             return false;
         }
         // Broadcast `game join` to existing players BEFORE adding the new one.
-        this.broadcast(tabularize("game", "join", this.playerCount(), player.nick, player.clan));
+        // Ordinal is 1-based (client subtracts 1) — must include the joiner,
+        // so playerCount() + 1. See Game.sendJoinMessages for the matching note.
+        this.broadcast(tabularize("game", "join", this.playerCount() + 1, player.nick, player.clan));
         this.addPlayer(player);
 
         if (lobby && this.players.length > 1) {

@@ -229,6 +229,26 @@ server → d K game<TAB>end[<TAB>{p0Result}<TAB>{p1Result}...]
    (1 = winner, 0 = draw, -1 = loser; results omitted in single-player)
 ```
 
+## Live aim preview (cursor stream — port-specific)
+
+Loss-tolerant 15 Hz cursor broadcast for spectator-flavoured UX: every player
+sees every other player's aim line in real time while they're lining up a
+shot. Not used for physics — purely cosmetic.
+
+```
+client → d N game<TAB>cursor<TAB>{x}<TAB>{y}
+   (sent only while OUR ball is at rest, throttled to ≤15 Hz, suppressed if
+    cursor moved <2 px since the last send)
+server → d K game<TAB>cursor<TAB>{playerId}<TAB>{x}<TAB>{y}
+   (server stamps the sender's playerId and forwards to every OTHER player in
+    the game — sender doesn't get an echo)
+```
+
+`{x}` and `{y}` are integer canvas pixel coordinates (0..735, 0..375). The
+client only renders a peer's cursor as an aim line when the peer's ball is at
+rest and the peer hasn't holed-in / forfeited. Cursor state is cleared on
+`starttrack` so the previous hole's last cursor never leaks into the next.
+
 ## Heartbeat
 
 Server side:

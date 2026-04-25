@@ -174,6 +174,18 @@ async function main(): Promise<void> {
         await b.waitFor((s) => /^d \d+ game\tendstroke\t1\t1\tf$/.test(s), "B sees own endstroke");
         console.log("[OK] async endstrokes processed and broadcast");
 
+        // Cursor relay: A sends a cursor sample, B must receive it stamped with
+        // A's playerId (0). Guards the "cursor handler must come before generic
+        // game handler" ordering invariant in packet-handlers.ts. Self-echo is
+        // intentionally suppressed by the server.
+        a.sendData("game", "cursor", 123, 456);
+        const bGotCursor = await b.waitFor(
+            (s) => /^d \d+ game\tcursor\t0\t123\t456$/.test(s),
+            "B sees A's cursor",
+        );
+        if (!bGotCursor) throw new Error("cursor relay missing");
+        console.log("[OK] cursor relayed to peer with stamped playerId");
+
         // Both holes-in to end the track.
         a.sendData("game", "beginstroke", ball, mouseA);
         b.sendData("game", "beginstroke", ball, mouseB);

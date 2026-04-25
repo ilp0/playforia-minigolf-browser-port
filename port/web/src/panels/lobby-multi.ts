@@ -93,6 +93,8 @@ export class LobbyMultiPanel implements Panel {
   private listeners: Array<() => void> = [];
   private tagCounts: number[] | null = null;
   private trackTypeSel: HTMLSelectElement | null = null;
+  /** Captured from `lobby ownjoin` so local-echo chat shows our nick consistently with peers. */
+  private myNick = "";
 
   constructor(app: App) {
     this.app = app;
@@ -225,6 +227,7 @@ export class LobbyMultiPanel implements Panel {
         case "ownjoin": {
           const p = parsePlayerString(f[2] ?? "");
           this.players.set(p.nick, p);
+          this.myNick = p.nick;
           this.refreshPlayers();
           break;
         }
@@ -663,9 +666,10 @@ export class LobbyMultiPanel implements Panel {
       return;
     }
 
-    // Echo locally — server only forwards to *others*.
+    // Echo locally — server only forwards to *others*. Use our captured nick
+    // so the format matches incoming `<{sender}> ...` lines from peers.
     this.app.connection.sendData("lobby", "say", text);
-    this.appendChat(`<you> ${text}`, "say-self");
+    this.appendChat(`<${this.myNick || "you"}> ${text}`, "say-self");
   }
 
   private appendChat(line: string, kind: "say" | "say-self" | "whisper" | "system"): void {

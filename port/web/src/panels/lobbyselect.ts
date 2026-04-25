@@ -1,16 +1,21 @@
 import { PacketType, type Packet } from "@minigolf/shared";
 import type { App } from "../app.ts";
 import type { Panel } from "../panel.ts";
+import { todayKey, getDailyResult } from "../daily.ts";
 
 /**
- * Lobby-select panel — visual port of agolf.LobbySelectPanel.
+ * Lobby-select panel — visual port of agolf.LobbySelectPanel, repurposed:
+ * the original "Dual player" column has been replaced by "Daily Cup"
+ * (since DUAL was never implemented in the port and the daily room is the
+ * port's headline new feature).
+ *
  * Layout overlays the bg-lobbyselect.gif background:
- *   - 3 serif titles ("Single player", "Dual player", "Multiplayer") at the
+ *   - 3 serif titles ("Single player", "Daily Cup", "Multiplayer") at the
  *     1/6, 3/6, 5/6 horizontal positions.
  *   - "(N players)" line below each title (refreshed via lobbyselect/rnop).
- *   - 3 columns of buttons at the bottom of each section: a primary "Single
- *     player" button (height-150) and a smaller "Quick start" button
- *     (height-95) underneath.
+ *     Daily count comes from the new 5th field in the rnop reply.
+ *   - 3 columns of buttons. The daily column has one button — disabled (with
+ *     a "done today" label) once the local player has finished today's run.
  *   - Footer row: graphics-quality dropdown, audio dropdown, quit button.
  */
 export class LobbySelectPanel implements Panel {
@@ -18,7 +23,7 @@ export class LobbySelectPanel implements Panel {
   private wrap: HTMLElement | null = null;
   private listeners: Array<() => void> = [];
   private singleCount: HTMLElement | null = null;
-  private dualCount: HTMLElement | null = null;
+  private dailyCount: HTMLElement | null = null;
   private multiCount: HTMLElement | null = null;
   private rnopTimer: number | null = null;
 
@@ -36,7 +41,7 @@ export class LobbySelectPanel implements Panel {
 
     const positions: Array<["1" | "2" | "3", string, string]> = [
       ["1", "Single player", "16.66%"],
-      ["2", "Dual player", "50%"],
+      ["2", "Daily Cup", "50%"],
       ["3", "Multiplayer", "83.33%"],
     ];
     const counts: Record<"1" | "2" | "3", HTMLElement> = {
@@ -56,15 +61,13 @@ export class LobbySelectPanel implements Panel {
       titles.appendChild(c);
     }
     this.singleCount = counts[1];
-    this.dualCount = counts[2];
+    this.dailyCount = counts[2];
     this.multiCount = counts[3];
     wrap.appendChild(titles);
 
-    // Three button columns
+    // Three button columns: Single / Daily / Multi.
     wrap.appendChild(this.makeColumn(1, "Single player", "Quick start", () => this.selectSingle(), () => this.quickSingle()));
-    // Dual is "Coming soon..." in the original — same here.
-    const dualCol = this.makeColumn(2, "Coming soon...", null, null, null);
-    wrap.appendChild(dualCol);
+    wrap.appendChild(this.makeDailyColumn());
     wrap.appendChild(this.makeColumn(3, "Multiplayer", "Quick start", () => this.selectMulti(), () => this.quickMulti()));
 
     // Footer: graphics / audio / quit
@@ -124,7 +127,7 @@ export class LobbySelectPanel implements Panel {
     }
     this.wrap = null;
     this.singleCount = null;
-    this.dualCount = null;
+    this.dailyCount = null;
     this.multiCount = null;
   }
 
@@ -132,20 +135,32 @@ export class LobbySelectPanel implements Panel {
     if (pkt.type !== PacketType.DATA) return;
     const f = pkt.fields;
     if (f[0] === "lobbyselect" && f[1] === "nop") {
-      // d N lobbyselect nop <single> <dual> <multi>
+      // d N lobbyselect nop <single> <dual> <multi> [<daily>]
+      // We show the daily count in the middle column (where DUAL used to live);
+      // ignore the dual count since DUAL isn't surfaced any more.
       this.setCount(this.singleCount, parseInt(f[2] ?? "-1", 10));
-      this.setCount(this.dualCount, parseInt(f[3] ?? "-1", 10));
       this.setCount(this.multiCount, parseInt(f[4] ?? "-1", 10));
+      this.setCount(this.dailyCount, parseInt(f[5] ?? "-1", 10));
       return;
     }
     if (f[0] === "status" && f[1] === "lobby") {
-      // f[2] is the lobby tag: "1", "1h", "x", "xh", etc.
+      // f[2] is the lobby tag: "1", "1h", "x", "xh", "d" (daily — no panel).
       const tag = (f[2] ?? "1").charAt(0);
+      if (tag === "d") {
+        // Daily lobby is invisible; the server follows up with `status game`
+        // immediately. Ignore and stay on lobbyselect until that arrives.
+        return;
+      }
       if (tag === "x") {
         this.app.setPanel("lobby-multi");
       } else {
         this.app.setPanel("lobby");
       }
+    }
+    if (f[0] === "status" && f[1] === "game") {
+      // Daily mode: server sent `status lobby d` (ignored above) then
+      // `status game` to drop us straight into the daily room.
+      this.app.setPanel("game");
     }
   }
 
@@ -203,6 +218,36 @@ export class LobbySelectPanel implements Panel {
     return col;
   }
 
+  /**
+   * Daily-Challenge column. One button — disabled if today's run is already
+   * recorded in localStorage. Tooltip surfaces the previous result so the
+   * "you already played" message has substance.
+   */
+  private makeDailyColumn(): HTMLElement {
+    const col = document.createElement("div");
+    col.className = "col col-2";
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn-yellow";
+    const existing = getDailyResult();
+    if (existing) {
+      btn.disabled = true;
+      btn.textContent = "Already played today";
+      btn.title =
+        `${todayKey()}: ${existing.forfeited ? "forfeited" : `${existing.strokes} strokes`}` +
+        ` (avg ${existing.average.toFixed(1)}). Come back tomorrow.`;
+    } else {
+      btn.textContent = "Daily Cup";
+      btn.title = `${todayKey()} — same track for everyone today.`;
+      const handler = (): void => this.selectDaily();
+      btn.addEventListener("click", handler);
+      this.listeners.push(() => btn.removeEventListener("click", handler));
+    }
+    col.appendChild(btn);
+    return col;
+  }
+
   private requestCounts(): void {
     if (!this.app.connection.isOpen) return;
     this.app.connection.sendData("lobbyselect", "rnop");
@@ -214,6 +259,11 @@ export class LobbySelectPanel implements Panel {
 
   private selectMulti(): void {
     this.app.connection.sendData("lobbyselect", "select", "x");
+  }
+
+  private selectDaily(): void {
+    if (!this.app.connection.isOpen) return;
+    this.app.connection.sendData("lobbyselect", "select", "d");
   }
 
   private quickSingle(): void {
