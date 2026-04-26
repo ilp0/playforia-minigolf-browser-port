@@ -101,12 +101,23 @@ export function networkSerialize(stats: TrackStats): string {
     return tabularize("V 1", "A " + t.author, "N " + t.name, "T " + t.map, cLine, iLine, bLine, rLine);
 }
 
+/**
+ * Anti-repeat memory: how many recently-served tracks to remember per server.
+ * When picking random tracks we prefer ones NOT in this ring. Sized roughly
+ * for "a few games' worth so we don't repeat a track from your last session
+ * unless the filtered pool is small enough to force it."
+ */
+const RECENT_RING_SIZE = 50;
+
 export class TrackManager {
     tracks: Track[] = [];
     trackSets: TrackSet[] = [];
     private byName = new Map<string, Track>();
     private byCategory = new Map<TrackCategoryId, Track[]>();
     private loaded = false;
+    /** Names of recently-served tracks (oldest first). Used by getRandomTracks. */
+    private recentTrackNames: string[] = [];
+    private recentTrackSet = new Set<string>();
 
     async load(tracksDir: string): Promise<void> {
         const tracksPath = path.join(tracksDir, "tracks");
@@ -156,19 +167,71 @@ export class TrackManager {
         if (limit < 1) {
             throw new Error("Number of tracks must be at least 1");
         }
-        const pool =
+        const filtered =
             category === TrackCategory.ALL
                 ? this.tracks
                 : this.tracks.filter((t) => t.categories.includes(category as number));
-        if (pool.length === 0) {
-            // Empty category — fall back to ALL so a player isn't stranded.
-            return this.shuffled(this.tracks).slice(0, limit);
+        // Empty category — fall back to ALL so a player isn't stranded.
+        const pool = filtered.length === 0 ? this.tracks : filtered;
+        const picked = this.pickAvoidingRecent(pool, limit);
+        for (const t of picked) this.markRecent(t.name);
+        return picked;
+    }
+
+    /**
+     * Pick `limit` tracks from `pool`, preferring ones not in the recent ring.
+     * If too few non-recent are available we fill the remainder from the recent
+     * pool so the caller always gets `min(limit, pool.length)` tracks.
+     */
+    private pickAvoidingRecent(pool: Track[], limit: number): Track[] {
+        const fresh: Track[] = [];
+        const stale: Track[] = [];
+        for (const t of pool) {
+            if (this.recentTrackSet.has(t.name)) stale.push(t);
+            else fresh.push(t);
         }
-        return this.shuffled(pool).slice(0, limit);
+        const out = this.shuffled(fresh).slice(0, limit);
+        if (out.length < limit) {
+            for (const t of this.shuffled(stale)) {
+                if (out.length >= limit) break;
+                out.push(t);
+            }
+        }
+        return out;
+    }
+
+    private markRecent(name: string): void {
+        if (this.recentTrackSet.has(name)) {
+            // Move to most-recent position by removing then re-pushing.
+            const idx = this.recentTrackNames.indexOf(name);
+            if (idx !== -1) this.recentTrackNames.splice(idx, 1);
+        } else {
+            this.recentTrackSet.add(name);
+        }
+        this.recentTrackNames.push(name);
+        while (this.recentTrackNames.length > RECENT_RING_SIZE) {
+            const evicted = this.recentTrackNames.shift();
+            if (evicted !== undefined) this.recentTrackSet.delete(evicted);
+        }
     }
 
     findByName(name: string): Track | undefined {
         return this.byName.get(name);
+    }
+
+    /**
+     * Deterministic per-day track pick. Same `dateKey` (UTC YYYY-MM-DD) → same
+     * track. Uses a small string hash so the choice isn't trivially predictable
+     * from the date alone. Falls back to the first track if the pool is empty.
+     */
+    getDailyTrack(dateKey: string): Track {
+        if (this.tracks.length === 0) throw new Error("no tracks loaded");
+        let h = 0x811c9dc5 >>> 0;
+        for (let i = 0; i < dateKey.length; i++) {
+            h ^= dateKey.charCodeAt(i);
+            h = Math.imul(h, 0x01000193) >>> 0;
+        }
+        return this.tracks[h % this.tracks.length];
     }
 
     /**

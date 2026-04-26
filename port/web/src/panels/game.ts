@@ -3,7 +3,7 @@ import type { App } from "../app.ts";
 import type { Panel } from "../panel.ts";
 import { loadAtlases, type Atlases } from "../game/sprites.ts";
 import { buildMap, type ParsedMap } from "../game/map.ts";
-import { TrackRenderer, type AimLine, type BallSprite } from "../game/render.ts";
+import { TrackRenderer, type AimLine, type BallSprite, type PeerAim } from "../game/render.ts";
 import {
   applyStrokeImpulse,
   newBall,
@@ -12,6 +12,7 @@ import {
   type BallState,
   type PhysicsContext,
 } from "../game/physics.ts";
+import { copyToClipboard, dailyScore, saveDailyResult, shareText, todayKey, type DailyResult } from "../daily.ts";
 
 const DEV = Boolean(import.meta.env?.DEV);
 
@@ -83,7 +84,6 @@ interface PlayerSlot {
   nick: string;
   clan: string;
   strokesThisTrack: number;
-  strokesTotal: number;
   ball: BallState;
   /** Per-stroke physics context — replaced on each `beginstroke` broadcast. */
   ctx: PhysicsContext | null;
@@ -95,6 +95,27 @@ interface PlayerSlot {
   holedThisTrack: boolean;
   /** This player gave up on the current track. */
   forfeitedThisTrack: boolean;
+  /**
+   * Spawn for this player on the current track. On multi-spawn tracks each
+   * colour-keyed reset marker (shapes 48..51) yields a per-player spawn; the
+   * common shape-24 marker is the fallback. Used when constructing the per-
+   * stroke physics context so water/acid resets land at this player's start.
+   */
+  startX: number;
+  startY: number;
+  /**
+   * Final stroke counts per finished hole, indexed by hole-1. Filled in on
+   * every `endstroke` broadcast for the current hole — the last write before
+   * the track advances becomes the recorded final.
+   */
+  holeScores: number[];
+  /**
+   * Last cursor position for this peer (from `game cursor` broadcasts), or
+   * null if we haven't received one yet (or it was cleared on track change).
+   * Drives the live aim-preview render for non-self players.
+   */
+  cursorX: number | null;
+  cursorY: number | null;
 }
 
 /**
@@ -154,6 +175,20 @@ export class GamePanel implements Panel {
   private keyHandler: ((ev: KeyboardEvent) => void) | null = null;
   private mouseMoveHandler: ((ev: MouseEvent) => void) | null = null;
   private clickHandler: ((ev: MouseEvent) => void) | null = null;
+
+  /**
+   * Daily-mode state. Set when the server sends `game dailymode <dateKey>`.
+   * Drives ghost rendering for non-self balls and swaps the end overlay
+   * for a copy-to-clipboard share dialog.
+   */
+  private dailyMode = false;
+  private dailyDateKey: string | null = null;
+  /** Track average from the latest starttrack — used in the share text. */
+  private trackAverage = 0;
+  /** Track display name from the latest starttrack — used in the share text. */
+  private trackName = "";
+  /** Set once we have shown the daily share screen, to avoid double-saving. */
+  private dailyResultRecorded = false;
 
   constructor(app: App) {
     this.app = app;
@@ -437,6 +472,20 @@ export class GamePanel implements Panel {
         // wire: game endstroke <playerId> <strokesThisTrack> <inHole(t/f)>
         this.handleEndStrokeBroadcast(f);
         break;
+      case "cursor":
+        // Live aim preview from a peer. wire: game cursor <playerId> <x> <y>
+        // Loss-tolerant: the next tick overwrites — no replay queue needed.
+        {
+          const id = parseInt(f[2] ?? "0", 10) || 0;
+          const cx = parseInt(f[3] ?? "0", 10) || 0;
+          const cy = parseInt(f[4] ?? "0", 10) || 0;
+          const slot = this.players[id];
+          if (slot && id !== this.myPlayerId) {
+            slot.cursorX = cx;
+            slot.cursorY = cy;
+          }
+        }
+        break;
       case "say":
         {
           const id = parseInt(f[2] ?? "0", 10) || 0;
@@ -449,6 +498,12 @@ export class GamePanel implements Panel {
         break;
       case "end":
         this.showEndOverlay(f);
+        break;
+      case "dailymode":
+        // Server tagging this room as the daily challenge. f[2] is the UTC
+        // date key the server picked the track for.
+        this.dailyMode = true;
+        this.dailyDateKey = f[2] ?? null;
         break;
       default:
         break;
@@ -477,26 +532,36 @@ export class GamePanel implements Panel {
       const parsed = buildMap(tLine, this.atlases);
       this.parsedMap = parsed;
       this.renderer = new TrackRenderer(parsed, this.atlases);
-      const startIdx = parsed.startPositions.length > 0
-        ? Number(BigInt(this.gameId) % BigInt(parsed.startPositions.length))
-        : 0;
-      const start = parsed.startPositions[startIdx] ?? [367.5, 187.5];
-      this.startX = start[0];
-      this.startY = start[1];
+      // Pick the common (shape-24) start, deterministic from gameId.
+      const commonStart: [number, number] | null =
+        parsed.startPositions.length > 0
+          ? parsed.startPositions[
+              Number(BigInt(this.gameId) % BigInt(parsed.startPositions.length))
+            ] ?? null
+          : null;
+      // Panel-wide defaults (used by ensurePlayerSlots before we know spawns).
+      const defaultStart = commonStart ?? [367.5, 187.5];
+      this.startX = defaultStart[0];
+      this.startY = defaultStart[1];
 
-      // Move all per-track totals to running totals BEFORE resetting.
-      for (const p of this.players) {
-        p.strokesTotal += p.strokesThisTrack;
-      }
-      // Reset every player to start.
-      for (const p of this.players) {
-        p.ball = newBall(start[0], start[1]);
+      // Per-player spawn — Java resetPosition() rules: per-color (48..51) wins,
+      // common start is the fallback, finally the centre default.
+      for (let i = 0; i < this.players.length; i++) {
+        const p = this.players[i];
+        const colour = i < parsed.resetPositions.length ? parsed.resetPositions[i] : null;
+        const spawn = colour ?? commonStart ?? [367.5, 187.5];
+        p.startX = spawn[0];
+        p.startY = spawn[1];
+        p.ball = newBall(spawn[0], spawn[1]);
         p.active = true;
         p.strokesThisTrack = 0;
         p.simulating = false;
         p.ctx = null;
         p.holedThisTrack = false;
         p.forfeitedThisTrack = false;
+        // Drop stale aim previews — last hole's cursor would point off-map.
+        p.cursorX = null;
+        p.cursorY = null;
       }
       this.currentTrackIdx++;
       this.updateStrokeCount();
@@ -550,12 +615,21 @@ export class GamePanel implements Panel {
       seed: new Seed(BigInt(seedNum)),
       norandom: false,
       waterEvent: this.waterEvent,
-      startX: this.startX,
-      startY: this.startY,
+      // Per-slot start so water (event 0) and acid resets land at THIS player's
+      // spawn, not at player 0's. Determinism-safe: every client computes the
+      // same per-slot spawn from the same map+gameId.
+      startX: slot.startX,
+      startY: slot.startY,
     };
     slot.ctx = ctx;
     applyStrokeImpulse(slot.ball, ctx, mouse.x, mouse.y);
     slot.simulating = true;
+    // Clear the firing peer's aim preview so we don't draw a stale line from
+    // the new resting position to the old click point after their ball stops.
+    // Self never has cursorX/Y populated (we only set it for peers), so this
+    // is a no-op for the shooter.
+    slot.cursorX = null;
+    slot.cursorY = null;
     this.renderScoreboard();
   }
 
@@ -567,6 +641,11 @@ export class GamePanel implements Panel {
     const slot = this.players[id];
     if (!slot) return;
     slot.strokesThisTrack = strokes;
+    // Stamp the per-hole tally on every stroke; the last write before the
+    // server advances to the next track becomes the recorded final score.
+    if (this.currentTrackIdx > 0) {
+      slot.holeScores[this.currentTrackIdx - 1] = strokes;
+    }
     if (status === "t") {
       slot.ball.inHole = true;
       slot.simulating = false;
@@ -585,10 +664,36 @@ export class GamePanel implements Panel {
 
   private physicsAccumMs = 0;
   private lastTickMs = 0;
+  /** Cursor-broadcast throttle: timestamp of last `game cursor` we sent. */
+  private lastCursorSentMs = 0;
+  private lastCursorSentX = -9999;
+  private lastCursorSentY = -9999;
+
+  /**
+   * Stream our cursor to peers at ~15 Hz so they see our aim line live.
+   * Bandwidth-conscious: sends only while OUR ball is at rest, and only when
+   * the cursor has moved by at least 2 px since last send.
+   */
+  private maybeSendCursor(nowMs: number): void {
+    if (!this.app.connection.isOpen) return;
+    const me = this.players[this.myPlayerId];
+    if (!me) return;
+    if (me.simulating || me.ball.inHole || me.holedThisTrack || me.forfeitedThisTrack) return;
+    if (nowMs - this.lastCursorSentMs < 66) return; // 15 Hz cap
+    const cx = this.mouseX | 0;
+    const cy = this.mouseY | 0;
+    if (Math.abs(cx - this.lastCursorSentX) < 2 && Math.abs(cy - this.lastCursorSentY) < 2) return;
+    // Server stamps the playerId before forwarding, so we don't include it.
+    this.app.connection.sendData("game", "cursor", String(cx), String(cy));
+    this.lastCursorSentMs = nowMs;
+    this.lastCursorSentX = cx;
+    this.lastCursorSentY = cy;
+  }
 
   private startLoop(): void {
     const tick = () => {
       this.rafHandle = requestAnimationFrame(tick);
+      this.maybeSendCursor(performance.now());
       this.draw();
 
       // Step every ball that's currently moving. Each ball has its OWN
@@ -668,6 +773,10 @@ export class GamePanel implements Panel {
     if (this.trackProgressEl) {
       this.trackProgressEl.textContent = `Track ${this.currentTrackIdx}/${this.numTracks}`;
     }
+    // Stash for the daily-share text; both fields are blank until the first
+    // starttrack arrives.
+    this.trackName = name;
+    this.trackAverage = info && info.plays > 0 ? info.totalStrokes / info.plays : 0;
     if (this.trackTitleEl) this.trackTitleEl.textContent = name;
     if (this.trackTagsEl) {
       while (this.trackTagsEl.firstChild) {
@@ -724,14 +833,22 @@ export class GamePanel implements Panel {
       name.textContent = p.nick || `Player ${i + 1}`;
       const tracksCol = document.createElement("span");
       const cells: string[] = [];
+      let totalSoFar = 0;
       for (let t = 0; t < this.numTracks; t++) {
-        if (t + 1 < this.currentTrackIdx) cells.push("·");
-        else if (t + 1 === this.currentTrackIdx) cells.push(String(p.strokesThisTrack));
-        else cells.push("—");
+        if (t + 1 < this.currentTrackIdx) {
+          const score = p.holeScores[t] ?? 0;
+          cells.push(String(score));
+          totalSoFar += score;
+        } else if (t + 1 === this.currentTrackIdx) {
+          cells.push(String(p.strokesThisTrack));
+          totalSoFar += p.strokesThisTrack;
+        } else {
+          cells.push("—");
+        }
       }
       tracksCol.textContent = cells.join("  ");
       const total = document.createElement("span");
-      total.textContent = "= " + (p.strokesTotal + p.strokesThisTrack);
+      total.textContent = "= " + totalSoFar;
       const note = document.createElement("span");
       if (p.holedThisTrack) note.textContent = "in hole";
       else if (p.forfeitedThisTrack) note.textContent = "forfeited";
@@ -840,9 +957,14 @@ export class GamePanel implements Panel {
       aim = { fromX: me.ball.x, fromY: me.ball.y, toX: this.mouseX, toY: this.mouseY };
     }
     const sprites: BallSprite[] = [];
+    const peerAims: PeerAim[] = [];
     for (let i = 0; i < this.numPlayers; i++) {
       const p = this.players[i];
       if (!p) continue;
+      const isMine = i === this.myPlayerId;
+      // Daily mode: render every other player as a translucent ghost with a
+      // name label above. Self renders normally.
+      const ghost = this.dailyMode && !isMine;
       sprites.push({
         x: p.ball.x,
         y: p.ball.y,
@@ -852,15 +974,44 @@ export class GamePanel implements Panel {
         // colours mid-shot.
         moving: false,
         hidden: p.ball.inHole,
+        ghost,
+        label: ghost ? (p.nick || `Player ${i + 1}`) : undefined,
       });
+      // Peer aim preview — only for non-self peers whose ball is at rest and
+      // who have a fresh cursor sample. The cursor is cleared on track change
+      // and on each beginstroke so we never show a stale aim. Suppressed in
+      // daily mode: the ghost rendering treats other players as non-interactive
+      // shadows of past plays; live aim lines would clash with that framing.
+      if (
+        !isMine &&
+        !ghost &&
+        !p.ball.inHole &&
+        !p.simulating &&
+        !p.holedThisTrack &&
+        !p.forfeitedThisTrack &&
+        p.cursorX !== null &&
+        p.cursorY !== null
+      ) {
+        peerAims.push({
+          fromX: p.ball.x,
+          fromY: p.ball.y,
+          toX: p.cursorX,
+          toY: p.cursorY,
+          playerIdx: i,
+        });
+      }
     }
-    this.renderer.drawFrame(ctx, sprites, aim);
+    this.renderer.drawFrame(ctx, sprites, aim, peerAims);
   }
 
   // ----- game-end overlay -----------------------------------------------
 
   private showEndOverlay(f: string[]): void {
     if (!this.root) return;
+    if (this.dailyMode) {
+      this.showDailyShareOverlay();
+      return;
+    }
     this.removeOverlay();
     const ov = document.createElement("div");
     ov.className = "game-end-overlay";
@@ -894,6 +1045,127 @@ export class GamePanel implements Panel {
       this.app.connection.sendData("game", "back");
     });
     ov.appendChild(btn);
+
+    this.root.appendChild(ov);
+    this.overlay = ov;
+  }
+
+  /**
+   * Daily-mode end screen. The local player has just finished the daily hole
+   * (holed-in or forfeited); the room continues for others. Persist the
+   * result to localStorage to gate tomorrow's button, render the score
+   * relative to the track average, and offer a copy-to-clipboard share.
+   */
+  private showDailyShareOverlay(): void {
+    if (!this.root) return;
+    const me = this.players[this.myPlayerId];
+    const dateKey = this.dailyDateKey ?? todayKey();
+    const result: DailyResult = {
+      date: dateKey,
+      strokes: me?.strokesThisTrack ?? 0,
+      average: this.trackAverage,
+      forfeited: !!me?.forfeitedThisTrack && !me?.holedThisTrack,
+      trackName: this.trackName,
+    };
+    if (!this.dailyResultRecorded) {
+      saveDailyResult(result);
+      this.dailyResultRecorded = true;
+    }
+
+    this.removeOverlay();
+    const ov = document.createElement("div");
+    ov.className = "game-end-overlay";
+
+    const title = document.createElement("div");
+    title.textContent = `Daily Cup — ${dateKey}`;
+    ov.appendChild(title);
+
+    const lines = document.createElement("div");
+    lines.style.fontSize = "14px";
+    lines.style.fontWeight = "normal";
+    lines.style.fontFamily = '"Dialog", Verdana, sans-serif';
+    lines.style.textAlign = "center";
+    lines.style.padding = "8px 0";
+
+    const score = dailyScore(result.strokes, result.average, result.forfeited);
+    const verdict = result.forfeited
+      ? "Forfeited"
+      : result.average > 0 && result.strokes < result.average
+        ? "Below average — nice!"
+        : result.average > 0 && result.strokes === Math.round(result.average)
+          ? "Right on average."
+          : result.average > 0
+            ? "Above average."
+            : "First play!";
+
+    const row1 = document.createElement("div");
+    row1.textContent = result.forfeited
+      ? `You forfeited "${result.trackName}".`
+      : `You finished "${result.trackName}" in ${result.strokes} stroke${result.strokes === 1 ? "" : "s"}.`;
+    lines.appendChild(row1);
+    if (result.average > 0) {
+      const row2 = document.createElement("div");
+      row2.textContent = `Track average: ${result.average.toFixed(1)} strokes`;
+      lines.appendChild(row2);
+    }
+    const row3 = document.createElement("div");
+    row3.style.fontWeight = "bold";
+    row3.style.marginTop = "4px";
+    row3.textContent = `Score: ${score}  —  ${verdict}`;
+    lines.appendChild(row3);
+    ov.appendChild(lines);
+
+    const btnRow = document.createElement("div");
+    btnRow.style.display = "flex";
+    btnRow.style.gap = "6px";
+    btnRow.style.justifyContent = "center";
+
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "btn-green";
+    copyBtn.textContent = "Copy share text";
+    copyBtn.addEventListener("click", () => {
+      const text = shareText(result);
+      void copyToClipboard(text).then((ok) => {
+        copyBtn.textContent = ok ? "Copied!" : "Copy failed — select & copy manually";
+        if (!ok) {
+          // Fallback: drop the text into a visible textarea so the user can
+          // hand-copy when the Clipboard API is gated (older browsers / iframes).
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          ta.rows = 3;
+          ta.style.width = "320px";
+          ta.style.fontFamily = '"Lucida Console", monospace';
+          ta.style.fontSize = "11px";
+          ta.style.marginTop = "6px";
+          ov.appendChild(ta);
+          ta.select();
+        }
+        window.setTimeout(() => { copyBtn.textContent = "Copy share text"; }, 2000);
+      });
+    });
+    btnRow.appendChild(copyBtn);
+
+    const backBtn = document.createElement("button");
+    backBtn.type = "button";
+    backBtn.className = "btn-blue";
+    backBtn.textContent = "Back to menu";
+    backBtn.addEventListener("click", () => {
+      this.app.connection.sendData("game", "back");
+    });
+    btnRow.appendChild(backBtn);
+
+    ov.appendChild(btnRow);
+
+    // Hint that other players keep playing even after you exit.
+    const hint = document.createElement("div");
+    hint.textContent = "Other players are still on the same track.";
+    hint.style.fontSize = "11px";
+    hint.style.color = "#666";
+    hint.style.marginTop = "4px";
+    hint.style.fontFamily = '"Dialog", Verdana, sans-serif';
+    hint.style.fontWeight = "normal";
+    ov.appendChild(hint);
 
     this.root.appendChild(ov);
     this.overlay = ov;
@@ -936,13 +1208,17 @@ export class GamePanel implements Panel {
         nick: "",
         clan: "",
         strokesThisTrack: 0,
-        strokesTotal: 0,
         ball: newBall(this.startX, this.startY),
         ctx: null,
         active: true,
         simulating: false,
         holedThisTrack: false,
         forfeitedThisTrack: false,
+        startX: this.startX,
+        startY: this.startY,
+        holeScores: [],
+        cursorX: null,
+        cursorY: null,
       });
     }
   }

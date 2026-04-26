@@ -25,6 +25,28 @@ export interface AimLine {
   toY: number;
 }
 
+/**
+ * Peer's live aim preview. Drawn thinner and tinted by ball colour so the
+ * local aim line stays the most prominent visual element. Sent via the
+ * `game cursor` packet at ~15 Hz while the peer's ball is at rest.
+ */
+export interface PeerAim {
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  /** Player index 0..3 — used to pick a ball-colour-matched stroke. */
+  playerIdx: number;
+}
+
+/** Ball-colour-matched stroke style for peer aim previews. Indexed by playerIdx. */
+const PEER_AIM_COLOURS = [
+  "rgba(255, 255, 255, 0.7)", // 0 — white ball
+  "rgba(220, 80, 80, 0.7)",   // 1 — red ball
+  "rgba(80, 130, 255, 0.7)",  // 2 — blue ball
+  "rgba(240, 210, 80, 0.8)",  // 3 — yellow ball
+];
+
 export interface BallSprite {
   x: number;
   y: number;
@@ -34,6 +56,14 @@ export interface BallSprite {
   moving: boolean;
   /** Hide the ball entirely (e.g. holed-in). */
   hidden: boolean;
+  /**
+   * Daily-mode "ghost" — render the ball at half opacity with a name label
+   * floating above. Used to distinguish other players' concurrent balls from
+   * the local player's own ball in the daily room.
+   */
+  ghost?: boolean;
+  /** Optional label drawn above the ball (only shown when `ghost`). */
+  label?: string;
 }
 
 export class TrackRenderer {
@@ -137,8 +167,21 @@ export class TrackRenderer {
     ctx: CanvasRenderingContext2D,
     balls: BallSprite[],
     aim: AimLine | null,
+    peerAims: PeerAim[] = [],
   ): void {
     ctx.drawImage(this.bgCanvas, 0, 0);
+
+    // Peer aims first so the local aim renders on top of any overlap.
+    for (const pa of peerAims) {
+      ctx.strokeStyle = PEER_AIM_COLOURS[pa.playerIdx % PEER_AIM_COLOURS.length];
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(pa.fromX, pa.fromY);
+      ctx.lineTo(pa.toX, pa.toY);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
 
     if (aim) {
       ctx.strokeStyle = "rgba(0, 0, 0, 0.7)";
@@ -149,8 +192,13 @@ export class TrackRenderer {
       ctx.stroke();
     }
 
-    // Draw inactive balls first, then the active (moving) one on top so it's visible.
-    const sorted = [...balls].sort((a, b) => Number(a.moving) - Number(b.moving));
+    // Sort: ghosts first (drawn beneath), self last so it's always visible.
+    const sorted = [...balls].sort((a, b) => {
+      const ga = a.ghost ? 0 : 1;
+      const gb = b.ghost ? 0 : 1;
+      if (ga !== gb) return ga - gb;
+      return Number(a.moving) - Number(b.moving);
+    });
     for (const b of sorted) {
       if (b.hidden) continue;
       // balls.gif: 8 sprites total, 4 per row → playerIdx*2 + (moving?1:0).
@@ -158,7 +206,26 @@ export class TrackRenderer {
       const { sx, sy } = spriteSrc13(idx, 4);
       const dx = Math.round(b.x - 6.5);
       const dy = Math.round(b.y - 6.5);
-      ctx.drawImage(this.atlases.balls, sx, sy, 13, 13, dx, dy, 13, 13);
+      if (b.ghost) {
+        ctx.save();
+        ctx.globalAlpha = 0.5;
+        ctx.drawImage(this.atlases.balls, sx, sy, 13, 13, dx, dy, 13, 13);
+        if (b.label) {
+          // Small white-with-shadow label above the ghost ball.
+          ctx.globalAlpha = 0.85;
+          ctx.font = "10px Verdana, sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "alphabetic";
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = "rgba(0,0,0,0.7)";
+          ctx.strokeText(b.label, b.x, dy - 2);
+          ctx.fillStyle = "#fff";
+          ctx.fillText(b.label, b.x, dy - 2);
+        }
+        ctx.restore();
+      } else {
+        ctx.drawImage(this.atlases.balls, sx, sy, 13, 13, dx, dy, 13, 13);
+      }
     }
   }
 }

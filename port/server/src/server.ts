@@ -4,13 +4,20 @@ import type { Connection } from "./connection.ts";
 import { Player } from "./player.ts";
 import { Lobby, LobbyType } from "./lobby.ts";
 import type { TrackManager } from "./tracks.ts";
+import { DailyGame } from "./game.ts";
 import { dispatchPacket } from "./packet-handlers.ts";
+
+/** UTC YYYY-MM-DD — single source of truth for "today". */
+export function todayDateKey(): string {
+    return new Date().toISOString().slice(0, 10);
+}
 
 export class GolfServer {
     private players: Map<number, Player> = new Map();
     private lobbies: Map<LobbyType, Lobby> = new Map();
     private nextPlayerIdCounter = 1;
     private nextGameIdCounter = 1;
+    private dailyGame: DailyGame | null = null;
 
     public readonly trackManager: TrackManager;
 
@@ -19,6 +26,24 @@ export class GolfServer {
         this.lobbies.set(LobbyType.SINGLE, new Lobby(LobbyType.SINGLE));
         this.lobbies.set(LobbyType.DUAL, new Lobby(LobbyType.DUAL));
         this.lobbies.set(LobbyType.MULTI, new Lobby(LobbyType.MULTI));
+        this.lobbies.set(LobbyType.DAILY, new Lobby(LobbyType.DAILY));
+    }
+
+    /**
+     * Singleton daily room. Lazily created on first daily-join (so server
+     * boot doesn't require tracks to be loaded yet). Rotates its track when
+     * the UTC date changes.
+     */
+    getDailyGame(): DailyGame {
+        const today = todayDateKey();
+        if (!this.dailyGame) {
+            const id = this.getNextGameId();
+            this.dailyGame = new DailyGame(id, this.trackManager, today);
+            this.getLobby(LobbyType.DAILY).addGame(this.dailyGame);
+        } else {
+            this.dailyGame.rotateIfNewDay(today);
+        }
+        return this.dailyGame;
     }
 
     getNextPlayerId(): number {
