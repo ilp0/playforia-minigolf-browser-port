@@ -60,10 +60,11 @@ Things we deferred for MVP that the original Java game has:
   ignore the flag. Adding it has determinism implications — any per-iteration
   call ordering must match between clients. The collision math is in
   `GameCanvas.handlePlayerCollisions`.
-- **Movable / sunkable blocks (27, 46) sliding behaviour.** Walls work; but
-  the block doesn't actually slide when hit.
 - **Breakable blocks (40–43) visual updates.** Bounce works; the wall
-  doesn't visually crack/decay.
+  doesn't visually crack/decay. (The mutate-tile / dirty-tile drain plumbing
+  added for movable blocks is reusable here — call `mutateTile` with the
+  decayed shape code from inside the wall-collision dispatch and the
+  renderer will pick up the change automatically.)
 - **3D shading on tile rendering.** The original adds light/shadow at higher
   graphics-quality settings via `GameBackgroundCanvas.drawMap`.
 - **Sound playback.** All 8 .wav files are bundled in
@@ -118,6 +119,24 @@ A few non-obvious pitfalls when modifying things:
 - **HMR delivers physics changes instantly.** The Vite dev server hot-reloads
   edits to anything in `web/src/`. Server changes need a restart of `npm run
   dev:server`.
+
+## Caveats from the recent movable-blocks port
+
+- **Movable-block (27/46) sync in async play.** The implementation is fully
+  client-deterministic: each client mutates `parsedMap.tiles[][]` from the
+  same shared seed, so block positions converge without any new packet. The
+  `canMovableBlockMove` obstruction check uses an `otherPlayers` snapshot
+  taken at beginstroke (in `panels/game.ts`) and skips any peer who is
+  currently mid-stroke — that keeps the check deterministic across clients
+  even when multiple balls are in flight.
+- **Late joiners see the original block layout, not the current one.** Same
+  class as the daily-mode resting-ghost issue: a player who joins a multi
+  game after blocks have already been pushed around won't see the current
+  positions until the next `starttrack` resets the map. To fix properly
+  we'd need a `game blockstate` snapshot in the join sequence; deferred.
+- **A player whose stroke crashes/exits mid-motion can leave the block state
+  diverged on their machine.** Recovery is implicit: on the next
+  `starttrack` (next hole) the map rebuilds from the original `T` line.
 
 ## Resolved (kept for posterity)
 

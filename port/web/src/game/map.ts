@@ -39,6 +39,91 @@ export interface ParsedMap {
    * units as Java state.magnetMap (clamped to ±2047). null if no magnets.
    */
   magnetMap: Int16Array | null;
+  /**
+   * Tile coords [tx, ty] that have been mutated since the last drain. Movable
+   * and breakable blocks push entries here when they change; the renderer
+   * drains the queue once per frame and re-blits the affected tiles into
+   * its cached background canvas.
+   */
+  dirtyTiles: Array<[number, number]>;
+  /** Atlases the map was built against — held for in-place re-rasterization. */
+  atlases: Atlases;
+}
+
+/**
+ * Rasterize one tile's 15×15 pixels into the collision map. Shared by
+ * `buildMap` (whole-map build) and `mutateTile` (in-place updates) so the
+ * substitution rules — shape 24/26/33/35/37/39 fall through to background,
+ * bricks 40-43 keep their shape ID, magnets 44/45 have water-aware fallback —
+ * can never drift between build and mutate paths.
+ */
+function rasterizeCollisionTile(
+  collision: Uint8Array,
+  tx: number,
+  ty: number,
+  code: number,
+  atlases: Atlases,
+): void {
+  const u = unpackTile(code);
+  const special = u.isNoSpecial;
+  const shape = u.shape;
+  const bg = u.fore;
+  const fg = u.back;
+
+  // Empty tile (special === 0): clear pixels to 0 so isWall/colAt don't see
+  // stale wall data from a previous mutation.
+  if (special === 0) {
+    for (let py = 0; py < PIXEL_PER_TILE; py++) {
+      for (let px = 0; px < PIXEL_PER_TILE; px++) {
+        const cx = tx * PIXEL_PER_TILE + px;
+        const cy = ty * PIXEL_PER_TILE + py;
+        collision[cy * MAP_PIXEL_WIDTH + cx] = 0;
+      }
+    }
+    return;
+  }
+
+  const mask =
+    special === 1 ? atlases.shapeMasks[shape] : atlases.specialMasks[shape];
+  if (!mask) return;
+
+  for (let py = 0; py < PIXEL_PER_TILE; py++) {
+    for (let px = 0; px < PIXEL_PER_TILE; px++) {
+      const m = mask[py * PIXEL_PER_TILE + px];
+      let pixel: number;
+      if (special === 1) {
+        pixel = m === 1 ? bg : fg;
+      } else {
+        const s = shape + 24;
+        pixel = m === 1 ? bg : s;
+        if (s === 24) pixel = bg;
+        else if (s === 26) pixel = bg;
+        else if (s === 33 || s === 35 || s === 37 || s === 39) pixel = bg;
+        else if (s >= 40 && s <= 43) pixel = s;
+        else if (s === 44) {
+          pixel =
+            bg !== 12 && bg !== 13 && bg !== 14 && bg !== 15 ? s : bg;
+        } else if (s === 45) pixel = bg;
+      }
+      const cx = tx * PIXEL_PER_TILE + px;
+      const cy = ty * PIXEL_PER_TILE + py;
+      collision[cy * MAP_PIXEL_WIDTH + cx] = pixel & 0xff;
+    }
+  }
+}
+
+/**
+ * In-place tile update used by movable/breakable blocks during physics.
+ * Mutates `tiles[tx][ty]`, re-rasterizes the 15×15 collision pixels, and
+ * appends the tile to `dirtyTiles` so the renderer can refresh its cached
+ * background. Safe to call multiple times per frame for the same tile —
+ * the renderer dedupes naturally because the final state is what gets blitted.
+ */
+export function mutateTile(map: ParsedMap, tx: number, ty: number, code: number): void {
+  if (tx < 0 || tx >= TILE_WIDTH || ty < 0 || ty >= TILE_HEIGHT) return;
+  map.tiles[tx][ty] = code;
+  rasterizeCollisionTile(map.collision, tx, ty, code, map.atlases);
+  map.dirtyTiles.push([tx, ty]);
 }
 
 export function buildMap(rawTLine: string, atlases: Atlases): ParsedMap {
@@ -57,16 +142,8 @@ export function buildMap(rawTLine: string, atlases: Atlases): ParsedMap {
       const u = unpackTile(code);
       const special = u.isNoSpecial; // 0=empty, 1=elem+elem, 2=elem+special
       const shape = u.shape; // raw byte 2 (the "shapeReduced" value)
-      const bg = u.fore; // Java's `background`
-      const fg = u.back; // Java's `foreground`
 
       if (special === 0) continue;
-
-      const mask =
-        special === 1
-          ? atlases.shapeMasks[shape]
-          : atlases.specialMasks[shape];
-      if (!mask) continue;
 
       // Track start markers, teleport portals, and magnets (uses the +24 form per Java).
       if (special === 2) {
@@ -87,29 +164,7 @@ export function buildMap(rawTLine: string, atlases: Atlases): ParsedMap {
         }
       }
 
-      for (let py = 0; py < PIXEL_PER_TILE; py++) {
-        for (let px = 0; px < PIXEL_PER_TILE; px++) {
-          const m = mask[py * PIXEL_PER_TILE + px];
-          let pixel: number;
-          if (special === 1) {
-            pixel = m === 1 ? bg : fg;
-          } else {
-            const s = shape + 24;
-            pixel = m === 1 ? bg : s;
-            if (s === 24) pixel = bg;
-            else if (s === 26) pixel = bg;
-            else if (s === 33 || s === 35 || s === 37 || s === 39) pixel = bg;
-            else if (s >= 40 && s <= 43) pixel = s;
-            else if (s === 44) {
-              pixel =
-                bg !== 12 && bg !== 13 && bg !== 14 && bg !== 15 ? s : bg;
-            } else if (s === 45) pixel = bg;
-          }
-          const cx = tx * PIXEL_PER_TILE + px;
-          const cy = ty * PIXEL_PER_TILE + py;
-          collision[cy * MAP_PIXEL_WIDTH + cx] = pixel & 0xff;
-        }
-      }
+      rasterizeCollisionTile(collision, tx, ty, code, atlases);
     }
   }
 
@@ -156,6 +211,8 @@ export function buildMap(rawTLine: string, atlases: Atlases): ParsedMap {
     teleportStarts,
     teleportExits,
     magnetMap,
+    dirtyTiles: [],
+    atlases,
   };
 }
 

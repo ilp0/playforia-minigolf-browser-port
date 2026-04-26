@@ -582,6 +582,23 @@ export class GamePanel implements Panel {
     slot.ball.y = ballCoords.y;
 
     const mouse = decodeCoords(mouseRaw);
+    // Snapshot all OTHER players' resting positions for the movable-block
+    // obstruction check. Skip the shooter (their ball is the one moving) and
+    // any peer currently mid-stroke (we'd diverge across clients otherwise —
+    // local positions for in-flight balls aren't authoritative).
+    const otherPlayers: Array<{ x: number; y: number } | null> = [];
+    for (let pi = 0; pi < this.players.length; pi++) {
+      if (pi === id) {
+        otherPlayers.push(null);
+        continue;
+      }
+      const peer = this.players[pi];
+      if (peer.simulating || peer.ball.inHole) {
+        otherPlayers.push(null);
+        continue;
+      }
+      otherPlayers.push({ x: peer.ball.x, y: peer.ball.y });
+    }
     const ctx: PhysicsContext = {
       map: this.parsedMap,
       seed: new Seed(BigInt(seedNum)),
@@ -592,6 +609,7 @@ export class GamePanel implements Panel {
       // same per-slot spawn from the same map+gameId.
       startX: slot.startX,
       startY: slot.startY,
+      otherPlayers,
     };
     slot.ctx = ctx;
     applyStrokeImpulse(slot.ball, ctx, mouse.x, mouse.y);
@@ -904,6 +922,14 @@ export class GamePanel implements Panel {
       ctx.fillStyle = "#99ff99";
       ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
       return;
+    }
+    // Drain any tile mutations (movable blocks, breakable bricks) into the
+    // renderer's cached background. Must happen before drawFrame so the new
+    // tile state is visible this frame.
+    if (this.parsedMap && this.parsedMap.dirtyTiles.length > 0) {
+      const dirty = this.parsedMap.dirtyTiles;
+      for (const [tx, ty] of dirty) this.renderer.invalidateTile(tx, ty);
+      dirty.length = 0;
     }
     let aim: AimLine | null = null;
     const me = this.players[this.myPlayerId];
