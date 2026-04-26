@@ -308,11 +308,14 @@ button.btn-blue   { background: #9090e0; border-color: #9090e0; }
   color: #000;
 }
 
-/* Scoreboard above the canvas — fixed-height like the Java PlayerInfoPanel. */
+/* Scoreboard above the canvas. Auto-sizes to its rows so 2-player rooms don't
+   waste 40+px above the canvas; capped at 75px so a crowded room can't push the
+   canvas off-screen. */
 .panel-game .scoreboard {
-  height: 75px;
+  flex: 0 0 auto;
+  max-height: 75px;
   width: 100%;
-  padding: 4px 8px;
+  padding: 2px 8px;
   font-size: 12px;
   font-family: "Dialog", "Verdana", Tahoma, sans-serif;
   color: #000;
