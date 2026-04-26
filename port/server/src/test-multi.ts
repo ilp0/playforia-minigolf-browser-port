@@ -207,6 +207,15 @@ async function main(): Promise<void> {
         await b.waitFor((s) => /lobby\tsay\thi from A/.test(s), "B sees A's chat");
         console.log("[OK] lobby chat works");
 
+        // Lobby `back` button — `lobbyselect leave` must remove from current
+        // lobby and bounce back to lobbyselect. The historical bug was that
+        // the single-player Back sent `lobbyselect select 1` which re-entered
+        // the same lobby, so the panel snapped right back. We send `leave`
+        // and assert the server replies with `status lobbyselect`.
+        a.sendData("lobbyselect", "leave");
+        await a.waitFor((s) => /^d \d+ status\tlobbyselect\t/.test(s), "A leaves lobby");
+        console.log("[OK] lobbyselect leave routes back to main menu");
+
         a.close();
         b.close();
         console.log("\nALL ASYNC-MULTIPLAYER PHASES PASSED");
