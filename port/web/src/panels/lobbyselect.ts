@@ -3,6 +3,7 @@ import type { App } from "../app.ts";
 import type { Panel } from "../panel.ts";
 import { todayKey, getDailyResult } from "../daily.ts";
 import { t } from "../i18n.ts";
+import { audio } from "../audio.ts";
 
 /**
  * Lobby-select panel — visual port of agolf.LobbySelectPanel, repurposed:
@@ -107,15 +108,23 @@ export class LobbySelectPanel implements Panel {
     }
     gfx.selectedIndex = 2;
 
-    const audio = document.createElement("select");
+    // Reflects the persisted SoundManager preference and toggles the global
+    // audio singleton on change. Mirrors Java LobbySelectPanel.java:259-266.
+    const audioSel = document.createElement("select");
     for (const label of [
       t("Port_LobbySelect_AudioOn", "Audio: On"),
       t("Port_LobbySelect_AudioOff", "Audio: Off"),
     ]) {
       const opt = document.createElement("option");
       opt.textContent = label;
-      audio.appendChild(opt);
+      audioSel.appendChild(opt);
     }
+    audioSel.selectedIndex = audio.enabled ? 0 : 1;
+    const audioChange = (): void => {
+      audio.setEnabled(audioSel.selectedIndex === 0);
+    };
+    audioSel.addEventListener("change", audioChange);
+    this.listeners.push(() => audioSel.removeEventListener("change", audioChange));
 
     const quit = document.createElement("button");
     quit.type = "button";
@@ -129,7 +138,7 @@ export class LobbySelectPanel implements Panel {
     this.listeners.push(() => quit.removeEventListener("click", quitHandler));
 
     footer.appendChild(gfx);
-    footer.appendChild(audio);
+    footer.appendChild(audioSel);
     footer.appendChild(quit);
     wrap.appendChild(footer);
 

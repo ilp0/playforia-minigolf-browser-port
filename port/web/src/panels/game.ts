@@ -18,11 +18,13 @@ import {
   replayLink,
   saveDailyResult,
   shareText,
+  shortReplayLink,
   todayKey,
   type DailyReplay,
   type DailyResult,
 } from "../daily.ts";
 import { t } from "../i18n.ts";
+import { audio } from "../audio.ts";
 
 const DEV = Boolean(import.meta.env?.DEV);
 
@@ -509,6 +511,11 @@ export class GamePanel implements Panel {
           this.scoreboardDirty = true;
         }
         break;
+      case "start":
+        // Server's "round begins" broadcast (one per game session). Mirrors
+        // the Java GamePanel.java:241 trigger for SoundManager.playNotify().
+        audio.playNotify();
+        break;
       case "starttrack":
         this.handleStartTrack(f);
         break;
@@ -632,14 +639,17 @@ export class GamePanel implements Panel {
       const bestPlayer = (extractField(f, "B ") ?? "").split(",")[0] ?? "";
       this.setTrackMeta(author, name, info, bestPlayer);
       this.trackAuthor = author;
-      // Capture the raw T-line for replay-link generation (daily only).
-      // Reset stroke recording on each starttrack so a fresh run starts clean
-      // even if the daily room rotated (date roll-over) mid-session.
-      if (this.dailyMode) {
-        this.dailyTLine = tLine;
-        this.dailyReplayStrokes = [];
-        this.dailyResultRecorded = false;
-      }
+      // Capture the raw T-line for replay-link generation. We capture on every
+      // starttrack rather than only when `this.dailyMode` is set: the server
+      // sends `starttrack` BEFORE `dailymode` in the daily-join sequence
+      // (server.ts joinDaily: start → resetvoteskip → starttrack → dailymode),
+      // so a `dailyMode` guard here always missed the first track and left
+      // `dailyTLine` null — hiding the "Copy replay link" button in the share
+      // overlay. The fields are harmless to populate for non-daily rooms; the
+      // button-render check requires both daily mode and recorded strokes.
+      this.dailyTLine = tLine;
+      this.dailyReplayStrokes = [];
+      this.dailyResultRecorded = false;
 
       this.setStatus(t("Port_Game_ClickToShoot", "Click to shoot when you're ready."));
       this.removeOverlay();
@@ -710,6 +720,9 @@ export class GamePanel implements Panel {
     slot.ctx = ctx;
     applyStrokeImpulse(slot.ball, ctx, mouse.x, mouse.y, mouse.mode);
     slot.simulating = true;
+    // Mirror Java GamePanel.java:388 / :448 — playGameMove() on every stroke,
+    // including the local player's (server echoes their own click back).
+    audio.playGameMove();
     // Clear the firing peer's aim preview so we don't draw a stale line from
     // the new resting position to the old click point after their ball stops.
     // Self never has cursorX/Y populated (we only set it for peers), so this
@@ -1174,6 +1187,12 @@ export class GamePanel implements Panel {
         lines.appendChild(row);
       }
       ov.appendChild(lines);
+      // Mirror Java PlayerInfoPanel.java:457-461 — pick the local player's
+      // outcome and play the matching applause/loss/draw clip once.
+      const myResult = parseInt(f[2 + this.myPlayerId] ?? "0", 10);
+      if (myResult === 1) audio.playGameWinner();
+      else if (myResult === 0) audio.playGameDraw();
+      else audio.playGameLoser();
     }
 
     const btn = document.createElement("button");
@@ -1209,6 +1228,10 @@ export class GamePanel implements Panel {
     if (!this.dailyResultRecorded) {
       saveDailyResult(result);
       this.dailyResultRecorded = true;
+      // No Java parity (daily mode is port-original) but the audio mapping
+      // mirrors the regular game-over: holed = winner clip, forfeit = loser.
+      if (result.forfeited) audio.playGameLoser();
+      else audio.playGameWinner();
     }
 
     this.removeOverlay();
@@ -1314,14 +1337,25 @@ export class GamePanel implements Panel {
       linkBtn.type = "button";
       linkBtn.className = "btn-blue";
       linkBtn.textContent = t("Port_Daily_CopyReplayLink", "Copy replay link");
+      // Click handler:
+      //   1. POST the recording to /api/replay → get a short id, copy `?r=<id>`.
+      //   2. If the network or server rejects (offline, 5xx, etc.), fall back
+      //      to the long fragment-embedded link so the user always gets
+      //      *something* shareable rather than a dead button.
       linkBtn.addEventListener("click", () => {
-        const url = replayLink(replay);
-        void copyToClipboard(url).then((ok) => {
-          linkBtn.textContent = ok
-            ? t("Port_Daily_LinkCopied", "Link copied!")
-            : t("Port_Daily_CopyFailedShort", "Copy failed");
+        linkBtn.disabled = true;
+        linkBtn.textContent = "Saving…";
+        void (async () => {
+          let url: string;
+          try {
+            url = await shortReplayLink(replay);
+          } catch {
+            url = replayLink(replay);
+          }
+          const ok = await copyToClipboard(url);
+          linkBtn.disabled = false;
+          linkBtn.textContent = ok ? t("Port_Daily_LinkCopied", "Link copied!") : t("Port_Daily_CopyFailedShort", "Copy failed");
           if (!ok) {
-            // Fallback: drop into a textarea the user can hand-select.
             const ta = document.createElement("textarea");
             ta.value = url;
             ta.rows = 3;
@@ -1332,10 +1366,8 @@ export class GamePanel implements Panel {
             ov.appendChild(ta);
             ta.select();
           }
-          window.setTimeout(() => {
-            linkBtn.textContent = t("Port_Daily_CopyReplayLink", "Copy replay link");
-          }, 2000);
-        });
+          window.setTimeout(() => { linkBtn.textContent = t("Port_Daily_CopyReplayLink", "Copy replay link"); }, 2000);
+        })();
       });
       btnRow.appendChild(linkBtn);
     }
