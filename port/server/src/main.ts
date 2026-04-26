@@ -96,7 +96,10 @@ export async function startServer(args: CliArgs): Promise<RunningServer> {
         res.end("Not found");
     });
 
-    const wss = new WebSocketServer({ noServer: true });
+    // Cap inbound WS frame size at 16 KiB. The ws default is 100 MiB, which is
+    // an unbounded-growth foothold for a misbehaving or malicious client; legit
+    // packets in this protocol (chat, cursor, stroke) are well under 1 KiB.
+    const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 });
     http.on("upgrade", (req, sock, head) => {
         if (req.url !== "/ws") {
             sock.destroy();

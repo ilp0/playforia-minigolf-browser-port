@@ -16,6 +16,13 @@ import type { GolfServer } from "./server.ts";
 // alt-tab doesn't disconnect anyone mid-game.
 const PING_AFTER_MS = 15_000;
 const CLOSE_AFTER_MS = 60_000;
+/**
+ * Defensive cap on the number of newline-separated frames a single WS message
+ * may produce. Belt-and-suspenders alongside the WebSocketServer's maxPayload:
+ * a maxPayload-sized frame full of `\n` could still split into thousands of
+ * tiny entries. Legit traffic is one packet per WS message.
+ */
+const MAX_FRAMES_PER_MESSAGE = 32;
 
 export class Connection {
     /** Outbound DATA sequence number (server -> client). Increments per server-sent DATA packet. */
@@ -59,6 +66,16 @@ export class Connection {
         // The browser/test client may glue multiple frames together via "\n" in some setups.
         // Split defensively — this also matches Java's line-delimited TCP framing.
         const frames = text.split(/\r?\n/).filter((f) => f.length > 0);
+        // Defensive cap: even within the WS-level maxPayload, a frame full of
+        // "\n" bytes would still produce thousands of 1-byte entries. Drop the
+        // connection rather than dispatch each one.
+        if (frames.length > MAX_FRAMES_PER_MESSAGE) {
+            console.error(
+                `[connection] frame-burst from ${this.playerLabel()}: ${frames.length} frames in one message`,
+            );
+            this.close("frame-burst");
+            return;
+        }
         for (const frame of frames) {
             let packet: Packet;
             try {

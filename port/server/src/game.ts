@@ -506,6 +506,15 @@ export class GolfGame extends Game {
  *   - On a date roll-over, the track is swapped and per-player counters reset
  *     so today's players see today's track.
  */
+/**
+ * Hard cap on the daily room's sparse-id growth. `numberIndex` only resets
+ * when the room fully empties; if the room never empties (one player always
+ * present as new ones cycle in), `playerStrokesThisTrack` / `playerStrokesTotal`
+ * grow unboundedly. Capping `numberIndex` at this value bounds those arrays
+ * at ~4KB each while still permitting many hundreds of cycles per day.
+ */
+const DAILY_MAX_SPARSE_IDS = 256;
+
 export class DailyGame extends GolfGame {
     public dateKey: string;
     private dailyTrackManager: TrackManager;
@@ -569,6 +578,11 @@ export class DailyGame extends GolfGame {
                 this.playerStrokesThisTrack[i] = 0;
                 this.playerStrokesTotal[i] = 0;
             }
+        } else if (this.numberIndex >= DAILY_MAX_SPARSE_IDS) {
+            // Sparse-id cap reached and room still has occupants. Refusing
+            // the join keeps memory bounded; the player stays in the daily
+            // lobby and can retry once the room next empties.
+            return;
         }
         // super.addPlayer broadcasts `game join` to existing players, sends
         // gameInfo/players/owninfo to the newcomer, and pushes the slot.

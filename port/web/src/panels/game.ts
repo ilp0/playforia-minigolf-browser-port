@@ -25,6 +25,9 @@ import {
 
 const DEV = Boolean(import.meta.env?.DEV);
 
+/** Max chat lines retained in the DOM. Older lines are dropped on append. */
+const CHAT_LOG_MAX_LINES = 500;
+
 function encodeCoords(x: number, y: number, mode: number): string {
   const v = (x | 0) * 1500 + (y | 0) * 4 + mode;
   return v.toString(36).padStart(4, "0");
@@ -147,6 +150,19 @@ export class GamePanel implements Panel {
   private startX = 367.5;
   private startY = 187.5;
   private players: PlayerSlot[] = [];
+  /**
+   * Per-frame scratch buffers for `draw()`. Reused via `length = 0` so the
+   * RAF hot path doesn't allocate two new arrays every frame.
+   */
+  private drawSprites: BallSprite[] = [];
+  private drawPeerAims: PeerAim[] = [];
+  /**
+   * Coalesces scoreboard rebuilds: callers set this flag instead of doing a
+   * synchronous DOM wipe-and-rebuild, and `draw()` does a single rebuild per
+   * frame. A burst of endstroke/finishtrack packets used to tear down and
+   * rebuild every row repeatedly.
+   */
+  private scoreboardDirty = true;
   /** beginstroke packets that arrived before atlases or track were ready. */
   private pendingBeginStrokes: string[][] = [];
   private pendingStartTrack: string[] | null = null;
@@ -286,7 +302,7 @@ export class GamePanel implements Panel {
     this.strokeCountEl = strokeCountEl;
     this.avgParEl = avgPar;
     this.bestParEl = bestPar;
-    this.renderScoreboard();
+    this.scoreboardDirty = true;
 
     const ctx = canvas.getContext("2d");
     if (ctx) {
@@ -410,7 +426,7 @@ export class GamePanel implements Panel {
         this.numTracks = parseInt(f[6] ?? "1", 10) || 1;
         this.waterEvent = parseInt(f[10] ?? "0", 10) || 0;
         this.ensurePlayerSlots(this.numPlayers);
-        this.renderScoreboard();
+        this.scoreboardDirty = true;
         this.applyChatVisibility();
         break;
       case "owninfo":
@@ -419,7 +435,7 @@ export class GamePanel implements Panel {
         this.ensurePlayerSlots(this.myPlayerId + 1);
         this.players[this.myPlayerId].nick = this.myNick;
         this.players[this.myPlayerId].clan = f[4] ?? "";
-        this.renderScoreboard();
+        this.scoreboardDirty = true;
         break;
       case "players":
         for (let i = 2; i + 2 < f.length; i += 3) {
@@ -428,7 +444,7 @@ export class GamePanel implements Panel {
           this.players[id].nick = f[i + 1] ?? "";
           this.players[id].clan = f[i + 2] ?? "";
         }
-        this.renderScoreboard();
+        this.scoreboardDirty = true;
         break;
       case "join":
         {
@@ -437,7 +453,7 @@ export class GamePanel implements Panel {
           this.players[id].nick = f[3] ?? "";
           this.players[id].clan = f[4] ?? "";
           this.appendChat(`* ${this.players[id].nick} joined the game`, "system");
-          this.renderScoreboard();
+          this.scoreboardDirty = true;
         }
         break;
       case "part":
@@ -447,7 +463,7 @@ export class GamePanel implements Panel {
             this.appendChat(`* ${this.players[id].nick} left`, "system");
             this.players[id].active = false;
           }
-          this.renderScoreboard();
+          this.scoreboardDirty = true;
         }
         break;
       case "starttrack":
@@ -575,7 +591,7 @@ export class GamePanel implements Panel {
 
       this.setStatus("Click to shoot when you're ready.");
       this.removeOverlay();
-      this.renderScoreboard();
+      this.scoreboardDirty = true;
       // Replay any beginstrokes that arrived too early.
       const queued = this.pendingBeginStrokes;
       this.pendingBeginStrokes = [];
@@ -654,7 +670,7 @@ export class GamePanel implements Panel {
     if (this.dailyMode && id === this.myPlayerId) {
       this.dailyReplayStrokes.push([ballRaw, mouseRaw, seedNum]);
     }
-    this.renderScoreboard();
+    this.scoreboardDirty = true;
   }
 
   /** Server's scoreboard sync after a player's stroke ended. */
@@ -681,7 +697,7 @@ export class GamePanel implements Panel {
       slot.ball.inHole = true; // reuse the "hidden" sprite path
     }
     if (id === this.myPlayerId) this.updateStrokeCount();
-    this.renderScoreboard();
+    this.scoreboardDirty = true;
   }
 
   // ----- physics tick ---------------------------------------------------
@@ -943,12 +959,20 @@ export class GamePanel implements Panel {
     if (kind === "whisper") div.style.color = "#800080";
     if (kind === "say-self") div.style.color = "#000080";
     log.appendChild(div);
+    // Bound the scrollback so multi-hour sessions don't grow the DOM forever.
+    while (log.childNodes.length > CHAT_LOG_MAX_LINES) {
+      log.removeChild(log.firstChild!);
+    }
     log.scrollTop = log.scrollHeight;
   }
 
   // ----- canvas rendering -----------------------------------------------
 
   private draw(): void {
+    if (this.scoreboardDirty) {
+      this.scoreboardDirty = false;
+      this.renderScoreboard();
+    }
     if (!this.canvas) return;
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
@@ -972,8 +996,10 @@ export class GamePanel implements Panel {
     if (me && !me.ball.inHole && !me.simulating) {
       aim = { fromX: me.ball.x, fromY: me.ball.y, toX: this.mouseX, toY: this.mouseY };
     }
-    const sprites: BallSprite[] = [];
-    const peerAims: PeerAim[] = [];
+    const sprites = this.drawSprites;
+    const peerAims = this.drawPeerAims;
+    sprites.length = 0;
+    peerAims.length = 0;
     for (let i = 0; i < this.numPlayers; i++) {
       const p = this.players[i];
       if (!p) continue;
