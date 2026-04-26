@@ -685,11 +685,13 @@ export class LobbyMultiPanel implements Panel {
   }
 
   private goBack(): void {
-    // Server doesn't have an explicit "leave lobby" — closing the panel and
-    // re-entering lobbyselect via a fresh `lobbyselect rnop` is fine, but for
-    // a clean semantic we just switch panels; the disconnect on game start
-    // will remove us from lobby anyway.
-    this.app.setPanel("lobbyselect");
+    // Ask the server to remove us from the multi lobby. The server replies
+    // with `status lobbyselect 300` which we handle in `onPacket` to flip
+    // the panel. Doing the roundtrip (instead of a local-only setPanel)
+    // keeps server and client lobby state consistent — otherwise our
+    // sticky `player.lobby` reference would still inflate the multi
+    // player count in `lobbyselect rnop` until we joined a different lobby.
+    this.app.connection.sendData("lobbyselect", "leave");
   }
 
   private bind<K extends keyof HTMLElementEventMap>(

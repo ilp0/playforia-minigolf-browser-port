@@ -100,8 +100,12 @@ export class LobbyPanel implements Panel {
     backBtn.className = "btn-red";
     backBtn.textContent = "Back";
     const backHandler = (): void => {
-      this.app.connection.sendData("lobbyselect", "select", 1);
-      this.app.setPanel("lobbyselect");
+      // `lobbyselect leave` removes us from this lobby on the server and the
+      // server replies with `status lobbyselect 300`, which routes us back.
+      // The previous code sent `lobbyselect select 1` (which RE-ENTERS the
+      // single-player lobby) — the local panel switch was immediately undone
+      // when the server replied with `status lobby 1`.
+      this.app.connection.sendData("lobbyselect", "leave");
     };
     backBtn.addEventListener("click", backHandler);
     this.listeners.push(() => backBtn.removeEventListener("click", backHandler));
@@ -129,6 +133,11 @@ export class LobbyPanel implements Panel {
     const fields = pkt.fields;
     if (fields[0] === "status" && fields[1] === "game") {
       this.app.setPanel("game");
+      return;
+    }
+    if (fields[0] === "status" && fields[1] === "lobbyselect") {
+      // Server pulled us back to the main menu (e.g. after `lobbyselect leave`).
+      this.app.setPanel("lobbyselect");
       return;
     }
     if (fields[0] === "lobby" && fields[1] === "tagcounts") {

@@ -5,7 +5,7 @@ import { type Packet, PacketType, tabularize } from "@minigolf/shared";
 import type { Connection } from "./connection.ts";
 import type { GolfServer } from "./server.ts";
 import { Player } from "./player.ts";
-import { JoinType, LobbyType } from "./lobby.ts";
+import { JoinType, LobbyType, PartReason } from "./lobby.ts";
 import { MultiGame, TrainingGame } from "./game.ts";
 
 interface Handler {
@@ -115,11 +115,31 @@ register({
 
 register({
     type: PacketType.DATA,
-    pattern: /^lobbyselect\t(rnop|select|qmpt|daily)(?:\t([12xd])(h)?)?$/,
+    pattern: /^lobbyselect\t(rnop|select|qmpt|daily|leave)(?:\t([12xd])(h)?)?$/,
     handle: (server, conn, match) => {
         const sub = match[1];
         const player = conn.player;
         if (!player) return;
+        if (sub === "leave") {
+            // Player asked to go back to the lobby-select screen from a lobby
+            // (e.g. clicked "Back" in the single-player or multi lobby). Pull
+            // them out of any current lobby with USERLEFT, which causes the
+            // server to send `status lobbyselect 300` to the leaver.
+            //
+            // Defensive about double-leaves: if `removePlayer` returns false
+            // (the player was sticky-referenced but not actually in
+            // lobby.players any more, e.g. they're in a game) we still need
+            // to send the status so the client UI moves.
+            if (player.lobby) {
+                const removed = player.lobby.removePlayer(player, PartReason.USERLEFT);
+                if (!removed) {
+                    conn.sendData("status", "lobbyselect", "300");
+                }
+            } else {
+                conn.sendData("status", "lobbyselect", "300");
+            }
+            return;
+        }
         if (sub === "rnop") {
             const single = server.getLobby(LobbyType.SINGLE).totalPlayerCount();
             const dual = server.getLobby(LobbyType.DUAL).totalPlayerCount();
