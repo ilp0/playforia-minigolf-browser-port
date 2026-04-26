@@ -632,14 +632,17 @@ export class GamePanel implements Panel {
       const bestPlayer = (extractField(f, "B ") ?? "").split(",")[0] ?? "";
       this.setTrackMeta(author, name, info, bestPlayer);
       this.trackAuthor = author;
-      // Capture the raw T-line for replay-link generation (daily only).
-      // Reset stroke recording on each starttrack so a fresh run starts clean
-      // even if the daily room rotated (date roll-over) mid-session.
-      if (this.dailyMode) {
-        this.dailyTLine = tLine;
-        this.dailyReplayStrokes = [];
-        this.dailyResultRecorded = false;
-      }
+      // Capture the raw T-line for replay-link generation. We capture on every
+      // starttrack rather than only when `this.dailyMode` is set: the server
+      // sends `starttrack` BEFORE `dailymode` in the daily-join sequence
+      // (server.ts joinDaily: start → resetvoteskip → starttrack → dailymode),
+      // so a `dailyMode` guard here always missed the first track and left
+      // `dailyTLine` null — hiding the "Copy replay link" button in the share
+      // overlay. The fields are harmless to populate for non-daily rooms; the
+      // button-render check requires both daily mode and recorded strokes.
+      this.dailyTLine = tLine;
+      this.dailyReplayStrokes = [];
+      this.dailyResultRecorded = false;
 
       this.setStatus("Click to shoot when you're ready.");
       this.removeOverlay();
