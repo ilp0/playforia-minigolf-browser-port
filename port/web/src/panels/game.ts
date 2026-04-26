@@ -12,7 +12,16 @@ import {
   type BallState,
   type PhysicsContext,
 } from "../game/physics.ts";
-import { copyToClipboard, dailyScore, saveDailyResult, shareText, todayKey, type DailyResult } from "../daily.ts";
+import {
+  copyToClipboard,
+  dailyScore,
+  replayLink,
+  saveDailyResult,
+  shareText,
+  todayKey,
+  type DailyReplay,
+  type DailyResult,
+} from "../daily.ts";
 
 const DEV = Boolean(import.meta.env?.DEV);
 
@@ -170,6 +179,16 @@ export class GamePanel implements Panel {
   private trackName = "";
   /** Set once we have shown the daily share screen, to avoid double-saving. */
   private dailyResultRecorded = false;
+  /**
+   * Per-stroke recording of the local player's daily run. Captured from the
+   * server's `beginstroke` broadcasts (which carry the deterministic inputs)
+   * so the run can be replayed bit-exactly without server cooperation.
+   */
+  private dailyReplayStrokes: Array<[string, string, number]> = [];
+  /** Raw `T <map>` line from the most recent starttrack — embedded in replay links. */
+  private dailyTLine: string | null = null;
+  /** Track author from starttrack — surfaced in playback HUD. */
+  private trackAuthor = "";
 
   constructor(app: App) {
     this.app = app;
@@ -544,6 +563,15 @@ export class GamePanel implements Panel {
       const info = parseInfoLine(extractField(f, "I "));
       const bestPlayer = (extractField(f, "B ") ?? "").split(",")[0] ?? "";
       this.setTrackMeta(author, name, info, bestPlayer);
+      this.trackAuthor = author;
+      // Capture the raw T-line for replay-link generation (daily only).
+      // Reset stroke recording on each starttrack so a fresh run starts clean
+      // even if the daily room rotated (date roll-over) mid-session.
+      if (this.dailyMode) {
+        this.dailyTLine = tLine;
+        this.dailyReplayStrokes = [];
+        this.dailyResultRecorded = false;
+      }
 
       this.setStatus("Click to shoot when you're ready.");
       this.removeOverlay();
@@ -620,6 +648,12 @@ export class GamePanel implements Panel {
     // is a no-op for the shooter.
     slot.cursorX = null;
     slot.cursorY = null;
+    // Record OUR strokes when in daily mode for the share-link replay. Stored
+    // raw (4-char base36 coords + uint32 seed) so encoding the link is just a
+    // straight JSON pack — no further processing needed.
+    if (this.dailyMode && id === this.myPlayerId) {
+      this.dailyReplayStrokes.push([ballRaw, mouseRaw, seedNum]);
+    }
     this.renderScoreboard();
   }
 
@@ -1125,6 +1159,46 @@ export class GamePanel implements Panel {
       });
     });
     btnRow.appendChild(copyBtn);
+
+    // "Copy replay link" — only present when we have both the track tile data
+    // (T-line) and at least one recorded stroke. Forfeit-without-shooting runs
+    // give an empty replay, which we hide rather than offering a no-op link.
+    if (this.dailyTLine && this.dailyReplayStrokes.length > 0) {
+      const replay: DailyReplay = {
+        v: 1,
+        d: dateKey,
+        n: this.trackName,
+        a: this.trackAuthor,
+        avg: this.trackAverage > 0 ? this.trackAverage : undefined,
+        t: this.dailyTLine,
+        s: this.dailyReplayStrokes,
+        holed: !!me?.holedThisTrack,
+      };
+      const linkBtn = document.createElement("button");
+      linkBtn.type = "button";
+      linkBtn.className = "btn-blue";
+      linkBtn.textContent = "Copy replay link";
+      linkBtn.addEventListener("click", () => {
+        const url = replayLink(replay);
+        void copyToClipboard(url).then((ok) => {
+          linkBtn.textContent = ok ? "Link copied!" : "Copy failed";
+          if (!ok) {
+            // Fallback: drop into a textarea the user can hand-select.
+            const ta = document.createElement("textarea");
+            ta.value = url;
+            ta.rows = 3;
+            ta.style.width = "320px";
+            ta.style.fontFamily = '"Lucida Console", monospace';
+            ta.style.fontSize = "11px";
+            ta.style.marginTop = "6px";
+            ov.appendChild(ta);
+            ta.select();
+          }
+          window.setTimeout(() => { linkBtn.textContent = "Copy replay link"; }, 2000);
+        });
+      });
+      btnRow.appendChild(linkBtn);
+    }
 
     const backBtn = document.createElement("button");
     backBtn.type = "button";

@@ -423,3 +423,54 @@ button.btn-blue   { background: #9090e0; border-color: #9090e0; }
   text-align: center;
   z-index: 100;
 }
+
+/* ---------- Daily replay viewer ---------- */
+
+.replay-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px;
+  gap: 6px;
+  height: 100%;
+  background: #99ff99;
+}
+
+.replay-header {
+  text-align: center;
+  font-family: "Times New Roman", Times, serif;
+}
+
+.replay-title {
+  font-size: 16px;
+  font-weight: bold;
+}
+
+.replay-meta {
+  font-size: 12px;
+  color: #333;
+}
+
+.replay-canvas {
+  border: 1px solid #000;
+  background: #000;
+  image-rendering: pixelated;
+}
+
+.replay-controls {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-family: "Verdana", sans-serif;
+}
+
+.replay-stroke {
+  font-size: 12px;
+  margin-left: 8px;
+}
+
+.replay-status {
+  font-size: 11px;
+  color: #444;
+  text-align: center;
+}
