@@ -99,12 +99,17 @@ export const PHYSICS_STEP_MS = 6;
 /** Hard cap on a single stroke. 1500 iterations / 166 Hz ≈ 9 seconds. */
 const MAX_STROKE_ITERATIONS = 1500;
 
-/** Apply stroke impulse with deterministic noise — matches GameCanvas.doStroke. */
+/** Apply stroke impulse with deterministic noise — matches GameCanvas.doStroke.
+ *  `shootingMode` mirrors the original right-click cycle: 0=normal, 1=reverse,
+ *  2=90° clockwise, 3=90° counter-clockwise. Rotation is applied BEFORE the
+ *  noise so each rotated direction has its own random branch — same order as
+ *  Java's doStroke. */
 export function applyStrokeImpulse(
   ball: BallState,
   ctx: PhysicsContext,
   mouseX: number,
   mouseY: number,
+  shootingMode: number = 0,
 ): void {
   const dx = ball.x - mouseX;
   const dy = ball.y - mouseY;
@@ -116,6 +121,18 @@ export function applyStrokeImpulse(
   const scale = mag / dist;
   let vx = (mouseX - ball.x) * scale;
   let vy = (mouseY - ball.y) * scale;
+  if (shootingMode === 1) {
+    vx = -vx;
+    vy = -vy;
+  } else if (shootingMode === 2) {
+    const t = vx;
+    vx = vy;
+    vy = -t;
+  } else if (shootingMode === 3) {
+    const t = vx;
+    vx = -vy;
+    vy = t;
+  }
   const speed = Math.sqrt(vx * vx + vy * vy) / 6.5;
   const speed2 = speed * speed;
   if (!ctx.norandom) {

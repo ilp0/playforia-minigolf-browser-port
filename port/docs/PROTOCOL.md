@@ -201,7 +201,10 @@ server → d K game<TAB>beginstroke<TAB>{playerId}<TAB>{ballCoords}<TAB>{mouseCo
 ```
 
 `ballCoords` and `mouseCoords` are base-36 4-character encodings of
-`x * 1500 + y * 4 + mode`.
+`x * 1500 + y * 4 + mode`. The `mode` field carries the right-click
+shooting mode (0 = normal, 1 = reverse 180°, 2 = 90° clockwise,
+3 = 90° counter-clockwise) on `mouseCoords`, mirroring the original
+GameCanvas.shootingMode. `ballCoords` always uses mode 0.
 
 When the ball stops (any reason — at rest, in hole, on water/acid):
 ```
@@ -239,18 +242,25 @@ sees every other player's aim line in real time while they're lining up a
 shot. Not used for physics — purely cosmetic.
 
 ```
-client → d N game<TAB>cursor<TAB>{x}<TAB>{y}
+client → d N game<TAB>cursor<TAB>{x}<TAB>{y}[<TAB>{shootingMode}]
    (sent only while OUR ball is at rest, throttled to ≤15 Hz, suppressed if
-    cursor moved <2 px since the last send)
-server → d K game<TAB>cursor<TAB>{playerId}<TAB>{x}<TAB>{y}
+    cursor moved <2 px since the last send; sent immediately on shootingMode
+    change so peers see right-click rotation even if the cursor is stationary)
+server → d K game<TAB>cursor<TAB>{playerId}<TAB>{x}<TAB>{y}[<TAB>{shootingMode}]
    (server stamps the sender's playerId and forwards to every OTHER player in
-    the game — sender doesn't get an echo)
+    the game — sender doesn't get an echo. The shootingMode field is relayed
+    verbatim when present and omitted when absent — back-compat with clients
+    that don't track the right-click cycle)
 ```
 
-`{x}` and `{y}` are integer canvas pixel coordinates (0..735, 0..375). The
-client only renders a peer's cursor as an aim line when the peer's ball is at
-rest and the peer hasn't holed-in / forfeited. Cursor state is cleared on
-`starttrack` so the previous hole's last cursor never leaks into the next.
+`{x}` and `{y}` are integer canvas pixel coordinates (0..735, 0..375).
+`{shootingMode}` is `0`, `1`, `2`, or `3` (Java GameCanvas.shootingMode):
+0 = normal, 1 = reverse 180°, 2 = 90° clockwise, 3 = 90° counter-clockwise.
+Watcher renders the peer's aim line in the same rotated direction the peer
+sees on their own screen. The client only renders a peer's cursor as an aim
+line when the peer's ball is at rest and the peer hasn't holed-in / forfeited.
+Cursor state is cleared on `starttrack` so the previous hole's last cursor
+never leaks into the next.
 
 ## Heartbeat
 

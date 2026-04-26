@@ -23,6 +23,15 @@ export interface AimLine {
   fromY: number;
   toX: number;
   toY: number;
+  /**
+   * Right-click shooting mode (0..3). Mirrors original GameCanvas.shootingMode:
+   *   0 = normal — render solid line ball→cursor as before.
+   *   1 = reverse, 2 = 90° clockwise, 3 = 90° counter-clockwise.
+   * For 1..3 we render a Java-faithful preview: a dashed line in the cursor
+   * direction and a solid line in the rotated trajectory direction, both
+   * scaled to the same `power*200/6.5` length the original used.
+   */
+  mode?: number;
 }
 
 /**
@@ -37,6 +46,8 @@ export interface PeerAim {
   toY: number;
   /** Player index 0..3 — used to pick a ball-colour-matched stroke. */
   playerIdx: number;
+  /** Same right-click shooting mode as the peer is in (see AimLine.mode). */
+  mode?: number;
 }
 
 /** Ball-colour-matched stroke style for peer aim previews. Indexed by playerIdx. */
@@ -46,6 +57,40 @@ const PEER_AIM_COLOURS = [
   "rgba(80, 130, 255, 0.7)",  // 2 — blue ball
   "rgba(240, 210, 80, 0.8)",  // 3 — yellow ball
 ];
+
+/**
+ * Power-scaled delta from ball to a point at length `power*200/6.5`. Mirrors
+ * Java GameCanvas.update():
+ *   x2 = ball + power[0] * 200 / 6.5
+ * where power = (mouse-ball) * (mag/dist), mag = clamp((dist-5)/30, 0.075, 6.5).
+ * Returns null when the cursor is on top of the ball (no direction).
+ */
+function scaledPowerDelta(
+  ballX: number,
+  ballY: number,
+  mouseX: number,
+  mouseY: number,
+): { dx: number; dy: number } | null {
+  const dx = ballX - mouseX;
+  const dy = ballY - mouseY;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  if (dist < 1e-9) return null;
+  let mag = (dist - 5) / 30;
+  if (mag < 0.075) mag = 0.075;
+  if (mag > 6.5) mag = 6.5;
+  const k = (mag / dist) * (200 / 6.5);
+  return { dx: (mouseX - ballX) * k, dy: (mouseY - ballY) * k };
+}
+
+/** Rotate (dx,dy) for the right-click shooting mode. Matches Java GameCanvas
+ *  branch in update() (and in doStroke()): mode 1 negates, 2 = (dy,-dx),
+ *  3 = (-dy,dx). */
+function rotateForMode(dx: number, dy: number, mode: number): { dx: number; dy: number } {
+  if (mode === 1) return { dx: -dx, dy: -dy };
+  if (mode === 2) return { dx: dy, dy: -dx };
+  if (mode === 3) return { dx: -dy, dy: dx };
+  return { dx, dy };
+}
 
 export interface BallSprite {
   x: number;
@@ -277,24 +322,69 @@ export class TrackRenderer {
 
     // Peer aims first so the local aim renders on top of any overlap.
     for (const pa of peerAims) {
-      ctx.strokeStyle = PEER_AIM_COLOURS[pa.playerIdx % PEER_AIM_COLOURS.length];
+      const colour = PEER_AIM_COLOURS[pa.playerIdx % PEER_AIM_COLOURS.length];
+      ctx.strokeStyle = colour;
       ctx.lineWidth = 1;
-      ctx.setLineDash([3, 3]);
-      ctx.beginPath();
-      ctx.moveTo(pa.fromX, pa.fromY);
-      ctx.lineTo(pa.toX, pa.toY);
-      ctx.stroke();
+      const mode = pa.mode ?? 0;
+      if (mode === 0) {
+        // Cursor stream coords aren't power-scaled — peer sees a dashed line
+        // straight to the cursor (matches mode-0 self preview which goes
+        // ball→cursor without scaling either).
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(pa.fromX, pa.fromY);
+        ctx.lineTo(pa.toX, pa.toY);
+        ctx.stroke();
+      } else {
+        // Java preview for modes 1..3: dashed cursor-direction line +
+        // solid rotated-trajectory line, both at power-scaled length.
+        const dEl = scaledPowerDelta(pa.fromX, pa.fromY, pa.toX, pa.toY);
+        if (dEl) {
+          ctx.setLineDash([3, 3]);
+          ctx.beginPath();
+          ctx.moveTo(pa.fromX, pa.fromY);
+          ctx.lineTo(pa.fromX + dEl.dx, pa.fromY + dEl.dy);
+          ctx.stroke();
+          const r = rotateForMode(dEl.dx, dEl.dy, mode);
+          ctx.setLineDash([]);
+          ctx.beginPath();
+          ctx.moveTo(pa.fromX, pa.fromY);
+          ctx.lineTo(pa.fromX + r.dx, pa.fromY + r.dy);
+          ctx.stroke();
+        }
+      }
     }
     ctx.setLineDash([]);
 
     if (aim) {
       ctx.strokeStyle = "rgba(0, 0, 0, 0.7)";
       ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(aim.fromX, aim.fromY);
-      ctx.lineTo(aim.toX, aim.toY);
-      ctx.stroke();
+      const mode = aim.mode ?? 0;
+      if (mode === 0) {
+        ctx.beginPath();
+        ctx.moveTo(aim.fromX, aim.fromY);
+        ctx.lineTo(aim.toX, aim.toY);
+        ctx.stroke();
+      } else {
+        // Mode 1..3: dashed line in cursor direction + solid in rotated
+        // trajectory direction, both scaled to Java's power*200/6.5 length.
+        const dEl = scaledPowerDelta(aim.fromX, aim.fromY, aim.toX, aim.toY);
+        if (dEl) {
+          ctx.setLineDash([3, 3]);
+          ctx.beginPath();
+          ctx.moveTo(aim.fromX, aim.fromY);
+          ctx.lineTo(aim.fromX + dEl.dx, aim.fromY + dEl.dy);
+          ctx.stroke();
+          const r = rotateForMode(dEl.dx, dEl.dy, mode);
+          ctx.setLineDash([]);
+          ctx.beginPath();
+          ctx.moveTo(aim.fromX, aim.fromY);
+          ctx.lineTo(aim.fromX + r.dx, aim.fromY + r.dy);
+          ctx.stroke();
+        }
+      }
     }
+    ctx.setLineDash([]);
 
     // Sort: ghosts first (drawn beneath), self last so it's always visible.
     balls.sort((a, b) => {
