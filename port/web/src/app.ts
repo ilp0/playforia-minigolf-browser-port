@@ -58,6 +58,24 @@ export class App {
     this.connection.addEventListener("close", () => {
       this.showError("Connection closed");
     });
+
+    // Reconnect lifecycle. The Connection itself drives the `c old <id>`
+    // handshake — App's job is just to surface that something's happening
+    // (so the user doesn't think the UI froze) and clear it on success.
+    this.connection.addEventListener("reconnecting", (ev) => {
+      const { attempt, maxAttempts } = ev.detail;
+      this.showReconnect(`Reconnecting… (${attempt}/${maxAttempts})`);
+    });
+    this.connection.addEventListener("reconnected", () => {
+      this.clearReconnect();
+    });
+    this.connection.addEventListener("reconnect-failed", (ev) => {
+      this.clearReconnect();
+      const msg = ev.detail.reason === "rcf"
+        ? "Reconnect refused — please refresh."
+        : "Reconnect failed — please refresh.";
+      this.showError(msg);
+    });
   }
 
   private resolveWsUrl(): string {
@@ -133,5 +151,23 @@ export class App {
     banner.className = "error-banner";
     banner.textContent = message;
     this.root.appendChild(banner);
+  }
+
+  /** Render a non-fatal "reconnecting" indicator. Distinct class from the
+   *  error banner so it can be styled differently and removed independently
+   *  on `reconnected`. */
+  private showReconnect(message: string): void {
+    let banner = this.root.querySelector(".reconnect-banner");
+    if (!banner) {
+      banner = document.createElement("div");
+      banner.className = "reconnect-banner";
+      this.root.appendChild(banner);
+    }
+    banner.textContent = message;
+  }
+
+  private clearReconnect(): void {
+    const banner = this.root.querySelector(".reconnect-banner");
+    if (banner) banner.remove();
   }
 }
