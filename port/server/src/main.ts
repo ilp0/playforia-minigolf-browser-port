@@ -7,6 +7,13 @@ import { GolfServer } from "./server.ts";
 import { Connection } from "./connection.ts";
 import { TrackManager } from "./tracks.ts";
 import { getReplay, saveReplay } from "./replay-store.ts";
+import { LobbyType } from "./lobby.ts";
+import { logEvent } from "./log.ts";
+
+/** Cadence for the analytics `snapshot` event — short enough to give a
+ *  reasonable population time-series, long enough that an idle server
+ *  doesn't spam the logs. */
+const SNAPSHOT_INTERVAL_MS = 60_000;
 
 interface CliArgs {
     host: string;
@@ -335,8 +342,42 @@ export async function startServer(args: CliArgs): Promise<RunningServer> {
     await new Promise<void>((resolve) => http.listen(args.port, args.host, resolve));
     console.log(`[server] listening ws://${args.host}:${args.port}/ws`);
 
+    logEvent("server_start", {
+        host: args.host,
+        port: args.port,
+        chat: chatEnabled,
+        tracks_total: counts[0],
+    });
+
+    // Periodic population snapshot — one structured line per minute summarising
+    // who's connected and where. Lets offline analysis (e.g. via `kubectl logs |
+    // jq 'select(.evt=="snapshot")'`) reconstruct a player-count time-series
+    // even on an idle server. unref() so smoke-tests can exit cleanly without
+    // waiting for the next tick.
+    const snapshotTimer = setInterval(() => {
+        const snap: Record<string, unknown> = {
+            players: golfServer.playerCount(),
+        };
+        for (const [tag, name] of [
+            [LobbyType.SINGLE, "single"],
+            [LobbyType.DUAL, "dual"],
+            [LobbyType.MULTI, "multi"],
+            [LobbyType.DAILY, "daily"],
+        ] as const) {
+            const lob = golfServer.getLobby(tag);
+            snap[name] = {
+                lobby: lob.playerCount(),
+                games: lob.gameCount(),
+                in_game: lob.inGamePlayerCount(),
+            };
+        }
+        logEvent("snapshot", snap);
+    }, SNAPSHOT_INTERVAL_MS);
+    snapshotTimer.unref();
+
     return {
         close: async () => {
+            clearInterval(snapshotTimer);
             await new Promise<void>((resolve) => {
                 wss.close(() => resolve());
             });

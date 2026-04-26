@@ -6,6 +6,7 @@ import { Lobby, LobbyType, PartReason } from "./lobby.ts";
 import type { TrackManager } from "./tracks.ts";
 import { DailyGame } from "./game.ts";
 import { dispatchPacket } from "./packet-handlers.ts";
+import { logEvent } from "./log.ts";
 
 /** Grace window during which a player can re-attach a fresh WebSocket via
  *  `c old <id>`. Mirrors the value advertised in the connect-handshake banner
@@ -84,6 +85,12 @@ export class GolfServer {
         return this.players.get(id);
     }
 
+    /** Live count of player records held by the server. Used by the periodic
+     *  analytics snapshot in main.ts. */
+    playerCount(): number {
+        return this.players.size;
+    }
+
     getLobby(type: LobbyType): Lobby {
         const l = this.lobbies.get(type);
         if (!l) throw new Error(`unknown lobby type: ${type}`);
@@ -114,7 +121,7 @@ export class GolfServer {
         // cleanup as before. (Reconnect mid-game is a deferred follow-up — see
         // KNOWN_ISSUES.)
         if (player.game) {
-            this.fullyRemovePlayer(player);
+            this.fullyRemovePlayer(player, "in_game");
             return;
         }
 
@@ -130,7 +137,7 @@ export class GolfServer {
             if (this.players.get(player.id) !== player) return;
             if (player.disconnectedAt === null) return;
             console.log(`[reconnect] grace expired for ${player.id}/${player.nick}`);
-            this.fullyRemovePlayer(player);
+            this.fullyRemovePlayer(player, "grace_expired");
         }, RECONNECT_GRACE_MS);
         // Don't keep the event loop alive solely on this timer — the smoke
         // tests close their server cleanly and rely on natural process exit;
@@ -139,7 +146,7 @@ export class GolfServer {
         this.reconnectTimers.set(player.id, timer);
     }
 
-    private fullyRemovePlayer(player: Player): void {
+    private fullyRemovePlayer(player: Player, reason: string): void {
         if (player.game) {
             const lob = player.lobby;
             try {
@@ -160,6 +167,7 @@ export class GolfServer {
         }
         this.removePlayer(player.id);
         player.disconnectedAt = null;
+        logEvent("player_disconnect", { id: player.id, nick: player.nick, reason });
     }
 
     /**
@@ -189,6 +197,7 @@ export class GolfServer {
         // The new Connection's outSeq/inSeq are 0 by construction; no reset
         // needed here. Client mirrors this on receipt of `c rcok`.
         console.log(`[reconnect] reattached ${id}/${player.nick}`);
+        logEvent("player_reconnect", { id, nick: player.nick });
         return true;
     }
 
