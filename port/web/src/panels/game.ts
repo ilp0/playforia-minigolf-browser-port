@@ -856,8 +856,15 @@ export class GamePanel implements Panel {
 
   /** Build a status string for OUR ball (we're authoritative for ourselves). */
   private myPlayStatus(): string {
+    // Daily rooms have sparse player ids (a finisher who later leaves still
+    // owns a slot in the server's playStatus, so a fresh joiner's myPlayerId
+    // can exceed the broadcast playStatus length / numPlayers). Iterate up to
+    // myPlayerId+1 so the produced string always includes our own char —
+    // otherwise the server reads `charAt(myPlayerId) === ""`, resolves it to
+    // "f", and never marks us as holed.
+    const len = Math.max(this.numPlayers, this.myPlayerId + 1);
     let s = "";
-    for (let i = 0; i < this.numPlayers; i++) {
+    for (let i = 0; i < len; i++) {
       if (i === this.myPlayerId) {
         s += this.players[i]?.ball.inHole ? "t" : "f";
       } else {
@@ -931,7 +938,9 @@ export class GamePanel implements Panel {
     const sb = this.scoreboardEl;
     if (!sb) return;
     while (sb.firstChild) sb.removeChild(sb.firstChild);
-    for (let i = 0; i < this.numPlayers; i++) {
+    // Iterate `players.length` so a high-sparse-id self-row in a daily room
+    // still renders (numPlayers can be smaller than myPlayerId+1).
+    for (let i = 0; i < this.players.length; i++) {
       const p = this.players[i];
       if (!p) continue;
       // Daily mode: only the local player's score is shown — other ghosts in
@@ -1106,10 +1115,19 @@ export class GamePanel implements Panel {
     const peerAims = this.drawPeerAims;
     sprites.length = 0;
     peerAims.length = 0;
-    for (let i = 0; i < this.numPlayers; i++) {
+    // Iterate `players.length` (not `numPlayers`): in daily rooms our own
+    // myPlayerId can exceed numPlayers because of sparse server-side ids
+    // accumulated from finishers who later left. ensurePlayerSlots already
+    // grew the array to cover myPlayerId+1, so this loop reaches our slot.
+    for (let i = 0; i < this.players.length; i++) {
       const p = this.players[i];
       if (!p) continue;
       const isMine = i === this.myPlayerId;
+      // Skip empty placeholder slots from sparse-id gaps in daily rooms — a
+      // joiner with a high sparse id leaves untouched lower indices that
+      // never received `players` or `join`. Without this they would render
+      // as ghosts at spawn labelled "Player N".
+      if (this.dailyMode && !isMine && p.nick === "") continue;
       // Daily mode: render every other player as a translucent ghost with a
       // name label above. Self renders normally.
       const ghost = this.dailyMode && !isMine;

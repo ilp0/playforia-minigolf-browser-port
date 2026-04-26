@@ -196,8 +196,77 @@ async function main(): Promise<void> {
         c.sendData("game", "beginstroke", ball, mouseA);
         await c.waitFor((s) => /^d \d+ game\tbeginstroke\t0\t/.test(s), "C sees own stroke after re-entry");
         console.log("[OK] daily re-entry into empty room: C can shoot with id=0");
-        c.close();
 
+        // Regression: sparse-id join into a non-empty daily room.
+        // Scenario from a user playtest report: after several players have
+        // played and most left, a fresh joiner gets a high sparse `numberIndex`
+        // because the room was never empty long enough to reset. Pre-fix the
+        // client iterated up to `numPlayers` (= broadcast `playStatus` length)
+        // when building its outgoing playStatus and ball-sprite list, omitted
+        // its own slot at the high sparse id, and the server's `endStroke`
+        // resolved `charAt(myId) === ""` to `"f"` — the daily run never ended.
+        // Also: existing players received `game join` with ordinal
+        // `playerCount() + 1`, smaller than the joiner's real id, so their
+        // scoreboards overwrote an existing player's slot with the joiner.
+        //
+        // Setup: C is still in the daily room from the previous block (id=0).
+        // D joins (id=1, numberIndex grows to 2). C leaves. Room now has just
+        // D, but numberIndex is 2 → next joiner will be sparse.
+        const d = new Client("D");
+        await d.open();
+        await login(d);
+        await enterDaily(d);
+        const dOwn = await d.waitFor((s) => /^d \d+ game\towninfo\t/.test(s), "D owninfo");
+        const did = parseInt(dOwn.split("\t")[2] ?? "-1", 10);
+        if (did !== 1) throw new Error(`D entered with id=${did}; want 1`);
+
+        // C leaves. Room has only D, but numberIndex stayed 2 — sparse setup.
+        c.sendData("game", "back");
+        await c.waitFor((s) => /^d \d+ status\tlobbyselect\t/.test(s), "C back to lobbyselect");
+
+        // E joins. numberIndex=2 → E.id = 2 (sparse: no occupant has id=0).
+        const e = new Client("E");
+        await e.open();
+        await login(e);
+        await enterDaily(e);
+        const eOwn = await e.waitFor((s) => /^d \d+ game\towninfo\t/.test(s), "E owninfo");
+        const eid = parseInt(eOwn.split("\t")[2] ?? "-1", 10);
+        if (eid !== 2) throw new Error(`E entered with id=${eid}; want 2 (sparse — C's slot still owned)`);
+
+        // D should see E's join with ordinal = eid + 1 = 3, not players.length+1=2.
+        // Pre-fix: ordinal would have been 2, overwriting D's own slot 1 with E's nick.
+        const eJoinOnD = await d.waitFor((s) => /^d \d+ game\tjoin\t/.test(s), "D sees E join");
+        const eOrdinal = parseInt(eJoinOnD.split("\t")[2] ?? "0", 10);
+        if (eOrdinal !== eid + 1) {
+            throw new Error(`D saw E join with ordinal=${eOrdinal}; want ${eid + 1} — pre-fix bug overwrites existing slot`);
+        }
+        console.log(`[OK] sparse-id join into non-empty room: E's join carries ordinal=${eOrdinal}`);
+
+        // E shoots. The shot must succeed despite E's id (2) being past the
+        // pre-fix numPlayers cap.
+        e.sendData("game", "beginstroke", ball, mouseA);
+        await e.waitFor(
+            (s) => new RegExp(`^d \\d+ game\\tbeginstroke\\t${eid}\\t`).test(s),
+            "E sees own stroke",
+        );
+
+        // E holes in. Pre-fix the client would build a too-short playStatus
+        // (length=numPlayers=players.length=2) and the server's endStroke
+        // would resolve charAt(eid)="" to "f", so no `game end` would arrive.
+        // Post-fix the playStatus is padded to myPlayerId+1 and the personal
+        // end fires.
+        const eStatus = "f".repeat(eid) + "t";
+        e.sendData("game", "endstroke", eid, eStatus);
+        await e.waitFor(
+            (s) => new RegExp(`^d \\d+ game\\tendstroke\\t${eid}\\t1\\tt$`).test(s),
+            "E sees own holed",
+        );
+        await e.waitFor((s) => /^d \d+ game\tend$/.test(s), "E gets personal end (sparse-id finisher)");
+        console.log("[OK] sparse-id daily finisher receives personal `game end`");
+
+        c.close();
+        d.close();
+        e.close();
         a.close();
         b.close();
         console.log("\nALL DAILY-CHALLENGE PHASES PASSED");
