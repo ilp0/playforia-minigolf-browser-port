@@ -34,6 +34,12 @@ export class App {
   serverHandshakeOk = false;
   serverId: string | null = null;
 
+  /** Whether the operator has chat enabled on this server. Default true; the
+   *  server pushes a `srvinfo chat 0|1` data packet right after login so this
+   *  is set before any chat-bearing panel mounts. Lobby/game panels read this
+   *  to decide whether to render the chat input row. */
+  chatEnabled = true;
+
   constructor(root: HTMLElement) {
     this.root = root;
     const url = this.resolveWsUrl();
@@ -101,6 +107,11 @@ export class App {
   }
 
   private onPacket(pkt: Packet): void {
+    // Server-level config push. Intercept before forwarding so panels see a
+    // consistent `app.chatEnabled` regardless of which one's mounted.
+    if (pkt.fields[0] === "srvinfo" && pkt.fields[1] === "chat") {
+      this.chatEnabled = pkt.fields[2] !== "0";
+    }
     if (this.currentPanel) {
       try {
         this.currentPanel.onPacket(pkt);

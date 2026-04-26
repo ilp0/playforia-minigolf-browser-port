@@ -16,9 +16,24 @@ interface CliArgs {
     maxConnsPerIp?: number;
     /** When true, accept WS upgrades from any Origin (dev). Default rejects cross-origin. */
     allowAnyOrigin?: boolean;
+    /** When false, the server drops lobby/game chat packets. Operators can flip this off
+     *  via `CHAT_ENABLED=0` (or `--chat-disabled`) to host without moderating chat.
+     *  Optional in CliArgs so smoke-test fixtures can omit it; main() always populates. */
+    chatEnabled?: boolean;
 }
 
 const DEFAULT_MAX_CONNS_PER_IP = 16;
+
+/** Parse a boolean env var, accepting the usual on/off spellings. Falls back to `defaultValue`
+ *  on unset/unparseable input so a typo can't silently disable a feature. */
+function envBool(name: string, defaultValue: boolean): boolean {
+    const v = process.env[name];
+    if (v === undefined) return defaultValue;
+    const s = v.trim().toLowerCase();
+    if (s === "1" || s === "true" || s === "yes" || s === "on") return true;
+    if (s === "0" || s === "false" || s === "no" || s === "off") return false;
+    return defaultValue;
+}
 
 function parseArgs(argv: string[]): CliArgs {
     const args: CliArgs = {
@@ -28,6 +43,7 @@ function parseArgs(argv: string[]): CliArgs {
         verbose: false,
         maxConnsPerIp: DEFAULT_MAX_CONNS_PER_IP,
         allowAnyOrigin: false,
+        chatEnabled: envBool("CHAT_ENABLED", true),
     };
     for (let i = 2; i < argv.length; i++) {
         const a = argv[i];
@@ -43,6 +59,10 @@ function parseArgs(argv: string[]): CliArgs {
             args.maxConnsPerIp = Math.max(0, parseInt(argv[++i], 10) || 0);
         } else if (a === "--allow-any-origin") {
             args.allowAnyOrigin = true;
+        } else if (a === "--chat-disabled") {
+            args.chatEnabled = false;
+        } else if (a === "--chat-enabled") {
+            args.chatEnabled = true;
         }
     }
     return args;
@@ -61,8 +81,28 @@ const MIME: Record<string, string> = {
     ".json": "application/json",
     ".png": "image/png",
     ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".ico": "image/x-icon",
     ".svg": "image/svg+xml",
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
+    ".xml": "application/xml; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
 };
+
+// Vite-fingerprinted bundles under /assets/ are content-addressed, so we can
+// pin them with a year-long immutable cache. Everything else gets a short
+// cache + must-revalidate so changes don't get stuck.
+function cacheControlFor(urlPath: string): string {
+    if (urlPath.startsWith("/assets/")) return "public, max-age=31536000, immutable";
+    if (urlPath === "/index.html" || urlPath === "/") return "no-cache";
+    return "public, max-age=300, must-revalidate";
+}
 
 function tryServeStatic(req: IncomingMessage, res: ServerResponse, webDist: string): boolean {
     if (!req.url) return false;
@@ -88,10 +128,34 @@ function tryServeStatic(req: IncomingMessage, res: ServerResponse, webDist: stri
         const st = lstatSync(target);
         if (!st.isFile()) return false;
         const mime = MIME[path.extname(target)] ?? "application/octet-stream";
+        // Weak ETag from size+mtime is enough here — the assets are static
+        // and only change on rebuild/restart, so collisions are not a worry.
+        const etag = `W/"${st.size.toString(16)}-${st.mtimeMs.toString(16)}"`;
+        const lastModified = new Date(st.mtimeMs).toUTCString();
+        const ifNoneMatch = req.headers["if-none-match"];
+        const ifModifiedSince = req.headers["if-modified-since"];
+        if (ifNoneMatch === etag ||
+            (ifModifiedSince && Date.parse(ifModifiedSince) >= Math.floor(st.mtimeMs / 1000) * 1000)) {
+            res.writeHead(304, {
+                "ETag": etag,
+                "Last-Modified": lastModified,
+                "Cache-Control": cacheControlFor(urlPath),
+            });
+            res.end();
+            return true;
+        }
         res.writeHead(200, {
             "Content-Type": mime,
+            "Content-Length": st.size,
             "X-Content-Type-Options": "nosniff",
+            "Cache-Control": cacheControlFor(urlPath),
+            "ETag": etag,
+            "Last-Modified": lastModified,
         });
+        if (req.method === "HEAD") {
+            res.end();
+            return true;
+        }
         createReadStream(target).pipe(res);
         return true;
     } catch {
@@ -106,7 +170,11 @@ export interface RunningServer {
 export async function startServer(args: CliArgs): Promise<RunningServer> {
     const trackManager = new TrackManager();
     await trackManager.load(args.tracksDir);
-    const golfServer = new GolfServer(trackManager);
+    const chatEnabled = args.chatEnabled ?? true;
+    const golfServer = new GolfServer(trackManager, { chatEnabled });
+    if (!chatEnabled) {
+        console.log("[chat] disabled — say/sayp packets will be dropped with a notice to the sender");
+    }
 
     // Cache the per-category counts on each lobby so newcomers get the
     // numbers as soon as they enter (drives the lobby form's count chips).

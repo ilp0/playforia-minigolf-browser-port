@@ -12,6 +12,12 @@ export function todayDateKey(): string {
     return new Date().toISOString().slice(0, 10);
 }
 
+export interface GolfServerOptions {
+    /** When false, lobby/game say + sayp packets are dropped server-side and
+     *  the sender gets a one-shot system whisper. Defaults to true. */
+    chatEnabled?: boolean;
+}
+
 export class GolfServer {
     private players: Map<number, Player> = new Map();
     private lobbies: Map<LobbyType, Lobby> = new Map();
@@ -20,9 +26,11 @@ export class GolfServer {
     private dailyGame: DailyGame | null = null;
 
     public readonly trackManager: TrackManager;
+    public readonly chatEnabled: boolean;
 
-    constructor(trackManager: TrackManager) {
+    constructor(trackManager: TrackManager, options: GolfServerOptions = {}) {
         this.trackManager = trackManager;
+        this.chatEnabled = options.chatEnabled ?? true;
         this.lobbies.set(LobbyType.SINGLE, new Lobby(LobbyType.SINGLE));
         this.lobbies.set(LobbyType.DUAL, new Lobby(LobbyType.DUAL));
         this.lobbies.set(LobbyType.MULTI, new Lobby(LobbyType.MULTI));

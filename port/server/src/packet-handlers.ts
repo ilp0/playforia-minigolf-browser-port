@@ -126,7 +126,7 @@ register({
 register({
     type: PacketType.DATA,
     pattern: /^login$/,
-    handle: (_server, conn) => {
+    handle: (server, conn) => {
         const player = conn.player;
         if (!player) {
             conn.close("login-without-player");
@@ -141,6 +141,10 @@ register({
         }
         player.emailVerified = true;
         player.registered = false;
+        // Tell the client about server-level toggles before it builds any UI.
+        // Today only `chat` exists; clients that don't recognise the verb just
+        // ignore the packet, so we can extend `srvinfo` later without breakage.
+        conn.sendData("srvinfo", "chat", server.chatEnabled ? "1" : "0");
         // basicinfo\t<emailVerified>\t<accessLevel>\tt\tt
         conn.sendData("basicinfo", player.emailVerified, player.accessLevel, "t", "t");
         conn.sendData("status", "lobbyselect", "300");
@@ -320,13 +324,21 @@ register({
 register({
     type: PacketType.DATA,
     pattern: /^(lobby|game)\t(say|sayp|command)\t(.+?)(?:\t(.+))?$/s,
-    handle: (_server, conn, match) => {
+    handle: (server, conn, match) => {
         const player = conn.player;
         if (!player) return;
         const scope = match[1];
         const verb = match[2];
         const arg3 = match[3];
         const arg4 = match[4];
+
+        // Operator-controlled mute: drop say/sayp and tell the sender once per
+        // attempt, so they don't think the connection is broken when nobody
+        // sees their message. `command` is a no-op anyway, so don't bother.
+        if (!server.chatEnabled && (verb === "say" || verb === "sayp")) {
+            conn.sendData(scope, "sayp", "server", "Chat is disabled on this server.");
+            return;
+        }
 
         const targets: Player[] = [];
         if (scope === "game") {

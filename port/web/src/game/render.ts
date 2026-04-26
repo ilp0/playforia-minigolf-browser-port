@@ -396,7 +396,11 @@ export class TrackRenderer {
     for (const b of balls) {
       if (b.hidden) continue;
       // balls.gif: 8 sprites total, 4 per row → playerIdx*2 + (moving?1:0).
-      const idx = b.playerIdx * 2 + (b.moving ? 1 : 0);
+      // Daily rooms can hold 100 players (vs the 4-player Java cap), so cycle
+      // colours past index 3 — without the modulo the sprite source falls
+      // outside the atlas and the ball renders as nothing.
+      const colour = ((b.playerIdx % 4) + 4) % 4;
+      const idx = colour * 2 + (b.moving ? 1 : 0);
       const { sx, sy } = spriteSrc13(idx, 4);
       const baseDx = Math.round(b.x - 6.5);
       const baseDy = Math.round(b.y - 6.5);

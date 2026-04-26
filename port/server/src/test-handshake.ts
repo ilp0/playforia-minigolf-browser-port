@@ -149,14 +149,17 @@ async function run(): Promise<void> {
         assertStartsWith(await queue.next(), "d 1 status\tlogin", "status login (post-logintype)");
 
         ws.send("d 3 login");
-        assertStartsWith(await queue.next(), "d 2 basicinfo\tt\t0\tt\tt", "basicinfo");
-        assertStartsWith(await queue.next(), "d 3 status\tlobbyselect\t300", "status lobbyselect");
+        // The server pushes a `srvinfo chat <0|1>` flag packet ahead of basicinfo so
+        // the client knows whether to render the chat input. Default is enabled.
+        assertStartsWith(await queue.next(), "d 2 srvinfo\tchat\t1", "srvinfo chat 1");
+        assertStartsWith(await queue.next(), "d 3 basicinfo\tt\t0\tt\tt", "basicinfo");
+        assertStartsWith(await queue.next(), "d 4 status\tlobbyselect\t300", "status lobbyselect");
 
         console.log("Phase 5: enter single-player lobby");
         ws.send("d 4 lobbyselect\tselect\t1");
-        assertStartsWith(await queue.next(), "d 4 status\tlobby\t1", "status lobby 1");
-        assertStartsWith(await queue.next(), "d 5 lobby\tusers", "lobby users");
-        assertStartsWith(await queue.next(), "d 6 lobby\townjoin\t", "lobby ownjoin");
+        assertStartsWith(await queue.next(), "d 5 status\tlobby\t1", "status lobby 1");
+        assertStartsWith(await queue.next(), "d 6 lobby\tusers", "lobby users");
+        assertStartsWith(await queue.next(), "d 7 lobby\townjoin\t", "lobby ownjoin");
 
         console.log("Phase 6: start training game");
         // Per Java's LobbyCreateSinglePlayerHandler comment, the client sends "lobby\tcspt..."
