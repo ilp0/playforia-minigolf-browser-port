@@ -16,7 +16,7 @@ export default defineConfig({
     allowedHosts: true,
     proxy: {
       "/ws": {
-        target: "ws://127.0.0.1:4242",
+        target: process.env.WS_PROXY_TARGET ?? "ws://127.0.0.1:4242",
         ws: true,
         changeOrigin: true,
         rewriteWsOrigin: true,

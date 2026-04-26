@@ -43,6 +43,30 @@ register({
     },
 });
 
+// Reconnect-after-network-blip: client opens a fresh WebSocket, gets the usual
+// `h 1` / `c crt 250` / `c ctr` banner, then instead of `c new` sends `c old
+// <savedId>`. If the server still holds the player record (within the
+// RECONNECT_GRACE_MS window), it swaps the new socket onto the existing
+// player and replies `c rcok`; otherwise it replies `c rcf` and the client
+// falls back to fresh-login. Pre-login command — guard against double-adopt.
+register({
+    type: PacketType.COMMAND,
+    pattern: /^old (-?\d+)$/,
+    handle: (server, conn, match) => {
+        if (conn.player) return;
+        const id = parseInt(match[1], 10);
+        if (!Number.isFinite(id) || id < 1) {
+            conn.sendCommand("rcf");
+            return;
+        }
+        if (server.handleReconnect(conn, id)) {
+            conn.sendCommand("rcok");
+        } else {
+            conn.sendCommand("rcf");
+        }
+    },
+});
+
 register({
     type: PacketType.COMMAND,
     pattern: /^ping$/,

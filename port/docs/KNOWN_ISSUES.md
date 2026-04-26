@@ -65,8 +65,15 @@ Things we deferred for MVP that the original Java game has:
   through 4 aim modes (solid + 3 dashed-line rotations). We only have mode 0.
 - **Rating tracks.** Server stub exists (`game rate <track> <rating>`) but
   no UI; ratings aren't persisted (FileSystemStatsManager is read-only).
-- **Reconnect after network blip.** `c crt 250` advertises a 250-second
-  reconnect window but we don't implement reconnect flow.
+- **Mid-game reconnect.** Lobby/lobbyselect reconnect-after-blip is now
+  implemented (see PROTOCOL.md "Reconnect after network blip"), but a
+  mid-game disconnect still falls through to immediate cleanup. Honoring
+  grace mid-stroke is non-trivial: peers are waiting on this player's
+  `endstroke` to advance the game, so the grace window has to either
+  auto-forfeit the in-flight stroke or model "disconnected but
+  reserved" with a separate stroke-timeout. Files: `port/server/src/
+  server.ts` (`handleDisconnect` early-returns to `fullyRemovePlayer`
+  when `player.game !== null`).
 - **Daily mode: resting-ghost sync for late joiners.** When a player joins the
   daily room mid-play, they see existing players' balls at the spawn position
   rather than wherever those balls have actually come to rest. The next stroke

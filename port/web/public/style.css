@@ -430,6 +430,22 @@ button.btn-blue   { background: #9090e0; border-color: #9090e0; }
   z-index: 100;
 }
 
+/* Non-fatal "we're trying to recover" banner — distinct from .error-banner so
+   it can sit alongside other UI without screaming red and is removed cleanly
+   on `reconnected`. */
+.reconnect-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: #c08040;
+  color: #fff;
+  padding: 4px 10px;
+  font-size: 12px;
+  text-align: center;
+  z-index: 100;
+}
+
 /* ---------- Daily replay viewer ---------- */
 
 .replay-wrap {

@@ -2,10 +2,16 @@
 import { type Packet, PacketType } from "@minigolf/shared";
 import type { Connection } from "./connection.ts";
 import { Player } from "./player.ts";
-import { Lobby, LobbyType } from "./lobby.ts";
+import { Lobby, LobbyType, PartReason } from "./lobby.ts";
 import type { TrackManager } from "./tracks.ts";
 import { DailyGame } from "./game.ts";
 import { dispatchPacket } from "./packet-handlers.ts";
+
+/** Grace window during which a player can re-attach a fresh WebSocket via
+ *  `c old <id>`. Mirrors the value advertised in the connect-handshake banner
+ *  (`c crt 250` → 250 seconds). After this elapses we do the original
+ *  full-cleanup. */
+const RECONNECT_GRACE_MS = 250_000;
 
 /** UTC YYYY-MM-DD — single source of truth for "today". */
 export function todayDateKey(): string {
@@ -24,6 +30,10 @@ export class GolfServer {
     private nextPlayerIdCounter = 1;
     private nextGameIdCounter = 1;
     private dailyGame: DailyGame | null = null;
+    /** Pending grace-window timers for disconnected players, keyed by player id.
+     *  A successful `c old <id>` cancels the timer; otherwise it fires after
+     *  RECONNECT_GRACE_MS and triggers full cleanup. */
+    private reconnectTimers: Map<number, NodeJS.Timeout> = new Map();
 
     public readonly trackManager: TrackManager;
     public readonly chatEnabled: boolean;
@@ -93,26 +103,93 @@ export class GolfServer {
     handleDisconnect(conn: Connection): void {
         const player = conn.player;
         if (!player) return;
+        // Belt-and-suspenders: if this connection has been swapped (via
+        // `handleReconnect`) it's no longer the player's live socket — the
+        // close event is just the old socket's death rattle, ignore it so we
+        // don't tear down the player record we just rescued.
+        if (player.connection !== conn) return;
+
+        // Mid-game disconnect: peers are waiting on this player's `endstroke`,
+        // so we can't keep them logically present. Fall through to immediate
+        // cleanup as before. (Reconnect mid-game is a deferred follow-up — see
+        // KNOWN_ISSUES.)
         if (player.game) {
-            // For MVP just remove the game when its sole player disconnects.
+            this.fullyRemovePlayer(player);
+            return;
+        }
+
+        // Lobby/lobbyselect: defer cleanup so a brief network blip doesn't
+        // cost the player their lobby slot. Cancelled by `handleReconnect`.
+        const existing = this.reconnectTimers.get(player.id);
+        if (existing) clearTimeout(existing);
+        player.disconnectedAt = Date.now();
+        const timer = setTimeout(() => {
+            this.reconnectTimers.delete(player.id);
+            // Re-check: a successful reconnect would have cleared
+            // `disconnectedAt` and replaced `player.connection`.
+            if (this.players.get(player.id) !== player) return;
+            if (player.disconnectedAt === null) return;
+            console.log(`[reconnect] grace expired for ${player.id}/${player.nick}`);
+            this.fullyRemovePlayer(player);
+        }, RECONNECT_GRACE_MS);
+        // Don't keep the event loop alive solely on this timer — the smoke
+        // tests close their server cleanly and rely on natural process exit;
+        // a 250s pending grace would hang them.
+        timer.unref();
+        this.reconnectTimers.set(player.id, timer);
+    }
+
+    private fullyRemovePlayer(player: Player): void {
+        if (player.game) {
             const lob = player.lobby;
             try {
                 player.game.removePlayer(player);
             } catch {
                 // ignore
             }
-            if (player.game.isEmpty() && lob) {
+            if (player.game?.isEmpty() && lob) {
                 lob.removeGame(player.game);
             }
         }
         if (player.lobby) {
             try {
-                player.lobby.removePlayer(player, /*PartReason.CONN_PROBLEM*/ 5);
+                player.lobby.removePlayer(player, PartReason.CONN_PROBLEM);
             } catch {
                 // ignore
             }
         }
         this.removePlayer(player.id);
+        player.disconnectedAt = null;
+    }
+
+    /**
+     * Re-attach `conn` to the player record identified by `id`, if still
+     * within the grace window. Returns true on success (caller should send
+     * `c rcok`); false if no such player or no grace pending (caller should
+     * send `c rcf`).
+     *
+     * Both directions of the seq counter reset to 0 on the new connection
+     * (the new Connection's defaults), which the client matches on `c rcok`.
+     * We don't try to replay/dedup packets sent during the gap — anything the
+     * server pushed during the dead window is lost. This is the same trade
+     * the original Java applet effectively made (its retain-seq protocol
+     * tripped its own gap-detection on any peer broadcast during the blip).
+     */
+    handleReconnect(conn: Connection, id: number): boolean {
+        const player = this.players.get(id);
+        if (!player || player.disconnectedAt === null) return false;
+        const timer = this.reconnectTimers.get(id);
+        if (timer) {
+            clearTimeout(timer);
+            this.reconnectTimers.delete(id);
+        }
+        player.disconnectedAt = null;
+        player.connection = conn;
+        conn.player = player;
+        // The new Connection's outSeq/inSeq are 0 by construction; no reset
+        // needed here. Client mirrors this on receipt of `c rcok`.
+        console.log(`[reconnect] reattached ${id}/${player.nick}`);
+        return true;
     }
 
     // re-export for convenience in connection
