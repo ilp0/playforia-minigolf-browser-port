@@ -1,8 +1,16 @@
 # Minigolf Server/Client/Editor (Playforia) [![Test Build](https://github.com/PhilippvK/playforia-minigolf/workflows/Test%20build/badge.svg)](https://github.com/PhilippvK/playforia-minigolf/actions?query=workflow%3A%22Test+build%22) [![quay.io/philippvk/minigolf](https://quay.io/repository/philippvk/minigolf/status)](https://quay.io/repository/philippvk/minigolf)
 
-## WARNING
-
-Currently there are major code and toolchain changes in development. Meanwhile feel free to use the latest stable [Release](https://github.com/PhilippvK/playforia-minigolf/releases)!
+> **Browser/Node port (active development).** A TypeScript reimplementation of
+> the client and server lives under [`port/`](port/) — a Vite + Canvas browser
+> client and a Node.js + WebSocket server. It speaks the same wire protocol as
+> the Java game (see [`port/docs/PROTOCOL.md`](port/docs/PROTOCOL.md)) but runs
+> entirely in the browser, so no Java install is required to play. See
+> [`port/README.md`](port/README.md) for build/run instructions and
+> [`port/docs/ARCHITECTURE.md`](port/docs/ARCHITECTURE.md) for the technical
+> overview.
+>
+> The original Java client/server/editor below remain in the repo and still
+> build with Maven; the rest of this README documents that path.
 
 ## Screenshot
 

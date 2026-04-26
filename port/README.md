@@ -77,11 +77,13 @@ npm run dev:server   # serves the built web bundle on http://localhost:4242
 
 ```sh
 cd port
-npm test                                                         # shared (Seed, RLE, codec, tools, tiles, tracks)
-node --experimental-strip-types --no-warnings server/src/test-multi.ts     # 2-client async-MP determinism + cursor relay
-node --experimental-strip-types --no-warnings server/src/test-forfeit.ts   # async forfeit + maxStrokes auto-cap
-node --experimental-strip-types --no-warnings server/src/test-filter.ts    # track-category filtering
-node --experimental-strip-types --no-warnings server/src/test-daily.ts     # daily-challenge room flow
+npm test                                                                    # shared (Seed, RLE, codec, tools, tiles, tracks)
+node --experimental-strip-types --no-warnings server/src/test-handshake.ts  # connect + login handshake
+node --experimental-strip-types --no-warnings server/src/test-fullflow.ts   # single-player end-to-end
+node --experimental-strip-types --no-warnings server/src/test-multi.ts      # 2-client async-MP determinism + cursor relay
+node --experimental-strip-types --no-warnings server/src/test-forfeit.ts    # async forfeit + maxStrokes auto-cap
+node --experimental-strip-types --no-warnings server/src/test-filter.ts     # track-category filtering
+node --experimental-strip-types --no-warnings server/src/test-daily.ts      # daily-challenge room flow + re-entry
 ```
 
 Each smoke test boots its own self-contained server on a private port
@@ -97,9 +99,6 @@ contract**: it asserts that both clients receive identical per-stroke
 seeds for the same stroke, that two strokes get different seeds, and
 that the live cursor relay is wired through the right handler order.
 
-> `test-handshake.ts` and `test-fullflow.ts` are stale — see
-> `docs/KNOWN_ISSUES.md` #6.
-
 ## What's implemented
 
 **Multiplayer & lobbies**
@@ -107,6 +106,9 @@ that the live cursor relay is wired through the right handler order.
   water-event mode, max-strokes cap).
 - Multi-player lobby with game list, password-protected games, in-lobby
   chat with `/msg <nick>` whispers, create-game form.
+- Login form lets the user pick their own nickname; the chosen name
+  flows through to scoreboards and daily-mode ghost labels (server
+  sanitises and falls back to a `~anonym-` placeholder if absent).
 - **Async multi-player**: every player can shoot whenever their own
   ball is at rest — no turn arbiter. Server picks a unique 32-bit seed
   per stroke and broadcasts it to all clients (incl. shooter) so every
@@ -114,7 +116,11 @@ that the live cursor relay is wired through the right handler order.
 - **Daily challenge room**: singleton `DailyGame` with a deterministic
   per-day track. Other players in the room render as translucent
   ghosts with name labels. Daily result is saved to localStorage; the
-  end overlay offers a copy-to-clipboard share text.
+  end overlay offers a copy-to-clipboard share text and a shareable
+  replay link (the run is reconstructed from the recorded
+  `(ballCoords, mouseCoords, seed)` tuples — no server lookup needed).
+  The room resets cleanly when it empties, so re-entrants and
+  late joiners aren't rejected at the `beginstroke` gate.
 
 **Physics** (faithful port of `GameCanvas.run`'s 166 Hz inner loop)
 - Velocity integration (10 substeps × 0.1).
@@ -131,6 +137,11 @@ that the live cursor relay is wired through the right handler order.
 - Magnets (44 attract, 45 repel) with pre-computed 147×75 force field.
 - Super-bouncy block (18) with the dynamic
   `bounciness * 6.5 / speed` restitution, decaying per hit.
+- Movable & sunkable blocks (27, 46) — block slides along the impact
+  axis when the ball hits a free face and sinks into adjacent water/
+  acid. Fully client-deterministic via the shared per-stroke seed; an
+  `otherPlayers` snapshot taken at `beginstroke` keeps the obstruction
+  check in agreement across clients during async play.
 - Per-player spawn resolution matching Java `resetPosition()` —
   per-color reset markers (48..51) win, common shape-24 start is the
   fallback, centre is the last resort.
@@ -149,6 +160,10 @@ that the live cursor relay is wired through the right handler order.
 - Sprite-accurate tile compositing from `shapes.gif` / `elements.gif`
   / `special.gif` masks — slope arrows, mine markings, magnet field
   patterns, hole shading, etc.
+- Original `GameBackgroundCanvas` edge-light pass: corner highlight,
+  bevel edges, 7-px drop shadow on solids, ±16 on teleport markers,
+  ±5 grain. Composited once at track build, plus on-the-fly tile
+  mutation (movable blocks) rebuilds only the affected region.
 - Atlas-based ball sprites with per-player colour.
 
 ## What's deferred
@@ -157,8 +172,9 @@ See `docs/KNOWN_ISSUES.md` "Gaps from a faithful 1:1 port" for the
 running list. Highlights:
 
 - Player-player ball collision (gated on `collision: 1`; not ported).
-- Movable / breakable block visual updates (collision works).
-- 3D shading on tile rendering at higher quality settings.
+- Breakable-block (40–43) visual decay (bounce works; the wall doesn't
+  visually crack — the mutate-tile plumbing added for movable blocks
+  is reusable here).
 - Sound playback (.wav files bundled in `web/public/sound/shared/`
   but not yet hooked up to Web Audio).
 - Localisation routing (XML files bundled, not consumed).
@@ -186,3 +202,8 @@ running list. Highlights:
   games, daily-room state. A restart wipes everything; only the
   daily result history survives because it's stored client-side in
   the user's browser localStorage.
+- Long-session memory is bounded explicitly: chat log capped at
+  500 lines, scoreboard rebuilds coalesced via a dirty flag, draw-
+  call arrays reused across frames, daily-room sparse-id growth
+  capped at 256 slots, inbound WS frame size capped at 16 KiB with
+  ≤32 frames per message.

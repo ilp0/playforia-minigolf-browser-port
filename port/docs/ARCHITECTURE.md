@@ -72,8 +72,10 @@ Java composites tiles pixel-by-pixel from three sprite atlases
 (`shapes.gif`, `elements.gif`, `special.gif`) using a 15 × 15 mask per shape.
 We do the exact same compositing in `port/web/src/game/render.ts`, so visuals
 match the original including the slope arrows, hole shading, mine markings,
-magnet field patterns, etc. We don't yet apply the optional 3D edge shading
-that the original adds at higher graphics-quality settings.
+magnet field patterns, etc. The `GameBackgroundCanvas` edge-light pass —
+corner highlight, bevel edges, 7-px drop shadow on solids, ±16 on teleport
+markers, ±5 grain — is also applied (once at track build, plus a region
+rebuild when a movable block mutates a tile mid-game).
 
 ### Physics
 A simplified-but-faithful port of `GameCanvas.run`'s inner loop, located in
@@ -95,12 +97,17 @@ A simplified-but-faithful port of `GameCanvas.run`'s inner loop, located in
 - Magnets (44 attract, 45 repel) — pre-computed 147 × 75 force field.
 - **Super-bouncy block (18)** — dynamic restitution `bounciness * 6.5 / speed`
   decaying by `0.01` per hit. Slow balls accelerate off it, fast ones decelerate.
+- **Movable & sunkable blocks (27, 46)** — block slides along the impact axis
+  when the ball hits a free face and sinks into adjacent water/acid. Fully
+  client-deterministic via the shared per-stroke seed; an `otherPlayers`
+  snapshot taken at `beginstroke` keeps `canMovableBlockMove` in agreement
+  across clients during async play.
 - Speed cap at 7.0 units.
 - Stroke-time safety net — force-stop after ~1500 iterations (~9 sec).
 
 Not implemented: sand/ice surface special handling beyond the friction table,
-breakable block visual updates (collision works; the wall doesn't "break"
-visually), movable block sliding logic, full 3D shadow casting on rendering.
+breakable block (40–43) visual decay (bounce works; the wall doesn't "break"
+visually), player-player ball collision (gated on `collision: 1` in Java).
 
 ### Determinism
 The single most important invariant in the codebase. Every client must compute
@@ -166,7 +173,7 @@ are different from each other.
   the chat handler (`(lobby|game)\tsay|sayp|command`) must come BEFORE the
   generic `^game\t.+$` game handler so chat doesn't get swallowed.
 - `test-handshake.ts`, `test-fullflow.ts`, `test-multi.ts`, `test-forfeit.ts`,
-  `test-filter.ts` — smoke/unit tests. Run with
+  `test-filter.ts`, `test-daily.ts` — smoke/unit tests. Run with
   `node --experimental-strip-types --no-warnings src/test-*.ts`.
 
 ### Web (`port/web/src/`)
@@ -178,7 +185,9 @@ are different from each other.
 - `panel.ts` — `Panel` interface (`mount/unmount/onPacket`).
 - `panels/loading.ts` — Initial connect/handshake screen.
 - `panels/login.ts` — Username/language form. Sends version → language →
-  logintype → login.
+  logintype → nick → login. The `nick` packet is the port's extension to
+  the original handshake — lets the user pick the name shown in scoreboards
+  and ghost labels.
 - `panels/lobbyselect.ts` — Three-column SP/DUAL/MULTI screen.
 - `panels/lobby.ts` — Single-player lobby. Track-type/numTracks/water/maxStrokes
   form. `lobby cspt` to start a TrainingGame.
@@ -187,7 +196,15 @@ are different from each other.
   (sends `lobby cmpt`). Renders the `tagcounts` packet from server.
 - `panels/game.ts` — In-game canvas + scoreboard + trackinfo + chat. Big.
   Per-ball `PlayerSlot` array, fixed-step physics loop (166 Hz), forfeit
-  button.
+  button. Records daily-mode strokes for replay sharing; chat log capped
+  at 500 lines and scoreboard rebuilds coalesced via dirty flag.
+- `panels/replay.ts` — Self-contained playback of a recorded daily run from
+  a `#replay=<base64url>` URL fragment. Reconstructs the trajectory from
+  the recorded `(ballCoords, mouseCoords, seed)` tuples — no server
+  connection needed.
+- `daily.ts` — Daily-cup helpers: `todayKey`, localStorage gating,
+  share-text rendering, and the `DailyReplay` codec
+  (`encodeReplay`/`decodeReplay`/`replayLink`/`readReplayFromHash`).
 - `game/sprites.ts` — Loads the four sprite atlases. Extracts both the 1/2
   shape masks and the raw RGBA pixel arrays.
 - `game/map.ts` — `buildMap`: decodes the raw T-line into a 735 × 375
@@ -255,9 +272,11 @@ hostname is accepted.
 cd port
 npm test                                                 # shared tests (45+)
 node --experimental-strip-types --no-warnings server/src/test-handshake.ts
+node --experimental-strip-types --no-warnings server/src/test-fullflow.ts
 node --experimental-strip-types --no-warnings server/src/test-multi.ts
 node --experimental-strip-types --no-warnings server/src/test-forfeit.ts
 node --experimental-strip-types --no-warnings server/src/test-filter.ts
+node --experimental-strip-types --no-warnings server/src/test-daily.ts
 ```
 
 Particularly important when modifying physics, protocol, or shared state:
@@ -265,3 +284,6 @@ Particularly important when modifying physics, protocol, or shared state:
 - `test-multi.ts` — verifies the determinism contract (both clients see the
   same per-stroke seed for the same stroke).
 - `test-forfeit.ts` — verifies async forfeit + maxStrokes auto-cap.
+- `test-daily.ts` — verifies the daily-room re-entry path (singleton resets
+  cleanly when empty so re-entrants and sparse-id late joiners aren't
+  silently rejected at the `beginstroke` gate).

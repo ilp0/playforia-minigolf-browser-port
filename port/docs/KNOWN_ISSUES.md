@@ -33,25 +33,6 @@ Likely candidates:
 **Files:** `port/server/src/connection.ts` (idle constants),
 `port/web/src/connection.ts` (keepalive interval).
 
-### 6. `test-fullflow.ts` and `test-handshake.ts` are stale (predate `lobby tagcounts`)
-
-**Symptom:** Both
-`node --experimental-strip-types --no-warnings server/src/test-fullflow.ts` and
-`node --experimental-strip-types --no-warnings server/src/test-handshake.ts`
-fail with: `expected status game to start with "d 7 status\tgame" but got
-"d 7 lobby\ttagcounts\t2062\t..."`. Pre-existing on master; not caused by
-current changes.
-
-**Cause:** The lobby join sequence now interleaves a `lobby tagcounts` packet
-between `lobby ownjoin` and the `status game` triggered by `cspt`. The tests'
-strict-positional assertions still expect the old order.
-
-**Fix:** rewrite the assertion to drain frames until `status game` arrives
-(the way `test-multi.ts`, `test-forfeit.ts`, `test-daily.ts` already do via
-`awaitFrame`/`waitFor`-style predicates).
-
-**Files:** `port/server/src/test-fullflow.ts`, `port/server/src/test-handshake.ts`.
-
 ## Gaps from a faithful 1:1 port
 
 Things we deferred for MVP that the original Java game has:
@@ -65,8 +46,6 @@ Things we deferred for MVP that the original Java game has:
   added for movable blocks is reusable here — call `mutateTile` with the
   decayed shape code from inside the wall-collision dispatch and the
   renderer will pick up the change automatically.)
-- **3D shading on tile rendering.** The original adds light/shadow at higher
-  graphics-quality settings via `GameBackgroundCanvas.drawMap`.
 - **Sound playback.** All 8 .wav files are bundled in
   `port/web/public/sound/shared/` but the client never plays them. Need
   Web Audio integration: `gamemove` on stroke, `winner`/`loser` on game end,
@@ -140,6 +119,21 @@ A few non-obvious pitfalls when modifying things:
 
 ## Resolved (kept for posterity)
 
+- **`test-fullflow.ts` and `test-handshake.ts` were stale (predated `lobby
+  tagcounts`).** Both now drain frames via predicate matchers
+  (`awaitMatch` / `waitFor`-style) instead of strict-positional assertions,
+  so the port-extension `lobby tagcounts` packet between `lobby ownjoin`
+  and `status game` no longer trips them. The stale `startturn` assertion
+  was also dropped (server is async-mode now). Files:
+  `port/server/src/test-fullflow.ts`, `port/server/src/test-handshake.ts`.
+- **3D shading on tile rendering.** The original `GameBackgroundCanvas`
+  edge-light pass — corner highlight, bevel edges, 7-px drop shadow on
+  solids, ±16 on teleport markers, ±5 grain — is now applied once at track
+  build in `TrackRenderer`, with a partial rebuild on movable-block tile
+  mutations.
+- **Movable / sunkable blocks (27, 46) sliding behaviour.** Block now
+  slides on impact and sinks into adjacent water/acid; see the caveats
+  section above for the determinism shape.
 - **Same maps appeared too often.** Added a 50-entry recently-served ringbuffer
   to `TrackManager` — `getRandomTracks` now prefers tracks not in the ring and
   only falls through to recents when the filtered pool is too small.
