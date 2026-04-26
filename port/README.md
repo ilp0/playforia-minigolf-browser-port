@@ -73,6 +73,14 @@ npm run build
 npm run dev:server   # serves the built web bundle on http://localhost:4242
 ```
 
+### Operator knobs
+
+Set on the command line or via env vars when launching the server:
+
+| Env var         | CLI flag           | Effect                                                         |
+| --------------- | ------------------ | -------------------------------------------------------------- |
+| `CHAT_ENABLED`  | `--chat-disabled`  | Set `CHAT_ENABLED=0` (or pass `--chat-disabled`) to drop all lobby/game chat server-side. The sender is told once via a system whisper; gameplay traffic is unaffected. Useful for hosting without taking on chat-moderation duty. |
+
 ## Tests
 
 ```sh

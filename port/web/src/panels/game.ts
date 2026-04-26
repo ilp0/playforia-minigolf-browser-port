@@ -249,6 +249,10 @@ export class GamePanel implements Panel {
     const bottomBand = document.createElement("div");
     bottomBand.style.display = "grid";
     bottomBand.style.gridTemplateColumns = "1fr 280px";
+    // Pin the row to the flex-allocated band height. Without this the implicit
+    // grid row sizes to max-content, so the chat log's accumulating messages
+    // would grow the row taller instead of scrolling inside the log.
+    bottomBand.style.gridTemplateRows = "minmax(0, 1fr)";
     bottomBand.style.gap = "8px";
     bottomBand.style.padding = "4px 8px";
     bottomBand.style.flex = "1";
@@ -908,6 +912,9 @@ export class GamePanel implements Panel {
     for (let i = 0; i < this.numPlayers; i++) {
       const p = this.players[i];
       if (!p) continue;
+      // Daily mode: only the local player's score is shown — other ghosts in
+      // the room represent concurrent runs, not a shared scoreboard.
+      if (this.dailyMode && i !== this.myPlayerId) continue;
       const row = document.createElement("div");
       row.className = "row " + (i === this.myPlayerId ? "you" : "them");
       const num = document.createElement("span");
@@ -958,6 +965,9 @@ export class GamePanel implements Panel {
 
     const log = document.createElement("div");
     log.style.flex = "1";
+    // Without min-height: 0 the flex item refuses to shrink below its
+    // intrinsic content height, defeating overflow-y:auto.
+    log.style.minHeight = "0";
     log.style.overflowY = "auto";
     log.style.fontFamily = '"Lucida Console", monospace';
     log.style.fontSize = "11px";
@@ -968,6 +978,13 @@ export class GamePanel implements Panel {
     log.style.wordBreak = "break-word";
     strip.appendChild(log);
     this.chatLogEl = log;
+
+    // Operator-disabled chat: keep the log so server-driven messages still
+    // surface, but drop the input row so the UI never invites typing the
+    // server would discard.
+    if (!this.app.chatEnabled) {
+      return strip;
+    }
 
     const form = document.createElement("form");
     form.style.display = "flex";

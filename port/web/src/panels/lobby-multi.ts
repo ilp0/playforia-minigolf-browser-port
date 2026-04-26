@@ -471,6 +471,13 @@ export class LobbyMultiPanel implements Panel {
     strip.appendChild(log);
     this.chatLogEl = log;
 
+    // Operator-disabled chat: keep the log so join/part system messages still
+    // surface, but drop the input row entirely so the UI never invites typing
+    // that the server would just throw away.
+    if (!this.app.chatEnabled) {
+      return strip;
+    }
+
     const inputRow = document.createElement("form");
     inputRow.style.display = "flex";
     inputRow.style.gap = "4px";
