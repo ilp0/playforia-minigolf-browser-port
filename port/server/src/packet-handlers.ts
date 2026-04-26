@@ -94,6 +94,30 @@ register({
     },
 });
 
+/**
+ * Browser-port extension: client sends `nick <name>` between `logintype` and
+ * `login` so the player's chosen display name flows through to other clients
+ * (scoreboards, chat, daily-mode ghost labels). Without this the server would
+ * stamp every guest with a random `~anonym-NNNN` placeholder.
+ *
+ * Sanitisation: trim, drop framing chars, cap at 20 chars (matches the
+ * client-side input maxLength). Empty is treated as "no nick sent" so the
+ * `login` handler falls back to the anonym placeholder.
+ */
+register({
+    type: PacketType.DATA,
+    pattern: /^nick\t(.+)$/,
+    handle: (_server, conn, match) => {
+        const player = conn.player;
+        if (!player) return;
+        // Strip both wire-framing chars (\r\n\t) and the structured-field
+        // separators (^, :) that Player.toString triangelizes — a nick with `^`
+        // or `:` would corrupt the lobby/owninfo lines for everyone.
+        const cleaned = match[1].replace(/[\r\n\t^:]+/g, " ").trim().slice(0, 20);
+        if (cleaned) player.nick = cleaned;
+    },
+});
+
 register({
     type: PacketType.DATA,
     pattern: /^login$/,
@@ -103,8 +127,13 @@ register({
             conn.close("login-without-player");
             return;
         }
-        const username = `~anonym-${Math.floor(Math.random() * 10000)}`;
-        player.nick = username;
+        // Honour the nick the client sent during the handshake; only fall back
+        // to the random placeholder if they didn't send one (or it sanitised
+        // away to nothing — `nick` handler leaves `player.nick` at the "-"
+        // default in that case).
+        if (player.nick === "-" || player.nick === "") {
+            player.nick = `~anonym-${Math.floor(Math.random() * 10000)}`;
+        }
         player.emailVerified = true;
         player.registered = false;
         // basicinfo\t<emailVerified>\t<accessLevel>\tt\tt

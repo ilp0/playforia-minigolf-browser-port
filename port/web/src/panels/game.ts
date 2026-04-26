@@ -45,24 +45,6 @@ interface TrackInfoLine {
   numBestPar: number;
 }
 
-const CATEGORY_NAMES: Record<number, string> = {
-  1: "Basic",
-  2: "Traditional",
-  3: "Modern",
-  4: "HIO",
-  5: "Short",
-  6: "Long",
-};
-
-/** Parse a "C <csv>" line value into category IDs. */
-function parseCategories(s: string | null): number[] {
-  if (!s) return [];
-  return s
-    .split(",")
-    .map((p) => parseInt(p.trim(), 10))
-    .filter((n) => Number.isFinite(n) && n > 0);
-}
-
 function parseInfoLine(s: string | null): TrackInfoLine | null {
   if (!s) return null;
   const parts = s.split(",");
@@ -141,7 +123,6 @@ export class GamePanel implements Panel {
   private atlases: Atlases | null = null;
   private scoreboardEl: HTMLElement | null = null;
   private trackTitleEl: HTMLElement | null = null;
-  private trackTagsEl: HTMLElement | null = null;
   private trackAuthorEl: HTMLElement | null = null;
   private trackProgressEl: HTMLElement | null = null;
   private bestParEl: HTMLElement | null = null;
@@ -231,15 +212,9 @@ export class GamePanel implements Panel {
     const trackProgress = document.createElement("div");
     const trackTitle = document.createElement("div");
     trackTitle.style.fontWeight = "bold";
-    const trackTags = document.createElement("div");
-    trackTags.style.display = "flex";
-    trackTags.style.gap = "3px";
-    trackTags.style.flexWrap = "wrap";
-    trackTags.style.marginTop = "1px";
     const trackAuthor = document.createElement("div");
     left.appendChild(trackProgress);
     left.appendChild(trackTitle);
-    left.appendChild(trackTags);
     left.appendChild(trackAuthor);
 
     const center = document.createElement("div");
@@ -287,7 +262,6 @@ export class GamePanel implements Panel {
     this.canvas = canvas;
     this.trackProgressEl = trackProgress;
     this.trackTitleEl = trackTitle;
-    this.trackTagsEl = trackTags;
     this.trackAuthorEl = trackAuthor;
     this.statusEl = statusEl;
     this.strokeCountEl = strokeCountEl;
@@ -378,7 +352,6 @@ export class GamePanel implements Panel {
     this.strokeCountEl = null;
     this.trackProgressEl = null;
     this.trackTitleEl = null;
-    this.trackTagsEl = null;
     this.trackAuthorEl = null;
     this.avgParEl = null;
     this.bestParEl = null;
@@ -570,8 +543,7 @@ export class GamePanel implements Panel {
       const name = extractField(f, "N ") ?? "";
       const info = parseInfoLine(extractField(f, "I "));
       const bestPlayer = (extractField(f, "B ") ?? "").split(",")[0] ?? "";
-      const tags = parseCategories(extractField(f, "C "));
-      this.setTrackMeta(author, name, info, bestPlayer, tags);
+      this.setTrackMeta(author, name, info, bestPlayer);
 
       this.setStatus("Click to shoot when you're ready.");
       this.removeOverlay();
@@ -768,7 +740,6 @@ export class GamePanel implements Panel {
     name: string,
     info: TrackInfoLine | null,
     bestPlayer: string,
-    tags: number[] = [],
   ): void {
     if (this.trackProgressEl) {
       this.trackProgressEl.textContent = `Track ${this.currentTrackIdx}/${this.numTracks}`;
@@ -778,23 +749,6 @@ export class GamePanel implements Panel {
     this.trackName = name;
     this.trackAverage = info && info.plays > 0 ? info.totalStrokes / info.plays : 0;
     if (this.trackTitleEl) this.trackTitleEl.textContent = name;
-    if (this.trackTagsEl) {
-      while (this.trackTagsEl.firstChild) {
-        this.trackTagsEl.removeChild(this.trackTagsEl.firstChild);
-      }
-      for (const tagId of tags) {
-        const name = CATEGORY_NAMES[tagId];
-        if (!name) continue;
-        const chip = document.createElement("span");
-        chip.textContent = name;
-        chip.style.fontSize = "10px";
-        chip.style.padding = "0 4px";
-        chip.style.background = "#406040";
-        chip.style.color = "#fff";
-        chip.style.borderRadius = "2px";
-        this.trackTagsEl.appendChild(chip);
-      }
-    }
     if (this.trackAuthorEl) {
       this.trackAuthorEl.textContent = author ? `by ${author}` : "";
     }

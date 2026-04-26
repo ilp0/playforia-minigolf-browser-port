@@ -175,6 +175,29 @@ async function main(): Promise<void> {
         await a.waitFor((s) => /^d \d+ status\tlobbyselect\t/.test(s), "A back to lobbyselect");
         console.log("[OK] back from daily routes straight to lobbyselect");
 
+        // Regression: B also leaves, then a fresh client C re-enters the
+        // (now-empty) singleton daily room and must be able to shoot. Pre-fix,
+        // C would inherit the stale `numberIndex` (=2 after A and B) and the
+        // stale `playStatus` ("tp" from A's hole-in + B's forfeit), so its
+        // beginstroke would be silently rejected by the playStatus gate.
+        b.sendData("game", "back");
+        await b.waitFor((s) => /^d \d+ status\tlobbyselect\t/.test(s), "B back to lobbyselect");
+
+        const c = new Client("C");
+        await c.open();
+        await login(c);
+        await enterDaily(c);
+        // Owninfo must show id=0 — the room reset on empty-join, otherwise C's
+        // numberIndex would still be 2 here and the next assert (charAt 0) is
+        // the wrong slot.
+        const owninfo = await c.waitFor((s) => /^d \d+ game\towninfo\t/.test(s), "C owninfo");
+        const cid = parseInt(owninfo.split("\t")[2] ?? "-1", 10);
+        if (cid !== 0) throw new Error(`C re-entered daily with id=${cid}; want 0 (numberIndex was not reset)`);
+        c.sendData("game", "beginstroke", ball, mouseA);
+        await c.waitFor((s) => /^d \d+ game\tbeginstroke\t0\t/.test(s), "C sees own stroke after re-entry");
+        console.log("[OK] daily re-entry into empty room: C can shoot with id=0");
+        c.close();
+
         a.close();
         b.close();
         console.log("\nALL DAILY-CHALLENGE PHASES PASSED");
