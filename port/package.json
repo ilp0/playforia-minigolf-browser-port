@@ -10,6 +10,14 @@
     "build": "npm run build:shared && npm run build:server && npm run build:web",
     "dev:server": "npm -w server run dev",
     "dev:web": "npm -w web run dev",
+    "dev:up": "node scripts/devctl.mjs up",
+    "dev:down": "node scripts/devctl.mjs down",
+    "dev:restart": "node scripts/devctl.mjs restart",
+    "dev:status": "node scripts/devctl.mjs status",
+    "dev:info": "node scripts/devctl.mjs info",
+    "dev:url": "node scripts/devctl.mjs url",
+    "dev:logs": "node scripts/devctl.mjs logs",
+    "dev:init": "node scripts/devctl.mjs init",
     "test": "npm -w shared test",
     "assets": "node scripts/prepare-assets.mjs"
   }
