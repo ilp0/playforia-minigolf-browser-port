@@ -18,6 +18,7 @@ import {
   replayLink,
   saveDailyResult,
   shareText,
+  shortReplayLink,
   todayKey,
   type DailyReplay,
   type DailyResult,
@@ -1291,12 +1292,25 @@ export class GamePanel implements Panel {
       linkBtn.type = "button";
       linkBtn.className = "btn-blue";
       linkBtn.textContent = "Copy replay link";
+      // Click handler:
+      //   1. POST the recording to /api/replay → get a short id, copy `?r=<id>`.
+      //   2. If the network or server rejects (offline, 5xx, etc.), fall back
+      //      to the long fragment-embedded link so the user always gets
+      //      *something* shareable rather than a dead button.
       linkBtn.addEventListener("click", () => {
-        const url = replayLink(replay);
-        void copyToClipboard(url).then((ok) => {
+        linkBtn.disabled = true;
+        linkBtn.textContent = "Saving…";
+        void (async () => {
+          let url: string;
+          try {
+            url = await shortReplayLink(replay);
+          } catch {
+            url = replayLink(replay);
+          }
+          const ok = await copyToClipboard(url);
+          linkBtn.disabled = false;
           linkBtn.textContent = ok ? "Link copied!" : "Copy failed";
           if (!ok) {
-            // Fallback: drop into a textarea the user can hand-select.
             const ta = document.createElement("textarea");
             ta.value = url;
             ta.rows = 3;
@@ -1308,7 +1322,7 @@ export class GamePanel implements Panel {
             ta.select();
           }
           window.setTimeout(() => { linkBtn.textContent = "Copy replay link"; }, 2000);
-        });
+        })();
       });
       btnRow.appendChild(linkBtn);
     }
