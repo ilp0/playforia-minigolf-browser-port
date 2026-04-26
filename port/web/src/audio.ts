@@ -43,26 +43,45 @@ const FILES: Record<SoundKey, string> = {
 };
 
 const STORAGE_KEY = "minigolf.audio.enabled";
+const VOLUME_KEY = "minigolf.audio.volume";
 
 class AudioManager {
   private ctx: AudioContext | null = null;
+  private masterGain: GainNode | null = null;
   private buffers = new Map<SoundKey, AudioBuffer>();
   private loading = new Map<SoundKey, Promise<AudioBuffer | null>>();
   private _enabled: boolean;
+  private _volume: number;
 
   constructor() {
     let saved: string | null = null;
     try { saved = localStorage.getItem(STORAGE_KEY); } catch { /* private mode */ }
     this._enabled = saved !== "0";
+
+    let savedVol: string | null = null;
+    try { savedVol = localStorage.getItem(VOLUME_KEY); } catch { /* private mode */ }
+    const v = savedVol !== null ? parseFloat(savedVol) : NaN;
+    this._volume = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1;
   }
 
   get enabled(): boolean {
     return this._enabled;
   }
 
+  get volume(): number {
+    return this._volume;
+  }
+
   setEnabled(v: boolean): void {
     this._enabled = v;
     try { localStorage.setItem(STORAGE_KEY, v ? "1" : "0"); } catch { /* private mode */ }
+  }
+
+  setVolume(v: number): void {
+    const clamped = Math.max(0, Math.min(1, v));
+    this._volume = clamped;
+    if (this.masterGain) this.masterGain.gain.value = clamped;
+    try { localStorage.setItem(VOLUME_KEY, String(clamped)); } catch { /* private mode */ }
   }
 
   // --- public play methods (names mirror SoundManager.java) -----------------
@@ -103,11 +122,20 @@ class AudioManager {
     try {
       const src = ctx.createBufferSource();
       src.buffer = buf;
-      src.connect(ctx.destination);
+      src.connect(this.ensureMasterGain(ctx));
       src.start();
     } catch {
       // BufferSource.start() throws if the context is closed. Nothing to do.
     }
+  }
+
+  private ensureMasterGain(ctx: AudioContext): GainNode {
+    if (this.masterGain) return this.masterGain;
+    const gain = ctx.createGain();
+    gain.gain.value = this._volume;
+    gain.connect(ctx.destination);
+    this.masterGain = gain;
+    return gain;
   }
 
   private getContext(): AudioContext | null {

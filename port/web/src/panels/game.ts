@@ -305,6 +305,33 @@ export class GamePanel implements Panel {
     right.appendChild(avgPar);
     right.appendChild(bestPar);
 
+    // Master volume slider — drives audio.masterGain. Lives in the right
+    // column so it shares trackinfo's vertical budget rather than carving a
+    // new row out of the already-tight bottom band.
+    const volRow = document.createElement("div");
+    volRow.style.display = "flex";
+    volRow.style.alignItems = "center";
+    volRow.style.gap = "4px";
+    volRow.style.justifyContent = "flex-end";
+    volRow.style.marginTop = "2px";
+    const volLabel = document.createElement("span");
+    volLabel.textContent = t("Port_Game_Volume", "Volume");
+    volLabel.style.fontSize = "10px";
+    const volSlider = document.createElement("input");
+    volSlider.type = "range";
+    volSlider.min = "0";
+    volSlider.max = "100";
+    volSlider.step = "1";
+    volSlider.value = String(Math.round(audio.volume * 100));
+    volSlider.style.width = "90px";
+    volSlider.title = t("Port_Game_VolumeTitle", "Master volume");
+    volSlider.addEventListener("input", () => {
+      audio.setVolume(volSlider.valueAsNumber / 100);
+    });
+    volRow.appendChild(volLabel);
+    volRow.appendChild(volSlider);
+    right.appendChild(volRow);
+
     trackinfo.appendChild(left);
     trackinfo.appendChild(center);
     trackinfo.appendChild(right);
