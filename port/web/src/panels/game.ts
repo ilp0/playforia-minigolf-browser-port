@@ -18,6 +18,7 @@ import {
   replayLink,
   saveDailyResult,
   shareText,
+  shortReplayLink,
   todayKey,
   type DailyReplay,
   type DailyResult,
@@ -631,14 +632,17 @@ export class GamePanel implements Panel {
       const bestPlayer = (extractField(f, "B ") ?? "").split(",")[0] ?? "";
       this.setTrackMeta(author, name, info, bestPlayer);
       this.trackAuthor = author;
-      // Capture the raw T-line for replay-link generation (daily only).
-      // Reset stroke recording on each starttrack so a fresh run starts clean
-      // even if the daily room rotated (date roll-over) mid-session.
-      if (this.dailyMode) {
-        this.dailyTLine = tLine;
-        this.dailyReplayStrokes = [];
-        this.dailyResultRecorded = false;
-      }
+      // Capture the raw T-line for replay-link generation. We capture on every
+      // starttrack rather than only when `this.dailyMode` is set: the server
+      // sends `starttrack` BEFORE `dailymode` in the daily-join sequence
+      // (server.ts joinDaily: start → resetvoteskip → starttrack → dailymode),
+      // so a `dailyMode` guard here always missed the first track and left
+      // `dailyTLine` null — hiding the "Copy replay link" button in the share
+      // overlay. The fields are harmless to populate for non-daily rooms; the
+      // button-render check requires both daily mode and recorded strokes.
+      this.dailyTLine = tLine;
+      this.dailyReplayStrokes = [];
+      this.dailyResultRecorded = false;
 
       this.setStatus("Click to shoot when you're ready.");
       this.removeOverlay();
@@ -1291,12 +1295,25 @@ export class GamePanel implements Panel {
       linkBtn.type = "button";
       linkBtn.className = "btn-blue";
       linkBtn.textContent = "Copy replay link";
+      // Click handler:
+      //   1. POST the recording to /api/replay → get a short id, copy `?r=<id>`.
+      //   2. If the network or server rejects (offline, 5xx, etc.), fall back
+      //      to the long fragment-embedded link so the user always gets
+      //      *something* shareable rather than a dead button.
       linkBtn.addEventListener("click", () => {
-        const url = replayLink(replay);
-        void copyToClipboard(url).then((ok) => {
+        linkBtn.disabled = true;
+        linkBtn.textContent = "Saving…";
+        void (async () => {
+          let url: string;
+          try {
+            url = await shortReplayLink(replay);
+          } catch {
+            url = replayLink(replay);
+          }
+          const ok = await copyToClipboard(url);
+          linkBtn.disabled = false;
           linkBtn.textContent = ok ? "Link copied!" : "Copy failed";
           if (!ok) {
-            // Fallback: drop into a textarea the user can hand-select.
             const ta = document.createElement("textarea");
             ta.value = url;
             ta.rows = 3;
@@ -1308,7 +1325,7 @@ export class GamePanel implements Panel {
             ta.select();
           }
           window.setTimeout(() => { linkBtn.textContent = "Copy replay link"; }, 2000);
-        });
+        })();
       });
       btnRow.appendChild(linkBtn);
     }
