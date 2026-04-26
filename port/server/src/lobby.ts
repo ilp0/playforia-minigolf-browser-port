@@ -2,6 +2,7 @@
 import { tabularize } from "@minigolf/shared";
 import type { Player } from "./player.ts";
 import type { Game } from "./game.ts";
+import { logEvent } from "./log.ts";
 
 export const LobbyType = Object.freeze({
     SINGLE: "1",
@@ -20,6 +21,17 @@ export const PartReason = Object.freeze({
     CONN_PROBLEM: 5,
     SWITCHEDLOBBY: 6,
 } as const);
+
+/** Human-readable names for `PartReason` codes — used by the analytics
+ *  `lobby_leave` event so consumers don't have to remember the numbers. */
+const PART_REASON_NAME: Record<number, string> = {
+    1: "started_sp",
+    2: "created_mp",
+    3: "joined_mp",
+    4: "userleft",
+    5: "conn_problem",
+    6: "switchedlobby",
+};
 
 export const JoinType = Object.freeze({
     NORMAL: 0,
@@ -79,10 +91,19 @@ export class Lobby {
         // Self ownjoin
         player.connection.sendData("lobby", "ownjoin", player.toString());
 
-        if (this.players.indexOf(player) < 0) {
+        const wasPresent = this.players.indexOf(player) >= 0;
+        if (!wasPresent) {
             this.players.push(player);
         }
         player.lobby = this;
+        if (!wasPresent) {
+            logEvent("lobby_join", {
+                id: player.id,
+                nick: player.nick,
+                lobby: this.type,
+                from_game: joinType !== JoinType.NORMAL,
+            });
+        }
 
         // Multi-player lobby: send the public game list to the newcomer.
         if (this.type === LobbyType.MULTI) {
@@ -139,6 +160,12 @@ export class Lobby {
         const idx = this.players.indexOf(player);
         if (idx < 0) return false;
         this.players.splice(idx, 1);
+        logEvent("lobby_leave", {
+            id: player.id,
+            nick: player.nick,
+            lobby: this.type,
+            reason: PART_REASON_NAME[partReason] ?? String(partReason),
+        });
 
         // Broadcast lobby\tpart\t<nick>\t<reason>[\t<gameName>] to remaining players.
         const parts: (string | number)[] = ["lobby", "part", player.nick, partReason];
@@ -174,5 +201,19 @@ export class Lobby {
 
     getGame(id: number): Game | undefined {
         return this.games.get(id);
+    }
+
+    /** Live count of games hosted by this lobby. Used by the periodic
+     *  analytics snapshot in main.ts. */
+    gameCount(): number {
+        return this.games.size;
+    }
+
+    /** Total players across the games hosted by this lobby (excludes players
+     *  still sitting in the lobby itself). Used by the snapshot. */
+    inGamePlayerCount(): number {
+        let n = 0;
+        for (const g of this.games.values()) n += g.playerCount();
+        return n;
     }
 }

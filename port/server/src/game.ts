@@ -10,6 +10,7 @@ import {
     type TrackManager,
     type TrackStats,
 } from "./tracks.ts";
+import { logEvent } from "./log.ts";
 
 export const STROKES_UNLIMITED = 0;
 export const STROKETIMEOUT_INFINITE = 0;
@@ -79,6 +80,13 @@ export abstract class Game {
         this.playersNumber.push(this.numberIndex);
         this.numberIndex++;
         player.game = this;
+        logEvent("game_join", {
+            game_id: this.gameId,
+            lobby: this.lobbyType,
+            id: player.id,
+            nick: player.nick,
+            players: this.players.length,
+        });
         return true;
     }
 
@@ -137,6 +145,11 @@ export abstract class Game {
 
     protected endGame(): void {
         this.writeAll(tabularize("game", "end"));
+        logEvent("game_end", {
+            game_id: this.gameId,
+            lobby: this.lobbyType,
+            players: this.players.length,
+        });
     }
 
     abstract sendGameInfo(player: Player): void;
@@ -548,6 +561,11 @@ export class DailyGame extends GolfGame {
         // Initial playStatus for an empty room.
         this.playStatus = "";
         this.isPublic = false;
+        logEvent("game_create", {
+            game_id: gameId,
+            kind: "daily",
+            date: dateKey,
+        });
     }
 
     /** Swap track for the new UTC day if needed; reset per-player counters. */
@@ -734,6 +752,15 @@ export class TrainingGame extends GolfGame {
             trackManager,
         );
 
+        logEvent("game_create", {
+            game_id: gameId,
+            kind: "training",
+            tracks: numberOfTracks,
+            track_type: tracksType,
+            water,
+            creator_id: player.id,
+        });
+
         const lob: Lobby | null = player.lobby;
         if (this.addPlayer(player)) {
             if (lob) lob.addGame(this);
@@ -790,6 +817,18 @@ export class MultiGame extends GolfGame {
             numPlayers,
             trackManager,
         );
+
+        logEvent("game_create", {
+            game_id: gameId,
+            kind: "multi",
+            tracks: numberOfTracks,
+            track_type: tracksType,
+            num_players: numPlayers,
+            max_strokes: maxStrokes,
+            collision,
+            passworded,
+            creator_id: creator.id,
+        });
 
         // Add creator first.
         const lobby = creator.lobby;

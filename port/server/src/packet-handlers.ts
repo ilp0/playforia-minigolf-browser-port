@@ -7,6 +7,7 @@ import type { GolfServer } from "./server.ts";
 import { Player } from "./player.ts";
 import { JoinType, LobbyType, PartReason } from "./lobby.ts";
 import { MultiGame, TrainingGame } from "./game.ts";
+import { logEvent } from "./log.ts";
 
 interface Handler {
     type: typeof PacketType.COMMAND | typeof PacketType.DATA;
@@ -172,6 +173,11 @@ register({
         // basicinfo\t<emailVerified>\t<accessLevel>\tt\tt
         conn.sendData("basicinfo", player.emailVerified, player.accessLevel, "t", "t");
         conn.sendData("status", "lobbyselect", "300");
+        logEvent("player_login", {
+            id: player.id,
+            nick: player.nick,
+            language: player.language ?? "-",
+        });
     },
 });
 
