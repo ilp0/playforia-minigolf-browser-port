@@ -380,14 +380,15 @@ export class LobbyMultiPanel implements Panel {
 
     const collisionSel = document.createElement("select");
     for (const [v, label] of [
-      ["1", "Players collide"],
       ["0", "No collision"],
+      ["1", "Players collide"],
     ] as const) {
       const o = document.createElement("option");
       o.value = v;
       o.textContent = label;
       collisionSel.appendChild(o);
     }
+    collisionSel.disabled = true;
     grid.appendChild(this.label("Collision:"));
     grid.appendChild(collisionSel);
 
