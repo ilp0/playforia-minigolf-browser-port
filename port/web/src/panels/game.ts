@@ -1362,7 +1362,10 @@ export class GamePanel implements Panel {
     const strip = this.chatStripEl;
     if (!strip) return;
     const showChat = this.numPlayers > 1;
-    strip.style.display = showChat ? "" : "none";
+    // Restore "flex" rather than "" — clearing the inline style would fall
+    // back to the <div> default of "block", which breaks the flex column +
+    // min-height:0 setup the log relies on to scroll instead of growing.
+    strip.style.display = showChat ? "flex" : "none";
     const parent = strip.parentElement as HTMLElement | null;
     if (parent) {
       parent.style.gridTemplateColumns = showChat ? "1fr 280px" : "1fr";
