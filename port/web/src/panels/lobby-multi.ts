@@ -1,6 +1,7 @@
 import { PacketType, type Packet } from "@minigolf/shared";
 import type { App } from "../app.ts";
 import type { Panel } from "../panel.ts";
+import { t } from "../i18n.ts";
 
 /** A row from the lobby's game list. Mirrors the 15-field gameString. */
 interface GameInfo {
@@ -27,18 +28,23 @@ interface PlayerInfo {
   language: string;
 }
 
-/** Index in this list = the trackType integer the server understands (1..6).
- *  The server treats trackType=0 as ALL (random across every category), so the
- *  form's "Basic" must be 1, not 0. */
-const TRACK_TYPES = ["Basic", "Traditional", "Modern", "Hole-in-one", "Short", "Long"];
-/** Convert form-array index (0-based) to server trackType id (1-based). */
-function trackTypeToServerId(formIdx: number): number {
-  return formIdx + 1;
+/** Index in this list = (server trackType id - 1). The server treats
+ *  trackType=0 as ALL (random across every category), so the form's "Basic"
+ *  is server-id 1, not 0. Resolved through `t()` so the language picker
+ *  affects rendering on both the create-game form and the game-list rows. */
+function trackTypeName(serverId: number): string {
+  switch (serverId) {
+    case 0: return t("LobbyReal_TrackTypes0", "All kind");
+    case 1: return t("LobbyReal_TrackTypes1", "Basic");
+    case 2: return t("LobbyReal_TrackTypes2", "Traditional");
+    case 3: return t("LobbyReal_TrackTypes3", "Modern");
+    case 4: return t("LobbyReal_TrackTypes4", "Hole-in-one");
+    case 5: return t("LobbyReal_TrackTypes5", "Short");
+    case 6: return t("LobbyReal_TrackTypes6", "Long");
+    default: return "?";
+  }
 }
-/** Convert server trackType id to form-array index. */
-function serverIdToTrackType(serverId: number): number {
-  return Math.max(0, serverId - 1);
-}
+const TRACK_TYPE_SERVER_IDS = [1, 2, 3, 4, 5, 6];
 
 /** Parse "3:Nick^flags^ranking^lang^profile^avatar" into a PlayerInfo. */
 function parsePlayerString(s: string): PlayerInfo {
@@ -106,32 +112,34 @@ export class LobbyMultiPanel implements Panel {
     wrap.style.background =
       "#99ff99 url('/picture/agolf/bg-lobby-multi.gif') no-repeat top left";
 
-    // Top bar: title + back
-    const topBar = document.createElement("div");
-    topBar.style.position = "absolute";
-    topBar.style.top = "8px";
-    topBar.style.left = "0";
-    topBar.style.right = "0";
-    topBar.style.display = "flex";
-    topBar.style.alignItems = "center";
-    topBar.style.justifyContent = "space-between";
-    topBar.style.padding = "0 12px";
-
+    // Top bar: centred title + back button anchored top-right. The title sits
+    // on top of the metallic-plate label baked into bg-lobby-multi.gif
+    // (centred horizontally on image-x=367, ≈ app-x=368). Absolute positioning
+    // around the panel midpoint keeps it on the plate regardless of the
+    // translated string's width.
     const title = document.createElement("div");
-    title.textContent = "Multiplayer";
+    title.textContent = t("LobbySelect_MultiPlayer", "Multiplayer");
+    title.style.position = "absolute";
+    title.style.top = "12px";
+    title.style.left = "50%";
+    title.style.transform = "translateX(-50%)";
     title.style.fontFamily = '"Times New Roman", serif';
     title.style.fontSize = "20px";
     title.style.fontWeight = "bold";
-    topBar.appendChild(title);
+    title.style.color = "#000";
+    title.style.whiteSpace = "nowrap";
+    title.style.pointerEvents = "none";
+    wrap.appendChild(title);
 
     const backBtn = document.createElement("button");
     backBtn.type = "button";
     backBtn.className = "btn-red";
-    backBtn.textContent = "Back";
+    backBtn.textContent = t("LobbyControl_Main", "« Back");
+    backBtn.style.position = "absolute";
+    backBtn.style.top = "8px";
+    backBtn.style.right = "12px";
     this.bind(backBtn, "click", () => this.goBack());
-    topBar.appendChild(backBtn);
-
-    wrap.appendChild(topBar);
+    wrap.appendChild(backBtn);
 
     // Main area: 2 columns (left = game list, right = players + create form)
     const main = document.createElement("div");
@@ -141,11 +149,21 @@ export class LobbyMultiPanel implements Panel {
     main.style.right = "8px";
     main.style.bottom = "150px";
     main.style.display = "grid";
-    main.style.gridTemplateColumns = "1fr 280px";
+    // Column widths chosen so the gap between the games box and the right
+    // column lines up with the vertical divider painted into bg-lobby-multi.gif
+    // (a black bar centred on image-x=367, ≈ app-x=368). Main is positioned
+    // at left:8 right:8 inside #app's 733px content area, so it spans
+    // app-x 9..726. With gap=8, splitting at app-x 368 gives:
+    //   games:  app-x 9 → 363  (width 355)
+    //   right:  app-x 371 → 725 (width 354)
+    // 354px is enough for the longest Finnish dropdown option
+    // ("Takaisin lyöntipaikkaan") given the form's label-auto / select-fill
+    // grid layout below.
+    main.style.gridTemplateColumns = "1fr 354px";
     main.style.gap = "8px";
 
     // Game list
-    const gamesBox = this.makeBox("Games");
+    const gamesBox = this.makeBox(t("Port_Lobby_Games", "Games"));
     const gamesScroll = document.createElement("div");
     gamesScroll.style.overflowY = "auto";
     gamesScroll.style.flex = "1";
@@ -162,7 +180,7 @@ export class LobbyMultiPanel implements Panel {
     rightCol.style.gridTemplateRows = "1fr auto";
     rightCol.style.gap = "8px";
 
-    const playersBox = this.makeBox("Players");
+    const playersBox = this.makeBox(t("LobbyReal_ListTitlePlayers", "Players"));
     const playersScroll = document.createElement("div");
     playersScroll.style.overflowY = "auto";
     playersScroll.style.flex = "1";
@@ -221,7 +239,9 @@ export class LobbyMultiPanel implements Panel {
           const p = parsePlayerString(f[2] ?? "");
           this.players.set(p.nick, p);
           this.refreshPlayers();
-          if (verb === "join") this.appendChat(`* ${p.nick} joined the lobby`, "system");
+          if (verb === "join") {
+            this.appendChat("* " + t("LobbyChat_UserJoined", "%1 joined the lobby", p.nick), "system");
+          }
           break;
         }
         case "ownjoin": {
@@ -235,7 +255,7 @@ export class LobbyMultiPanel implements Panel {
           const nick = f[2] ?? "";
           this.players.delete(nick);
           this.refreshPlayers();
-          this.appendChat(`* ${nick} left the lobby`, "system");
+          this.appendChat("* " + t("LobbyChat_UserLeft", "%1 left the lobby", nick), "system");
           break;
         }
         case "gamelist":
@@ -260,7 +280,7 @@ export class LobbyMultiPanel implements Panel {
           // lobby sayp <senderNick> <text>
           const sender = f[2] ?? "?";
           const text = f[3] ?? "";
-          this.appendChat(`[whisper from ${sender}] ${text}`, "whisper");
+          this.appendChat(t("Port_Chat_WhisperFromFmt", "[whisper from %1] %2", sender, text), "whisper");
           break;
         }
         default:
@@ -278,7 +298,7 @@ export class LobbyMultiPanel implements Panel {
       return;
     }
     if (head === "error" && f[1] === "wrongpassword") {
-      this.appendChat("* Wrong password.", "system");
+      this.appendChat("* " + t("LobbyReal_JoinError3", "Wrong password"), "system");
       return;
     }
   }
@@ -334,54 +354,72 @@ export class LobbyMultiPanel implements Panel {
     wrap.style.fontSize = "12px";
 
     const head = document.createElement("div");
-    head.textContent = "Create game";
+    head.textContent = t("LobbyReal_CreateGame", "Create game");
     head.style.fontWeight = "bold";
     head.style.marginBottom = "4px";
     wrap.appendChild(head);
 
     const grid = document.createElement("div");
     grid.style.display = "grid";
-    grid.style.gridTemplateColumns = "auto 1fr";
+    // `minmax(0, 1fr)` lets the input column shrink below its content's natural
+    // width — without this the 1fr track grows to fit the widest dropdown
+    // option (e.g. Finnish "Takaisin lyöntipaikkaan") and overflows the
+    // panel's 320px right column.
+    grid.style.gridTemplateColumns = "auto minmax(0, 1fr)";
     grid.style.rowGap = "3px";
     grid.style.columnGap = "6px";
     grid.style.alignItems = "center";
 
+    /** Inputs/selects are stretched to fill the grid cell + min-width:0 so
+     *  they may shrink below their intrinsic content width. Reused for every
+     *  form field below. */
+    const fillCell = (el: HTMLElement): void => {
+      el.style.width = "100%";
+      el.style.minWidth = "0";
+    };
+
     const nameInput = document.createElement("input");
     nameInput.type = "text";
-    nameInput.value = "My Game";
+    nameInput.value = t("Port_Lobby_DefaultGameName", "My Game");
     nameInput.maxLength = 24;
-    grid.appendChild(this.label("Name:"));
+    fillCell(nameInput);
+    grid.appendChild(this.label(t("LobbyReal_GameName", "Game name:")));
     grid.appendChild(nameInput);
 
     const passwordInput = document.createElement("input");
     passwordInput.type = "text";
-    passwordInput.placeholder = "(blank = open)";
+    passwordInput.placeholder = t("Port_Lobby_BlankOpenHint", "(blank = open)");
     passwordInput.maxLength = 24;
-    grid.appendChild(this.label("Password:"));
+    fillCell(passwordInput);
+    grid.appendChild(this.label(t("LobbyReal_GamePassword", "Game password:")));
     grid.appendChild(passwordInput);
 
     const numPlayersSel = this.numericSelect([2, 3, 4], "2");
-    grid.appendChild(this.label("Players:"));
+    fillCell(numPlayersSel);
+    grid.appendChild(this.label(t("LobbyReal_PlayerCount", "Number of players:")));
     grid.appendChild(numPlayersSel);
 
     const trackTypeSel = document.createElement("select");
     this.trackTypeSel = trackTypeSel;
     this.populateTrackTypeOptions();
-    grid.appendChild(this.label("Track type:"));
+    fillCell(trackTypeSel);
+    grid.appendChild(this.label(t("LobbyReal_TrackTypes", "Track types:")));
     grid.appendChild(trackTypeSel);
 
     const numTracksSel = this.numericSelect([1, 3, 5, 9, 18], "9");
-    grid.appendChild(this.label("Tracks:"));
+    fillCell(numTracksSel);
+    grid.appendChild(this.label(t("LobbyReal_TrackCount", "Number of tracks:")));
     grid.appendChild(numTracksSel);
 
     const maxStrokesSel = this.numericSelect([5, 10, 15, 20, 25, 30], "10");
-    grid.appendChild(this.label("Max strokes:"));
+    fillCell(maxStrokesSel);
+    grid.appendChild(this.label(t("LobbyReal_MaxStrokes", "Max strokes per track:")));
     grid.appendChild(maxStrokesSel);
 
     const collisionSel = document.createElement("select");
     for (const [v, label] of [
-      ["0", "No collision"],
-      ["1", "Players collide"],
+      ["0", t("LobbyReal_Collision1", "No")],
+      ["1", t("LobbyReal_Collision2", "Yes")],
     ] as const) {
       const o = document.createElement("option");
       o.value = v;
@@ -389,20 +427,22 @@ export class LobbyMultiPanel implements Panel {
       collisionSel.appendChild(o);
     }
     collisionSel.disabled = true;
-    grid.appendChild(this.label("Collision:"));
+    fillCell(collisionSel);
+    grid.appendChild(this.label(t("LobbyReal_Collision", "Ball collisions:")));
     grid.appendChild(collisionSel);
 
     const waterSel = document.createElement("select");
     for (const [v, label] of [
-      ["0", "Back to last hit"],
-      ["1", "Back to shore"],
+      ["0", t("LobbyReal_WaterEvent1", "Back to start")],
+      ["1", t("LobbyReal_WaterEvent2", "Stay on shore")],
     ] as const) {
       const o = document.createElement("option");
       o.value = v;
       o.textContent = label;
       waterSel.appendChild(o);
     }
-    grid.appendChild(this.label("Water:"));
+    fillCell(waterSel);
+    grid.appendChild(this.label(t("LobbyReal_WaterEvent", "When ball goes to water:")));
     grid.appendChild(waterSel);
 
     wrap.appendChild(grid);
@@ -410,7 +450,7 @@ export class LobbyMultiPanel implements Panel {
     const createBtn = document.createElement("button");
     createBtn.type = "button";
     createBtn.className = "btn-green";
-    createBtn.textContent = "Create";
+    createBtn.textContent = t("LobbyReal_CreateGame", "Create game");
     createBtn.style.marginTop = "6px";
     this.bind(createBtn, "click", () => {
       const name = (nameInput.value || "Game").trim();
@@ -486,14 +526,14 @@ export class LobbyMultiPanel implements Panel {
     const input = document.createElement("input");
     input.type = "text";
     input.maxLength = 200;
-    input.placeholder = "Press enter to chat (start with /msg <nick> for a whisper)";
+    input.placeholder = t("Port_Chat_LobbyInputHelp", "Press enter to chat (start with /msg <nick> for a whisper)");
     input.style.flex = "1";
     inputRow.appendChild(input);
     this.chatInputEl = input;
 
     const sendBtn = document.createElement("button");
     sendBtn.type = "submit";
-    sendBtn.textContent = "Send";
+    sendBtn.textContent = t("Port_Chat_Send", "Send");
     inputRow.appendChild(sendBtn);
 
     this.bind(inputRow, "submit", (ev: Event) => {
@@ -509,11 +549,12 @@ export class LobbyMultiPanel implements Panel {
   private populateTrackTypeOptions(): void {
     const sel = this.trackTypeSel;
     if (!sel) return;
-    const prev = sel.value || String(trackTypeToServerId(1));
+    const prev = sel.value || "1";
     while (sel.firstChild) sel.removeChild(sel.firstChild);
 
     const counts = this.tagCounts;
-    const labelFor = (serverId: number, name: string): string => {
+    const labelFor = (serverId: number): string => {
+      const name = trackTypeName(serverId);
       if (!counts) return name;
       const n = counts[serverId] ?? 0;
       return `${name} (${n})`;
@@ -521,13 +562,12 @@ export class LobbyMultiPanel implements Panel {
 
     const mixed = document.createElement("option");
     mixed.value = "0";
-    mixed.textContent = labelFor(0, "Mixed");
+    mixed.textContent = labelFor(0);
     sel.appendChild(mixed);
-    for (let i = 0; i < TRACK_TYPES.length; i++) {
-      const id = trackTypeToServerId(i);
+    for (const id of TRACK_TYPE_SERVER_IDS) {
       const o = document.createElement("option");
       o.value = String(id);
-      o.textContent = labelFor(id, TRACK_TYPES[i]);
+      o.textContent = labelFor(id);
       sel.appendChild(o);
     }
     sel.value = prev;
@@ -579,7 +619,7 @@ export class LobbyMultiPanel implements Panel {
       empty.style.padding = "8px";
       empty.style.color = "#666";
       empty.style.fontStyle = "italic";
-      empty.textContent = "(No games yet — create one to get started)";
+      empty.textContent = t("Port_Lobby_NoGamesYet", "(No games yet — create one to get started)");
       el.appendChild(empty);
       return;
     }
@@ -610,7 +650,7 @@ export class LobbyMultiPanel implements Panel {
     row.appendChild(name);
 
     const meta = document.createElement("span");
-    const ttype = g.trackType === 0 ? "Mixed" : (TRACK_TYPES[serverIdToTrackType(g.trackType)] ?? "?");
+    const ttype = trackTypeName(g.trackType);
     meta.textContent = `${ttype} · ${g.numTracks}t`;
     meta.style.fontSize = "11px";
     meta.style.color = "#406040";
@@ -624,12 +664,12 @@ export class LobbyMultiPanel implements Panel {
     const join = document.createElement("button");
     join.type = "button";
     join.className = "btn-blue";
-    join.textContent = "Join";
+    join.textContent = t("LobbyReal_JoinGame", "Join game");
     join.style.padding = "1px 8px";
     join.style.minHeight = "auto";
     if (g.currentPlayers >= g.numPlayers) {
       join.disabled = true;
-      join.textContent = "Full";
+      join.textContent = t("LobbySelect_Full", "(Full)");
     } else {
       this.bind(join, "click", () => this.joinGame(g));
     }
@@ -643,7 +683,9 @@ export class LobbyMultiPanel implements Panel {
   private joinGame(g: GameInfo): void {
     let password = "-";
     if (g.passworded) {
-      const entered = window.prompt(`Password for "${g.name}":`);
+      const entered = window.prompt(
+        t("LobbyRealPassword_EnterPassword", "Enter game password") + ` "${g.name}":`,
+      );
       if (entered === null) return;
       password = entered.trim() || "-";
     }
@@ -669,7 +711,7 @@ export class LobbyMultiPanel implements Panel {
         const target = rest.substring(0, space);
         const body = rest.substring(space + 1);
         this.app.connection.sendData("lobby", "sayp", target, body);
-        this.appendChat(`[whisper to ${target}] ${body}`, "whisper");
+        this.appendChat(t("Port_Chat_WhisperToFmt", "[whisper to %1] %2", target, body), "whisper");
       }
       return;
     }

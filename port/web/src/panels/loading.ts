@@ -1,6 +1,7 @@
 import { PacketType, type Packet } from "@minigolf/shared";
 import type { App } from "../app.ts";
 import type { Panel } from "../panel.ts";
+import { t } from "../i18n.ts";
 
 /**
  * First panel shown. Waits for:
@@ -27,7 +28,7 @@ export class LoadingPanel implements Panel {
     wrap.className = "panel-loading";
 
     const heading = document.createElement("h1");
-    heading.textContent = "Loading...";
+    heading.textContent = t("Loader_LoadingGame", "Loading game...");
     wrap.appendChild(heading);
 
     const progress = document.createElement("div");

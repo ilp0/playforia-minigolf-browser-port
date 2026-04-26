@@ -7,6 +7,7 @@ import { LobbySelectPanel } from "./panels/lobbyselect.ts";
 import { LobbyPanel } from "./panels/lobby.ts";
 import { LobbyMultiPanel } from "./panels/lobby-multi.ts";
 import { GamePanel } from "./panels/game.ts";
+import { t } from "./i18n.ts";
 
 const DEV = Boolean(import.meta.env?.DEV);
 
@@ -56,7 +57,7 @@ export class App {
     });
 
     this.connection.addEventListener("close", () => {
-      this.showError("Connection closed");
+      this.showError(t("Message_ConnectionError", "Connection error!"));
     });
   }
 

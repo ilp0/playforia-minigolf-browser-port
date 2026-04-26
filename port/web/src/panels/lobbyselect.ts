@@ -2,6 +2,7 @@ import { PacketType, type Packet } from "@minigolf/shared";
 import type { App } from "../app.ts";
 import type { Panel } from "../panel.ts";
 import { todayKey, getDailyResult } from "../daily.ts";
+import { t } from "../i18n.ts";
 
 /**
  * Lobby-select panel — visual port of agolf.LobbySelectPanel, repurposed:
@@ -39,10 +40,15 @@ export class LobbySelectPanel implements Panel {
     const titles = document.createElement("div");
     titles.className = "lobby-titles";
 
+    // Title positions in pixels, matching the bg image's 735px-wide column
+    // thirds (centres at 122.5 / 367.5 / 612.5). Percent positions would
+    // resolve against #app's 733px content area (1px border eats 2px) and
+    // slip a pixel left of the image's divider lines.
     const positions: Array<["1" | "2" | "3", string, string]> = [
-      ["1", "Single player", "16.66%"],
-      ["2", "Daily Cup", "50%"],
-      ["3", "Multiplayer", "83.33%"],
+      ["1", t("LobbySelect_SinglePlayer", "Single player"), "122.5px"],
+      // "Daily Cup" is port-specific (replaces the original DUAL column).
+      ["2", t("Port_LobbySelect_DailyCup", "Daily Cup"), "367.5px"],
+      ["3", t("LobbySelect_MultiPlayer", "Multiplayer"), "612.5px"],
     ];
     const counts: Record<"1" | "2" | "3", HTMLElement> = {
       1: this.makeCount(),
@@ -66,29 +72,46 @@ export class LobbySelectPanel implements Panel {
     wrap.appendChild(titles);
 
     // Three button columns: Single / Daily / Multi.
-    wrap.appendChild(this.makeColumn(1, "Single player", "Quick start", () => this.selectSingle(), () => this.quickSingle()));
+    wrap.appendChild(this.makeColumn(
+      1,
+      t("LobbySelect_SinglePlayer", "Single player"),
+      t("LobbySelect_QuickStart", "Quick start"),
+      () => this.selectSingle(),
+      () => this.quickSingle(),
+    ));
     wrap.appendChild(this.makeDailyColumn());
-    wrap.appendChild(this.makeColumn(3, "Multiplayer", "Quick start", () => this.selectMulti(), () => this.quickMulti()));
+    wrap.appendChild(this.makeColumn(
+      3,
+      t("LobbySelect_MultiPlayer", "Multiplayer"),
+      t("LobbySelect_QuickStart", "Quick start"),
+      () => this.selectMulti(),
+      () => this.quickMulti(),
+    ));
 
     // Footer: graphics / audio / quit
     const footer = document.createElement("div");
     footer.className = "footer";
 
+    const gfxPrefix = t("LobbySelect_Gfx", "Graphics:");
+    const gfxLabels = [
+      t("LobbySelect_Gfx0", "Plain (minimum)"),
+      t("LobbySelect_Gfx1", "Some details (fast)"),
+      t("LobbySelect_Gfx2", "Full details (slower)"),
+      t("LobbySelect_Gfx3", "Full + animations"),
+    ];
     const gfx = document.createElement("select");
-    for (const label of [
-      "Graphics: Low",
-      "Graphics: Medium",
-      "Graphics: High",
-      "Graphics: Maximum",
-    ]) {
+    for (const label of gfxLabels) {
       const opt = document.createElement("option");
-      opt.textContent = label;
+      opt.textContent = `${gfxPrefix} ${label}`;
       gfx.appendChild(opt);
     }
     gfx.selectedIndex = 2;
 
     const audio = document.createElement("select");
-    for (const label of ["Audio: On", "Audio: Off"]) {
+    for (const label of [
+      t("Port_LobbySelect_AudioOn", "Audio: On"),
+      t("Port_LobbySelect_AudioOff", "Audio: Off"),
+    ]) {
       const opt = document.createElement("option");
       opt.textContent = label;
       audio.appendChild(opt);
@@ -97,7 +120,7 @@ export class LobbySelectPanel implements Panel {
     const quit = document.createElement("button");
     quit.type = "button";
     quit.className = "btn-red";
-    quit.textContent = "Quit";
+    quit.textContent = t("LobbySelect_Quit", "Quit");
     const quitHandler = (): void => {
       // Best we can do in a browser tab.
       try { window.close(); } catch { /* noop */ }
@@ -169,16 +192,16 @@ export class LobbySelectPanel implements Panel {
   private makeCount(): HTMLElement {
     const el = document.createElement("div");
     el.className = "lobby-count";
-    el.textContent = "(No players)";
+    el.textContent = t("LobbySelect_Players0", "(No players)");
     return el;
   }
 
   private setCount(el: HTMLElement | null, n: number): void {
     if (!el) return;
     if (!Number.isFinite(n) || n < 0) return;
-    if (n === 0) el.textContent = "(No players)";
-    else if (n === 1) el.textContent = "(1 player)";
-    else el.textContent = `(${n} players)`;
+    if (n === 0) el.textContent = t("LobbySelect_Players0", "(No players)");
+    else if (n === 1) el.textContent = t("LobbySelect_Players1", "(1 player)");
+    else el.textContent = t("LobbySelect_PlayersX", "(%1 players)", n);
   }
 
   private makeColumn(
@@ -233,13 +256,24 @@ export class LobbySelectPanel implements Panel {
     const existing = getDailyResult();
     if (existing) {
       btn.disabled = true;
-      btn.textContent = "Already played today";
-      btn.title =
-        `${todayKey()}: ${existing.forfeited ? "forfeited" : `${existing.strokes} strokes`}` +
-        ` (avg ${existing.average.toFixed(1)}). Come back tomorrow.`;
+      btn.textContent = t("Port_Daily_AlreadyPlayed", "Already played today");
+      const verdict = existing.forfeited
+        ? t("Port_Daily_Forfeited", "forfeited")
+        : t("Port_Daily_Strokes", "%1 strokes", existing.strokes);
+      btn.title = t(
+        "Port_Daily_ButtonTitleDone",
+        "%1: %2 (avg %3). Come back tomorrow.",
+        todayKey(),
+        verdict,
+        existing.average.toFixed(1),
+      );
     } else {
-      btn.textContent = "Daily Cup";
-      btn.title = `${todayKey()} — same track for everyone today.`;
+      btn.textContent = t("Port_LobbySelect_DailyCup", "Daily Cup");
+      btn.title = t(
+        "Port_Daily_ButtonTitle",
+        "%1 — same track for everyone today.",
+        todayKey(),
+      );
       const handler = (): void => this.selectDaily();
       btn.addEventListener("click", handler);
       this.listeners.push(() => btn.removeEventListener("click", handler));
