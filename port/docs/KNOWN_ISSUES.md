@@ -41,11 +41,6 @@ Things we deferred for MVP that the original Java game has:
   ignore the flag. Adding it has determinism implications — any per-iteration
   call ordering must match between clients. The collision math is in
   `GameCanvas.handlePlayerCollisions`.
-- **Breakable blocks (40–43) visual updates.** Bounce works; the wall
-  doesn't visually crack/decay. (The mutate-tile / dirty-tile drain plumbing
-  added for movable blocks is reusable here — call `mutateTile` with the
-  decayed shape code from inside the wall-collision dispatch and the
-  renderer will pick up the change automatically.)
 - **Sound playback.** All 8 .wav files are bundled in
   `port/web/public/sound/shared/` but the client never plays them. Need
   Web Audio integration: `gamemove` on stroke, `winner`/`loser` on game end,
