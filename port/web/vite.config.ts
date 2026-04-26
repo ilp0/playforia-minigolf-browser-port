@@ -16,9 +16,14 @@ export default defineConfig({
     allowedHosts: true,
     proxy: {
       "/ws": {
-        target: "ws://localhost:4242",
+        target: "ws://localhost:4244",
         ws: true,
         rewriteWsOrigin: true,
+      },
+      // Server-side replay store lives next to the WebSocket — proxy so dev
+      // mode (vite on 5173/5175) reaches the same endpoints in-process.
+      "/api": {
+        target: "http://localhost:4244",
       },
     },
   },

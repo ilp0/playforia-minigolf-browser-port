@@ -194,6 +194,34 @@ export function replayLink(r: DailyReplay): string {
     return `${base}#replay=${enc}`;
 }
 
+/**
+ * POST a replay to the server's in-memory store and return the short URL.
+ * The id is opaque base36; URL form is `…/?r=<id>`. Throws on network or
+ * server failure so the caller can fall back to the embed-in-fragment link.
+ */
+export async function shortReplayLink(r: DailyReplay): Promise<string> {
+    const res = await fetch("/api/replay", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(r),
+    });
+    if (!res.ok) throw new Error(`replay save failed: ${res.status}`);
+    const { id } = (await res.json()) as { id?: string };
+    if (typeof id !== "string" || id.length === 0) throw new Error("server returned no id");
+    const base = window.location.origin + window.location.pathname;
+    return `${base}?r=${id}`;
+}
+
+/** Fetch a replay by id from the server. Returns null if expired/not found. */
+export async function fetchReplayById(id: string): Promise<DailyReplay | null> {
+    const res = await fetch(`/api/replay/${encodeURIComponent(id)}`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`replay fetch failed: ${res.status}`);
+    const json = (await res.json()) as DailyReplay;
+    if (json?.v !== 1 || typeof json.t !== "string" || !Array.isArray(json.s)) return null;
+    return json;
+}
+
 /** Pull and parse a replay from the current `window.location.hash`, if any. */
 export function readReplayFromHash(): DailyReplay | null {
     const h = window.location.hash;
@@ -202,4 +230,16 @@ export function readReplayFromHash(): DailyReplay | null {
     const raw = params.get("replay");
     if (!raw) return null;
     return decodeReplay(raw);
+}
+
+/**
+ * Read a replay id from the URL query string (`?r=<id>`). Used for the
+ * server-stored short links, which keep the URL compact at ~30 chars.
+ */
+export function readReplayIdFromQuery(): string | null {
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get("r");
+    if (!id) return null;
+    if (!/^[a-z0-9]{8}$/.test(id)) return null;
+    return id;
 }
