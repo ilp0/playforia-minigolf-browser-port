@@ -160,12 +160,21 @@ export class LoginPanel implements Panel {
     this.setEnabled(false);
 
     const lang = (this.langSelect?.value ?? "en") as Lang;
+    const rawNick = (this.nameInput?.value ?? "").trim();
+    // Server-side sanitiser will accept/reject; we only strip our own framing
+    // chars here so we never split the packet on the wire.
+    const nick = rawNick.replace(/[\r\n\t]+/g, " ").slice(0, 20);
 
     // Full guest-login handshake. The server processes these in order; the
     // final `login` is what triggers basicinfo + status\tlobbyselect.
+    // `nick` is the port's extension to the original handshake — the server
+    // uses it as the player's display name instead of the random `~anonym-`
+    // placeholder, so other players (and ghost labels in daily mode) see the
+    // name the user chose at the login screen.
     this.app.connection.sendData("version", 35);
     this.app.connection.sendData("language", lang);
     this.app.connection.sendData("logintype", "nr");
+    if (nick) this.app.connection.sendData("nick", nick);
     this.app.connection.sendData("login");
 
     this.setStatus("Authenticating...");

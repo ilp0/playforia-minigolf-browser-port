@@ -160,7 +160,87 @@ export class TrackRenderer {
         this.writeTile(img, tx, ty, code);
       }
     }
+    this.applyShading(img);
     ctx.putImageData(img, 0, 0);
+  }
+
+  /**
+   * Per-pixel edge-lighting + drop-shadow + grain pass, ported from Java
+   * GameBackgroundCanvas.drawMap (graphicsQualityIndex >= 2 branch).
+   *
+   * Light source is the top-left of the playfield. For each "solid" pixel
+   * (collision 16..23, illusion-wall id 19 excluded by default) we look at the
+   * up-left and down-right neighbours:
+   *   - inner-corner solid (only down-right neighbour is solid): big +128 boost
+   *     on top of the corner pixel — that's what gives walls the chiselled bevel.
+   *   - top/left edge: +24 (bright)
+   *   - bottom/right edge: −24 (dark)
+   * Then for each solid pixel we cast a 7-pixel down-right drop shadow (−8 per
+   * pixel) onto the non-solid neighbours, faked ambient occlusion.
+   * Teleport-start markers (col 32/34/36/38) get the same brightness pass at a
+   * lighter weight (±16 instead of ±24/±128).
+   * Finally, a ±5 random grain across every pixel for the painterly texture.
+   */
+  private applyShading(img: ImageData): void {
+    const W = MAP_PIXEL_WIDTH;
+    const H = MAP_PIXEL_HEIGHT;
+    const data = img.data;
+    const collision = this.parsedMap.collision;
+
+    const isSolid = (x: number, y: number): boolean => {
+      if (x < 0 || x >= W || y < 0 || y >= H) return false;
+      const c = collision[y * W + x];
+      // Java: c >= 16 && c <= 23 && c != 19  (specialSettings[3]==false; the
+      // illusion-wall block doesn't cast shadows in the default ruleset).
+      return c >= 16 && c <= 23 && c !== 19;
+    };
+    const isTeleStart = (x: number, y: number): boolean => {
+      if (x < 0 || x >= W || y < 0 || y >= H) return false;
+      const c = collision[y * W + x];
+      return c === 32 || c === 34 || c === 36 || c === 38;
+    };
+    const shift = (x: number, y: number, off: number): void => {
+      const o = (y * W + x) * 4;
+      const r = data[o] + off;
+      const g = data[o + 1] + off;
+      const b = data[o + 2] + off;
+      data[o] = r < 0 ? 0 : r > 255 ? 255 : r;
+      data[o + 1] = g < 0 ? 0 : g > 255 ? 255 : g;
+      data[o + 2] = b < 0 ? 0 : b > 255 ? 255 : b;
+    };
+
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (isSolid(x, y)) {
+          const ul = isSolid(x - 1, y - 1);
+          const dr = isSolid(x + 1, y + 1);
+          if (!ul && dr && !isSolid(x, y - 1) && !isSolid(x - 1, y)) {
+            // Inner corner: this pixel is the top-left tip of a solid block.
+            shift(x, y, 128);
+          } else {
+            if (!ul && dr) shift(x, y, 24);
+            if (!dr && ul) shift(x, y, -24);
+          }
+          // Drop-shadow trail (quality≥2 in Java). Up to 7 px down-right onto
+          // non-solid neighbours.
+          for (let i = 1; i <= 7 && x + i < W && y + i < H; i++) {
+            if (!isSolid(x + i, y + i)) shift(x + i, y + i, -8);
+          }
+        }
+        if (isTeleStart(x, y)) {
+          const ul = isTeleStart(x - 1, y - 1);
+          const dr = isTeleStart(x + 1, y + 1);
+          if (!ul && dr && !isTeleStart(x, y - 1) && !isTeleStart(x - 1, y)) {
+            shift(x, y, 16);
+          } else {
+            if (!ul && dr) shift(x, y, 16);
+            if (!dr && ul) shift(x, y, -16);
+          }
+        }
+        // Grain — Math.floor(Math.random()*11) − 5 ∈ [-5, 5].
+        shift(x, y, ((Math.random() * 11) | 0) - 5);
+      }
+    }
   }
 
   drawFrame(

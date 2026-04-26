@@ -556,16 +556,35 @@ export class DailyGame extends GolfGame {
     /** Late-join entry. Called from the daily-select handler. */
     joinDaily(player: Player): void {
         if (this.players.includes(player)) return;
+        // Singleton room: previous occupants leave incremented `numberIndex`
+        // and finished `playStatus` chars ('t'/'p') behind. A fresh joiner into
+        // an empty room must start from id 0 with a 'f' slot, otherwise the
+        // beginstroke gate (`playStatus.charAt(playerId) === 'f'`) silently
+        // rejects every shot they try to take.
+        if (this.players.length === 0) {
+            this.numberIndex = 0;
+            this.playStatus = "";
+            this.strokeSeedCounter = 0;
+            for (let i = 0; i < this.playerStrokesThisTrack.length; i++) {
+                this.playerStrokesThisTrack[i] = 0;
+                this.playerStrokesTotal[i] = 0;
+            }
+        }
         // super.addPlayer broadcasts `game join` to existing players, sends
         // gameInfo/players/owninfo to the newcomer, and pushes the slot.
         this.addPlayer(player);
-        // Grow per-player arrays to match the new size.
-        while (this.playerStrokesThisTrack.length < this.players.length) {
+        // After addPlayer, this.numberIndex == newId + 1. Grow the per-id
+        // arrays / playStatus to that length, NOT players.length: ids are
+        // sparse (a finisher who later leaves still owned a slot in
+        // playStatus), so padding only to players.length leaves the joiner's
+        // own slot off the end and beginstroke silently rejects them.
+        const idCapacity = this.numberIndex;
+        while (this.playerStrokesThisTrack.length < idCapacity) {
             this.playerStrokesThisTrack.push(0);
             this.playerStrokesTotal.push(0);
         }
-        if (this.playStatus.length < this.players.length) {
-            this.playStatus = this.playStatus.padEnd(this.players.length, "f");
+        if (this.playStatus.length < idCapacity) {
+            this.playStatus = this.playStatus.padEnd(idCapacity, "f");
         }
         // Personal starttrack so the newcomer renders the map.
         const stats = this.dailyTrackManager.getStats(this.tracks[0]);
