@@ -89,7 +89,8 @@ await awaitFrame((s) => /^d \d+ game\towninfo\t/.test(s), "game owninfo");
 await awaitFrame((s) => /^d \d+ game\tstart$/.test(s), "game start");
 await awaitFrame((s) => /^d \d+ game\tresetvoteskip/.test(s), "resetvoteskip");
 const startTrackFrame = await awaitFrame((s) => /^d \d+ game\tstarttrack\t/.test(s), "starttrack", 8000);
-await awaitFrame((s) => /^d \d+ game\tstartturn\t0/.test(s), "startturn 0");
+// Async-mode play: no `startturn` follows starttrack. Clients shoot whenever
+// their own ball is at rest. (See server/src/game.ts startGame.)
 
 // Confirm we received a real track payload (must contain 'V 1' and a 'T ' field)
 const trackPayload = startTrackFrame.split("\t").slice(2).join("\t");
@@ -107,14 +108,14 @@ const v = x * 1500 + y * 4 + mode;
 const encoded = v.toString(36).padStart(4, "0");
 sendData("game", "beginstroke", encoded);
 
-// Server broadcasts beginstroke to other players (none here, single player) — no reply expected.
+// Server writeAll's the beginstroke to all players (incl. shooter): `game beginstroke <id> <ball> <mouse> <seed>`.
 // Sleep a moment then send endstroke (didn't make it in hole)
 await new Promise((r) => setTimeout(r, 200));
 sendData("game", "endstroke", 0, "f");
 
-// Server should reply with startturn (next turn for same player)
-await awaitFrame((s) => /^d \d+ game\tstartturn/.test(s), "startturn after endstroke", 4000);
-console.log("[OK] turn cycled correctly");
+// Async mode: server broadcasts `game endstroke <id> <strokes> <status>` (no startturn).
+await awaitFrame((s) => /^d \d+ game\tendstroke\t0\t1\tf$/.test(s), "endstroke broadcast", 4000);
+console.log("[OK] stroke recorded (1 stroke, still on track)");
 
 // Phase 9: simulate hole-in
 sendData("game", "beginstroke", encoded);
