@@ -110,6 +110,13 @@ interface PlayerSlot {
    */
   cursorX: number | null;
   cursorY: number | null;
+  /**
+   * Right-click shooting mode this peer is currently in (0..3). Driven by the
+   * 4th field of the `game cursor` broadcast — peers send the mode alongside
+   * the cursor position so the watcher's aim preview matches what the peer
+   * actually sees on their own screen.
+   */
+  cursorMode: number;
 }
 
 /**
@@ -169,6 +176,14 @@ export class GamePanel implements Panel {
 
   private mouseX = 0;
   private mouseY = 0;
+  /**
+   * Right-click shooting mode (0..3). Mirrors original GameCanvas.shootingMode.
+   * 0 = normal, 1 = reverse, 2 = 90° clockwise, 3 = 90° counter-clockwise.
+   * Right-click cycles through them so the player can hit hard along an axis
+   * even when the canvas edge would clip a normal aim line. Reset to 0 at the
+   * start of each track and after our own beginstroke is processed.
+   */
+  private shootingMode = 0;
   private rafHandle = 0;
   private gameId: string = "0";
   private numPlayers = 1;
@@ -181,6 +196,7 @@ export class GamePanel implements Panel {
   private keyHandler: ((ev: KeyboardEvent) => void) | null = null;
   private mouseMoveHandler: ((ev: MouseEvent) => void) | null = null;
   private clickHandler: ((ev: MouseEvent) => void) | null = null;
+  private contextMenuHandler: ((ev: MouseEvent) => void) | null = null;
 
   /**
    * Daily-mode state. Set when the server sends `game dailymode <dateKey>`.
@@ -337,6 +353,18 @@ export class GamePanel implements Panel {
       // Async play: anyone can click their OWN ball whenever it's at rest.
       const me = this.players[this.myPlayerId];
       if (!me || me.ball.inHole || me.simulating) return;
+      // Java parity: BUTTON1 = shoot; any other button cycles shootingMode
+      // through 0..3 (normal → reverse → 90° CW → 90° CCW → …). The cycle
+      // is gated on the same "ball at rest" condition as a shot.
+      if (ev.button !== 0) {
+        ev.preventDefault();
+        this.shootingMode = (this.shootingMode + 1) % 4;
+        // Force the next cursor sample through the throttle so peers see the
+        // new orientation immediately, even if the cursor is stationary.
+        this.lastCursorSentX = -9999;
+        this.lastCursorSentY = -9999;
+        return;
+      }
       const [mx, my] = localCoords(ev);
       const dx = me.ball.x - mx;
       const dy = me.ball.y - my;
@@ -348,11 +376,19 @@ export class GamePanel implements Panel {
       this.app.connection.sendData(
         "game",
         "beginstroke",
-        encodeCoords(ix, iy, 0) + "\t" + encodeCoords((mx | 0), (my | 0), 0),
+        encodeCoords(ix, iy, 0) + "\t" + encodeCoords((mx | 0), (my | 0), this.shootingMode),
       );
     };
     canvas.addEventListener("mousedown", clickHandler);
     this.clickHandler = clickHandler;
+
+    // Suppress the browser's right-click context menu on the canvas — the
+    // right button is reserved for cycling shootingMode (Java parity).
+    const contextMenuHandler = (ev: MouseEvent) => {
+      ev.preventDefault();
+    };
+    canvas.addEventListener("contextmenu", contextMenuHandler);
+    this.contextMenuHandler = contextMenuHandler;
 
     void loadAtlases().then((atl) => {
       this.atlases = atl;
@@ -377,10 +413,12 @@ export class GamePanel implements Panel {
     if (this.canvas) {
       if (this.mouseMoveHandler) this.canvas.removeEventListener("mousemove", this.mouseMoveHandler);
       if (this.clickHandler) this.canvas.removeEventListener("mousedown", this.clickHandler);
+      if (this.contextMenuHandler) this.canvas.removeEventListener("contextmenu", this.contextMenuHandler);
     }
     this.keyHandler = null;
     this.mouseMoveHandler = null;
     this.clickHandler = null;
+    this.contextMenuHandler = null;
     this.canvas = null;
     this.scoreboardEl = null;
     this.statusEl = null;
@@ -481,16 +519,20 @@ export class GamePanel implements Panel {
         this.handleEndStrokeBroadcast(f);
         break;
       case "cursor":
-        // Live aim preview from a peer. wire: game cursor <playerId> <x> <y>
-        // Loss-tolerant: the next tick overwrites — no replay queue needed.
+        // Live aim preview from a peer.
+        // wire: game cursor <playerId> <x> <y> [<shootingMode>]
+        // The mode field is optional for back-compat with older senders;
+        // missing means mode 0 (normal aim).
         {
           const id = parseInt(f[2] ?? "0", 10) || 0;
           const cx = parseInt(f[3] ?? "0", 10) || 0;
           const cy = parseInt(f[4] ?? "0", 10) || 0;
+          const cm = f[5] !== undefined ? ((parseInt(f[5], 10) || 0) % 4) : 0;
           const slot = this.players[id];
           if (slot && id !== this.myPlayerId) {
             slot.cursorX = cx;
             slot.cursorY = cy;
+            slot.cursorMode = cm;
           }
         }
         break;
@@ -570,9 +612,14 @@ export class GamePanel implements Panel {
         // Drop stale aim previews — last hole's cursor would point off-map.
         p.cursorX = null;
         p.cursorY = null;
+        p.cursorMode = 0;
       }
       this.currentTrackIdx++;
       this.updateStrokeCount();
+      // Java parity: shootingMode resets at startTurn — for our async port
+      // there's no per-turn boundary, so reset on every track change so a
+      // mode picked on the previous hole doesn't leak into the new one.
+      this.shootingMode = 0;
 
       const author = extractField(f, "A ") ?? "";
       const name = extractField(f, "N ") ?? "";
@@ -656,7 +703,7 @@ export class GamePanel implements Panel {
       otherPlayers,
     };
     slot.ctx = ctx;
-    applyStrokeImpulse(slot.ball, ctx, mouse.x, mouse.y);
+    applyStrokeImpulse(slot.ball, ctx, mouse.x, mouse.y, mouse.mode);
     slot.simulating = true;
     // Clear the firing peer's aim preview so we don't draw a stale line from
     // the new resting position to the old click point after their ball stops.
@@ -664,6 +711,11 @@ export class GamePanel implements Panel {
     // is a no-op for the shooter.
     slot.cursorX = null;
     slot.cursorY = null;
+    slot.cursorMode = 0;
+    // Java parity: shootingMode resets after the shot is taken. The shooter's
+    // server echo is the trigger here so the reset survives any local race
+    // with a right-click made between sending the click and the echo.
+    if (id === this.myPlayerId) this.shootingMode = 0;
     // Record OUR strokes when in daily mode for the share-link replay. Stored
     // raw (4-char base36 coords + uint32 seed) so encoding the link is just a
     // straight JSON pack — no further processing needed.
@@ -712,7 +764,10 @@ export class GamePanel implements Panel {
   /**
    * Stream our cursor to peers at ~15 Hz so they see our aim line live.
    * Bandwidth-conscious: sends only while OUR ball is at rest, and only when
-   * the cursor has moved by at least 2 px since last send.
+   * the cursor has moved by at least 2 px since last send. The mode (0..3)
+   * is appended so peers can render the rotated aim line (right-click parity);
+   * a right-click reset of `lastCursorSentX/Y` forces a send on mode-only
+   * change so a stationary cursor still pushes the new orientation through.
    */
   private maybeSendCursor(nowMs: number): void {
     if (!this.app.connection.isOpen) return;
@@ -724,7 +779,13 @@ export class GamePanel implements Panel {
     const cy = this.mouseY | 0;
     if (Math.abs(cx - this.lastCursorSentX) < 2 && Math.abs(cy - this.lastCursorSentY) < 2) return;
     // Server stamps the playerId before forwarding, so we don't include it.
-    this.app.connection.sendData("game", "cursor", String(cx), String(cy));
+    this.app.connection.sendData(
+      "game",
+      "cursor",
+      String(cx),
+      String(cy),
+      String(this.shootingMode),
+    );
     this.lastCursorSentMs = nowMs;
     this.lastCursorSentX = cx;
     this.lastCursorSentY = cy;
@@ -994,7 +1055,13 @@ export class GamePanel implements Panel {
     let aim: AimLine | null = null;
     const me = this.players[this.myPlayerId];
     if (me && !me.ball.inHole && !me.simulating) {
-      aim = { fromX: me.ball.x, fromY: me.ball.y, toX: this.mouseX, toY: this.mouseY };
+      aim = {
+        fromX: me.ball.x,
+        fromY: me.ball.y,
+        toX: this.mouseX,
+        toY: this.mouseY,
+        mode: this.shootingMode,
+      };
     }
     const sprites = this.drawSprites;
     const peerAims = this.drawPeerAims;
@@ -1040,6 +1107,7 @@ export class GamePanel implements Panel {
           toX: p.cursorX,
           toY: p.cursorY,
           playerIdx: i,
+          mode: p.cursorMode,
         });
       }
     }
@@ -1301,6 +1369,7 @@ export class GamePanel implements Panel {
         holeScores: [],
         cursorX: null,
         cursorY: null,
+        cursorMode: 0,
       });
     }
   }

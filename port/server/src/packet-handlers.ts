@@ -370,17 +370,22 @@ register({
 // and forwards to every other player in the game. Loss-tolerant by design —
 // the next tick just overwrites the previous one. Must come BEFORE the generic
 // `game .+` handler so the routing isn't swallowed.
-//   client → game \t cursor \t <x> \t <y>
-//   server → game \t cursor \t <playerId> \t <x> \t <y>
+//   client → game \t cursor \t <x> \t <y> [\t <shootingMode>]
+//   server → game \t cursor \t <playerId> \t <x> \t <y> [\t <shootingMode>]
+//
+// The shootingMode field is optional for back-compat with senders that don't
+// care about the right-click 90° aim feature; relayed verbatim if present.
 register({
     type: PacketType.DATA,
-    pattern: /^game\tcursor\t(\d+)\t(\d+)$/,
+    pattern: /^game\tcursor\t(\d+)\t(\d+)(?:\t(\d+))?$/,
     handle: (_server, conn, match) => {
         const player = conn.player;
         if (!player || !player.game) return;
         const game = player.game;
         const playerId = game.getPlayerId(player);
-        const body = tabularize("game", "cursor", playerId, match[1], match[2]);
+        const body = match[3] !== undefined
+            ? tabularize("game", "cursor", playerId, match[1], match[2], match[3])
+            : tabularize("game", "cursor", playerId, match[1], match[2]);
         for (const other of game.getPlayers()) {
             if (other === player) continue;
             other.connection.sendDataRaw(body);

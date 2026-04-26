@@ -30,9 +30,9 @@ import type { Panel } from "../panel.ts";
 
 const DEV = Boolean(import.meta.env?.DEV);
 
-function decodeCoords(s: string): { x: number; y: number } {
+function decodeCoords(s: string): { x: number; y: number; mode: number } {
   const v = parseInt(s, 36);
-  return { x: Math.floor(v / 1500), y: Math.floor((v % 1500) / 4) };
+  return { x: Math.floor(v / 1500), y: Math.floor((v % 1500) / 4), mode: v % 4 };
 }
 
 export class ReplayPanel implements Panel {
@@ -242,7 +242,7 @@ export class ReplayPanel implements Panel {
       // length 1 since the obstruction loop is keyed by index.
       otherPlayers: [null],
     };
-    applyStrokeImpulse(this.ball, this.ctx, m.x, m.y);
+    applyStrokeImpulse(this.ball, this.ctx, m.x, m.y, m.mode);
     this.simulating = true;
     this.strokeIdx++;
     this.updateStrokeLabel();
