@@ -100,13 +100,16 @@ export abstract class Game {
         this.sendPlayerNames(player);
         // Broadcast join to existing players (none for single-player on first add).
         // Wire: `game join <newPlayerOrdinal> <nick> <clan>`. The client treats
-        // the ordinal as 1-based and subtracts 1 to get its slot index. We are
-        // about to push the new player to `this.players`, so playerCount() + 1
-        // is the correct ordinal to send (otherwise the existing players' first
-        // slot is overwritten with the newcomer's nick on every join).
+        // the ordinal as 1-based and subtracts 1 to get its slot index. The new
+        // player's actual id will be `numberIndex` (assigned right after this
+        // by `addPlayer`), so the correct 1-based ordinal is `numberIndex + 1`.
+        // In the daily room sparse ids accumulate (a finisher who left still
+        // owns a slot in playStatus), so `playerCount() + 1` would target a
+        // lower index than the joiner's real id and overwrite an existing
+        // player's nick on the recipients' scoreboards.
         for (const p of this.players) {
             if (p !== player) {
-                p.connection.sendData("game", "join", this.playerCount() + 1, player.nick, player.clan);
+                p.connection.sendData("game", "join", this.numberIndex + 1, player.nick, player.clan);
             }
         }
         // Self owninfo — Java sends `numberIndex` BEFORE incrementing, so first player sees 0.

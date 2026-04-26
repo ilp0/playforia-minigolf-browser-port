@@ -1,8 +1,7 @@
 import { PacketType, type Packet } from "@minigolf/shared";
 import type { App } from "../app.ts";
 import type { Panel } from "../panel.ts";
-
-type Lang = "en" | "fi" | "sv";
+import { i18n, saveLang, t, type Lang } from "../i18n.ts";
 
 /**
  * Drives the login handshake:
@@ -21,6 +20,7 @@ export class LoginPanel implements Panel {
   private statusEl: HTMLElement | null = null;
   private submitting = false;
   private submitHandler: ((ev: SubmitEvent) => void) | null = null;
+  private langChangeHandler: ((ev: Event) => void) | null = null;
 
   constructor(app: App) {
     this.app = app;
@@ -40,7 +40,7 @@ export class LoginPanel implements Panel {
     const nameRow = document.createElement("div");
     nameRow.className = "form-row";
     const nameLabel = document.createElement("label");
-    nameLabel.textContent = "Username";
+    nameLabel.textContent = t("Login_EnterNick", "Your nickname:");
     nameLabel.htmlFor = "field-username";
     const nameInput = document.createElement("input");
     nameInput.type = "text";
@@ -54,20 +54,40 @@ export class LoginPanel implements Panel {
     const langRow = document.createElement("div");
     langRow.className = "form-row";
     const langLabel = document.createElement("label");
-    langLabel.textContent = "Language";
+    // No matching key in AGolf.xml — Java surfaces languages via Language_<code>
+    // values but never had a "Language:" label key. Use the port-specific
+    // Port_Login_Language so a translator can add it later if desired.
+    langLabel.textContent = t("Port_Login_Language", "Language");
     langLabel.htmlFor = "field-lang";
     const langSelect = document.createElement("select");
     langSelect.id = "field-lang";
-    for (const [val, label] of [
+    // Render the language names through the same XML so each locale's display
+    // string is the one its own AGolf.xml provides (English: "Finnish",
+    // Finnish: "suomi", etc.). Falls back to the inline defaults if the key
+    // isn't present.
+    for (const [val, fallback] of [
       ["en", "English"],
       ["fi", "Suomi"],
       ["sv", "Svenska"],
     ] as const) {
       const opt = document.createElement("option");
       opt.value = val;
-      opt.textContent = label;
+      opt.textContent = t(`Language_${val}`, fallback);
       langSelect.appendChild(opt);
     }
+    // Default to the saved-language preference (or EN). Triggers below pre-load
+    // the chosen XML so the moment we transition to lobbyselect the strings
+    // are already resolved.
+    langSelect.value = i18n.language;
+    const langChange = (): void => {
+      const lang = (langSelect.value || "en") as Lang;
+      saveLang(lang);
+      void i18n.setLanguage(lang).catch((err) => {
+        console.warn("[login] language load failed", err);
+      });
+    };
+    langSelect.addEventListener("change", langChange);
+    this.langChangeHandler = langChange;
     langRow.appendChild(langLabel);
     langRow.appendChild(langSelect);
     form.appendChild(langRow);
@@ -79,7 +99,7 @@ export class LoginPanel implements Panel {
     const connectBtn = document.createElement("button");
     connectBtn.type = "submit";
     connectBtn.className = "btn-green";
-    connectBtn.textContent = "Connect";
+    connectBtn.textContent = t("Login_Ok", "Connect");
     btnRow.appendChild(spacer);
     btnRow.appendChild(connectBtn);
     form.appendChild(btnRow);
@@ -116,12 +136,16 @@ export class LoginPanel implements Panel {
     if (this.form && this.submitHandler) {
       this.form.removeEventListener("submit", this.submitHandler);
     }
+    if (this.langSelect && this.langChangeHandler) {
+      this.langSelect.removeEventListener("change", this.langChangeHandler);
+    }
     this.form = null;
     this.nameInput = null;
     this.langSelect = null;
     this.connectBtn = null;
     this.statusEl = null;
     this.submitHandler = null;
+    this.langChangeHandler = null;
   }
 
   onPacket(pkt: Packet): void {
@@ -131,17 +155,17 @@ export class LoginPanel implements Panel {
     const head = fields[0];
 
     if (head === "versok") {
-      this.setStatus("Version OK, sending language...");
+      this.setStatus(t("Port_Login_StatusVersOk", "Version OK, sending language..."));
       return;
     }
     if (head === "error" && fields[1] === "vernotok") {
-      this.setStatus("Server rejected client version.");
+      this.setStatus(t("Message_VersionError", "Server rejected client version."));
       this.submitting = false;
       this.setEnabled(true);
       return;
     }
     if (head === "basicinfo") {
-      this.setStatus("Logged in. Awaiting lobby...");
+      this.setStatus(t("Port_Login_StatusBasicInfo", "Logged in. Awaiting lobby..."));
       return;
     }
     if (head === "status" && fields[1] === "lobbyselect") {
@@ -153,13 +177,21 @@ export class LoginPanel implements Panel {
   private submit(): void {
     if (this.submitting) return;
     if (!this.app.connection.isOpen) {
-      this.setStatus("Not connected.");
+      this.setStatus(t("Port_Login_NotConnected", "Not connected."));
       return;
     }
     this.submitting = true;
     this.setEnabled(false);
 
     const lang = (this.langSelect?.value ?? "en") as Lang;
+    // Make sure the chosen locale's XML is loaded before any post-login panel
+    // mounts. Awaited fire-and-forget — the panel transition is server-driven
+    // (waits for `status lobbyselect`), so the round-trip gives `setLanguage`
+    // ample time to finish.
+    saveLang(lang);
+    void i18n.setLanguage(lang).catch((err) => {
+      console.warn("[login] language load failed", err);
+    });
     const rawNick = (this.nameInput?.value ?? "").trim();
     // Server-side sanitiser will accept/reject; we only strip our own framing
     // chars here so we never split the packet on the wire.
@@ -177,7 +209,7 @@ export class LoginPanel implements Panel {
     if (nick) this.app.connection.sendData("nick", nick);
     this.app.connection.sendData("login");
 
-    this.setStatus("Authenticating...");
+    this.setStatus(t("Login_Wait", "Authenticating..."));
   }
 
   private setEnabled(enabled: boolean): void {

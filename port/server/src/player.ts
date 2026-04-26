@@ -34,8 +34,17 @@ export class Player {
     game: Game | null = null;
     gameType: GameType = null;
 
-    public readonly connection: Connection;
+    /** Mutable so `GolfServer.handleReconnect` can swap in the post-reconnect
+     *  WebSocket without disturbing peer-broadcast paths (everywhere else in
+     *  the codebase reaches sends via `player.connection.send*`). */
+    public connection: Connection;
     public readonly id: number;
+
+    /** When non-null, the player's WS is currently disconnected and a
+     *  grace-window timer is running; a `c old <id>` from a fresh socket
+     *  within the window will adopt this player. Cleared on reconnect.
+     *  Owned by `GolfServer.handleDisconnect` / `handleReconnect`. */
+    disconnectedAt: number | null = null;
 
     constructor(connection: Connection, id: number) {
         this.connection = connection;

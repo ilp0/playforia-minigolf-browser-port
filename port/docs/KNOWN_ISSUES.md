@@ -41,17 +41,19 @@ Things we deferred for MVP that the original Java game has:
   ignore the flag. Adding it has determinism implications — any per-iteration
   call ordering must match between clients. The collision math is in
   `GameCanvas.handlePlayerCollisions`.
-- **Breakable blocks (40–43) visual updates.** Bounce works; the wall
-  doesn't visually crack/decay. (The mutate-tile / dirty-tile drain plumbing
-  added for movable blocks is reusable here — call `mutateTile` with the
-  decayed shape code from inside the wall-collision dispatch and the
-  renderer will pick up the change automatically.)
 - **Sound playback.** All 8 .wav files are bundled in
   `port/web/public/sound/shared/` but the client never plays them. Need
   Web Audio integration: `gamemove` on stroke, `winner`/`loser` on game end,
   `notify` on chat, etc.
-- **Localisation.** `AGolf.xml` for en/fi/sv is bundled but the client uses
-  hard-coded English strings. Wire up a `TextManager` analog if needed.
+- **Localisation extension.** Core wiring exists (`web/src/i18n.ts` —
+  Java `TextManager` analog) and en/fi/sv `AGolf.xml` are loaded via
+  `fetch` from `/l10n/<lang>/AGolf.xml`. Visible strings in the login,
+  lobby-select, single/multi lobby, in-game and replay panels resolve
+  through `t(key, defaultEn, ...args)`. New port-specific strings live
+  under the `Port_*` namespace (not present in the original Java XMLs);
+  add them to `client/src/main/resources/l10n/<lang>/AGolf.xml` if you
+  want them translated, then re-run `npm run assets`. Falls through
+  active-locale → EN → inline `defaultEn` so missing keys still render.
 - **Track-test mode (`logintype ttm`).** Not implemented.
 - **DUAL lobby.** UI button is disabled; the protocol/server handlers
   technically support `select 2` but no `LobbyDualplayerHandler` is wired.
@@ -63,8 +65,15 @@ Things we deferred for MVP that the original Java game has:
   through 4 aim modes (solid + 3 dashed-line rotations). We only have mode 0.
 - **Rating tracks.** Server stub exists (`game rate <track> <rating>`) but
   no UI; ratings aren't persisted (FileSystemStatsManager is read-only).
-- **Reconnect after network blip.** `c crt 250` advertises a 250-second
-  reconnect window but we don't implement reconnect flow.
+- **Mid-game reconnect.** Lobby/lobbyselect reconnect-after-blip is now
+  implemented (see PROTOCOL.md "Reconnect after network blip"), but a
+  mid-game disconnect still falls through to immediate cleanup. Honoring
+  grace mid-stroke is non-trivial: peers are waiting on this player's
+  `endstroke` to advance the game, so the grace window has to either
+  auto-forfeit the in-flight stroke or model "disconnected but
+  reserved" with a separate stroke-timeout. Files: `port/server/src/
+  server.ts` (`handleDisconnect` early-returns to `fullyRemovePlayer`
+  when `player.game !== null`).
 - **Daily mode: resting-ghost sync for late joiners.** When a player joins the
   daily room mid-play, they see existing players' balls at the spawn position
   rather than wherever those balls have actually come to rest. The next stroke

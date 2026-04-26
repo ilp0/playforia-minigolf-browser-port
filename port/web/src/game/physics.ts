@@ -296,6 +296,31 @@ function handleMovableBlock(
   return true;
 }
 
+/**
+ * Decay one step of a breakable brick (40..43) at tile (tx, ty). Mirrors Java
+ * `GameCanvas.handleBreakableBlock`: each hit bumps the shape one notch
+ * (40 → 41 → 42 → 43); a fourth hit replaces the tile with bare floor carrying
+ * the original background colour. The mutation flows through `mutateTile`, so
+ * the renderer's dirty-tile drain picks it up next frame.
+ */
+function handleBreakableBlock(map: ParsedMap, tx: number, ty: number): void {
+  if (tx < 0 || tx >= TILE_WIDTH || ty < 0 || ty >= TILE_HEIGHT) return;
+  const code = map.tiles[tx][ty];
+  const special = (code >>> 24) & 0xff;
+  const shape = (code >>> 16) & 0xff; // shapeReduced; brick range is 16..19
+  const bg = (code >>> 8) & 0xff;
+  const fg = code & 0xff;
+  if (special !== 2 || shape < 16 || shape > 19) return;
+  if (shape < 19) {
+    // Next decay step. 33554432 = (2 << 24).
+    mutateTile(map, tx, ty, 33554432 + (shape + 1) * 256 * 256 + bg * 256 + fg);
+  } else {
+    // Final hit on shape 43 → empty floor with original bg as both bg and fg.
+    // 16777216 = (1 << 24).
+    mutateTile(map, tx, ty, 16777216 + bg * 256 + bg);
+  }
+}
+
 function isWall(v: number): boolean {
   // 16..23 except 19, plus 27, 40..43, 46. Per handleWallCollision.
   if (v >= 16 && v <= 23 && v !== 19) return true;
@@ -383,6 +408,11 @@ function bounceCoeff(
       ctx.map, blockTx, blockTy, unitDx, unitDy, v === 27, ctx.otherPlayers,
     );
     return moved ? 0.325 : 0.8;
+  }
+  if (v >= 40 && v <= 43) {
+    const blockTx = Math.floor((ix + sampleDx) / PIXEL_PER_TILE);
+    const blockTy = Math.floor((iy + sampleDy) / PIXEL_PER_TILE);
+    handleBreakableBlock(ctx.map, blockTx, blockTy);
   }
   return getRestitution(v, ball);
 }

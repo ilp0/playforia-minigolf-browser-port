@@ -274,6 +274,53 @@ Client side:
   browser tab from being timed out (Chrome throttles JS in background tabs;
   the auto-pong might miss the deadline; the proactive ping has more slack).
 
+## Reconnect after network blip
+
+The connect-handshake `c crt 250` advertises a 250-second window during
+which a disconnected player can reattach by opening a fresh WebSocket and
+sending `c old <savedId>` instead of `c new`. Server-side, this is a
+faithful port of Java's `ReconnectHandler`.
+
+Sequence:
+```
+(network blip — client's WS dies, code 1006 / wasClean=false)
+
+(server) handleDisconnect: defers full cleanup by 250s if player.game === null;
+         player record stays in the lobby (peers' user lists unchanged).
+         Mid-game disconnects bypass grace and forfeit immediately —
+         peers are otherwise stuck waiting for endstroke.
+
+(client) opens fresh WS — server sends usual banner:
+         h 1
+         c crt 250
+         c ctr
+
+(client) sends      c old <savedId>
+(server) replies    c rcok        ← grace was active; new socket adopted
+              -- or c rcf         ← unknown id, grace expired, or mid-game
+```
+
+Both directions reset their DATA seq counter to 0 on `c rcok`. The
+implementation does NOT replay packets sent during the dead window —
+anything the server pushed while the WS was down is simply lost (e.g.
+peer chat). This matches what the original Java client effectively did
+(its retain-seq protocol tripped its own gap-detection on any peer
+broadcast during the gap).
+
+Client-side retry: 10 attempts, 3-second interval (~30s total budget).
+Capped well under the server's 250s window so we surface failure
+quickly when the network is genuinely down rather than thrashing.
+On exhaustion or `c rcf` the client emits `reconnect-failed` and shows
+"Reconnect failed — please refresh." in the error banner.
+
+The `c old`/`c rcok`/`c rcf` packets bypass DATA seq tracking (they're
+COMMAND packets) and are intercepted by `Connection.handleLine` while in
+reconnect mode — panels never see them. Files: `port/server/src/server.ts`
+(`handleReconnect`), `port/server/src/packet-handlers.ts` (`old` handler),
+`port/web/src/connection.ts` (reconnect mode + `c old <savedId>` driver),
+`port/web/src/app.ts` (`reconnecting`/`reconnected`/`reconnect-failed`
+banner).
+
 ## Quitting / leaving
 
 ```

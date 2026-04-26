@@ -187,7 +187,15 @@ are different from each other.
 - `panels/login.ts` — Username/language form. Sends version → language →
   logintype → nick → login. The `nick` packet is the port's extension to
   the original handshake — lets the user pick the name shown in scoreboards
-  and ghost labels.
+  and ghost labels. Picking a language pre-loads the corresponding
+  `AGolf.xml` via `i18n.setLanguage()` so subsequent panels mount with
+  the chosen locale already resolved.
+- `i18n.ts` — Browser-side analog of Java `com.aapeli.client.TextManager`.
+  Fetches `/l10n/<lang>/AGolf.xml`, parses with `DOMParser`, and resolves
+  keys via `t(key, defaultEn, ...args)` with `%1`/`%2` substitution. EN
+  is loaded eagerly on boot and stays as the fallback overlay when a
+  non-EN locale lacks a key; the `defaultEn` parameter is the final
+  fallback so panels stay readable even with missing assets.
 - `panels/lobbyselect.ts` — Three-column SP/DUAL/MULTI screen.
 - `panels/lobby.ts` — Single-player lobby. Track-type/numTracks/water/maxStrokes
   form. `lobby cspt` to start a TrainingGame.

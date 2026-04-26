@@ -22,10 +22,16 @@ export default defineConfig({
     allowedHosts: true,
     proxy: {
       "/ws": {
-        target: `ws://127.0.0.1:${WS_PORT}`,
+        target: process.env.WS_PROXY_TARGET ?? `ws://127.0.0.1:${WS_PORT}`,
         ws: true,
         changeOrigin: true,
         rewriteWsOrigin: true,
+      },
+      // Server-side replay store lives next to the WebSocket — proxy so dev
+      // mode reaches the same endpoints in-process.
+      "/api": {
+        target: `http://127.0.0.1:${WS_PORT}`,
+        changeOrigin: true,
       },
     },
   },

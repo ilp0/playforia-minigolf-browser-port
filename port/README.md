@@ -161,6 +161,14 @@ that the live cursor relay is wired through the right handler order.
   derived from the same array.
 - Anti-repeat ringbuffer in `TrackManager` (last 50 served names) so
   the same maps don't recur within a few games.
+- Localisation routing (Java `TextManager` analog at
+  `web/src/i18n.ts`). Loads `/l10n/<lang>/AGolf.xml` via fetch; UI
+  strings in every panel resolve through `t(key, defaultEn, ...args)`
+  with `%1`/`%2` substitution. Active locale falls back to EN, then to
+  the inline default; selection persists in `localStorage` (`pmg.lang`).
+  Switching language on the login screen pre-loads the chosen XML so the
+  next panel renders in the picked locale immediately. Strings without
+  a Java key live under the port-specific `Port_*` namespace.
 
 **Rendering**
 - 49×25 RLE map decoding, byte-for-byte match with Java `Map.parse()`
@@ -185,7 +193,6 @@ running list. Highlights:
   is reusable here).
 - Sound playback (.wav files bundled in `web/public/sound/shared/`
   but not yet hooked up to Web Audio).
-- Localisation routing (XML files bundled, not consumed).
 - Track-test mode (`logintype ttm`).
 - DUAL lobby (UI button disabled).
 - Aim modes (right-click rotation between solid + 3 dashed lines).
