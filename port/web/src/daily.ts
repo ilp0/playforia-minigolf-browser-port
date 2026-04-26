@@ -100,3 +100,106 @@ export function shareText(r: DailyResult): string {
     ];
     return lines.join("\n");
 }
+
+// ----- Replay sharing -------------------------------------------------------
+//
+// A daily run is fully reproducible from the broadcast `beginstroke` packets:
+// each carries `(ballCoords, mouseCoords, seed)` and the physics is
+// deterministic. We pack the run plus the track's RLE tile data ("T <map>"
+// line value) into the URL fragment, so the link is self-contained — playback
+// works on any future day with no server lookup of past tracks.
+//
+// Lossy in two known edge cases (acceptable for v1; bounded errors because the
+// next stroke's recorded ballCoords re-snaps the ball):
+//
+// 1. `PhysicsContext.otherPlayers` — peers' resting positions feed the
+//    movable-block obstruction check. Daily-room strokes from concurrent
+//    players are NOT recorded here, so movable blocks during playback move as
+//    if the player were alone. If a daily track ever combines movable blocks
+//    with high-traffic ghost positions, divergence is possible.
+// 2. `PhysicsContext.startX/Y` — used by water-event=0 ("respawn at stroke
+//    start"). Replay sets these to the recorded ball position, which is the
+//    same value the live game uses, so this is only lossy if the original
+//    server had `waterEvent !== 0` (unlikely; daily uses default 0).
+//
+// Capturing peer positions and the per-slot spawn into the tuple would close
+// both gaps; defer until they're observed to matter.
+
+export interface DailyReplay {
+    /** Format version. Bump on breaking changes. */
+    v: 1;
+    /** UTC date key the run was played on (informational; YYYY-MM-DD). */
+    d: string;
+    /** Track display name and author (for the playback HUD). */
+    n: string;
+    a: string;
+    /** Track average for the playback share-screen, if known. */
+    avg?: number;
+    /**
+     * Raw value of the `T <map>` line from the original `starttrack` payload.
+     * Fed straight into `buildMap()` during playback. The full 32-bit per-stroke
+     * seed (broadcast by the server) embeds the original gameId, so playback
+     * doesn't need to mirror server seat assignment — we drop the ball at each
+     * stroke's recorded ballCoords and the seed alone reproduces the trajectory.
+     */
+    t: string;
+    /** Strokes in order. Tuple = [ballCoords, mouseCoords, seed]. */
+    s: Array<[string, string, number]>;
+    /** True if the player holed in; false if forfeited. */
+    holed: boolean;
+}
+
+function toBase64Url(bytes: Uint8Array): string {
+    let bin = "";
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function fromBase64Url(s: string): Uint8Array | null {
+    try {
+        const padded = s.replace(/-/g, "+").replace(/_/g, "/")
+            + "=".repeat((4 - (s.length % 4)) % 4);
+        const bin = atob(padded);
+        const out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        return out;
+    } catch {
+        return null;
+    }
+}
+
+export function encodeReplay(r: DailyReplay): string {
+    const json = JSON.stringify(r);
+    const bytes = new TextEncoder().encode(json);
+    return toBase64Url(bytes);
+}
+
+export function decodeReplay(s: string): DailyReplay | null {
+    const bytes = fromBase64Url(s);
+    if (!bytes) return null;
+    try {
+        const parsed = JSON.parse(new TextDecoder().decode(bytes)) as DailyReplay;
+        if (parsed?.v !== 1) return null;
+        if (typeof parsed.t !== "string" || !Array.isArray(parsed.s)) return null;
+        return parsed;
+    } catch {
+        return null;
+    }
+}
+
+/** Build a shareable URL with the replay payload in the fragment. */
+export function replayLink(r: DailyReplay): string {
+    const enc = encodeReplay(r);
+    const base = window.location.origin + window.location.pathname;
+    return `${base}#replay=${enc}`;
+}
+
+/** Pull and parse a replay from the current `window.location.hash`, if any. */
+export function readReplayFromHash(): DailyReplay | null {
+    const h = window.location.hash;
+    if (!h.startsWith("#")) return null;
+    const params = new URLSearchParams(h.slice(1));
+    const raw = params.get("replay");
+    if (!raw) return null;
+    return decodeReplay(raw);
+}
