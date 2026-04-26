@@ -27,6 +27,7 @@ import {
 } from "../game/physics.ts";
 import type { DailyReplay } from "../daily.ts";
 import type { Panel } from "../panel.ts";
+import { t } from "../i18n.ts";
 
 const DEV = Boolean(import.meta.env?.DEV);
 
@@ -77,11 +78,11 @@ export class ReplayPanel implements Panel {
     header.className = "replay-header";
     const title = document.createElement("div");
     title.className = "replay-title";
-    title.textContent = `Daily Cup Replay — ${this.replay.d}`;
+    title.textContent = t("Port_Replay_Title", "Daily Cup Replay — %1", this.replay.d);
     const meta = document.createElement("div");
     meta.className = "replay-meta";
-    const tn = this.replay.n || "(unknown track)";
-    const ta = this.replay.a ? ` by ${this.replay.a}` : "";
+    const tn = this.replay.n || t("Port_Replay_UnknownTrack", "(unknown track)");
+    const ta = this.replay.a ? " " + t("Port_Game_AuthorByFmt", "by %1", this.replay.a) : "";
     meta.textContent = `${tn}${ta}`;
     header.appendChild(title);
     header.appendChild(meta);
@@ -100,21 +101,21 @@ export class ReplayPanel implements Panel {
     this.playBtn = document.createElement("button");
     this.playBtn.type = "button";
     this.playBtn.className = "btn-green";
-    this.playBtn.textContent = "Play";
+    this.playBtn.textContent = t("Port_Replay_Play", "Play");
     this.playBtn.addEventListener("click", () => this.togglePlay());
     controls.appendChild(this.playBtn);
 
     const restartBtn = document.createElement("button");
     restartBtn.type = "button";
     restartBtn.className = "btn-blue";
-    restartBtn.textContent = "Restart";
+    restartBtn.textContent = t("Port_Replay_Restart", "Restart");
     restartBtn.addEventListener("click", () => this.restart());
     controls.appendChild(restartBtn);
 
     const exitBtn = document.createElement("button");
     exitBtn.type = "button";
     exitBtn.className = "btn-blue";
-    exitBtn.textContent = "Exit replay";
+    exitBtn.textContent = t("Port_Replay_Exit", "Exit replay");
     exitBtn.addEventListener("click", () => {
       // Clearing the hash & reloading drops us back into the regular app boot.
       window.location.hash = "";
@@ -130,7 +131,7 @@ export class ReplayPanel implements Panel {
 
     this.statusEl = document.createElement("div");
     this.statusEl.className = "replay-status";
-    this.statusEl.textContent = "Loading sprites…";
+    this.statusEl.textContent = t("Port_Game_LoadingSprites", "Loading sprites…");
     wrap.appendChild(this.statusEl);
 
     this.boot();
@@ -160,13 +161,19 @@ export class ReplayPanel implements Panel {
       this.placeAtFirstStrokeOrigin();
       this.updateStrokeLabel();
       this.setStatus(this.replay.s.length > 0
-        ? `Press Play to watch ${this.replay.s.length} stroke${this.replay.s.length === 1 ? "" : "s"}.`
-        : "No strokes recorded — this run was forfeited before shooting.");
+        ? t(
+            this.replay.s.length === 1 ? "Port_Replay_PressPlay1" : "Port_Replay_PressPlayN",
+            this.replay.s.length === 1
+              ? "Press Play to watch %1 stroke."
+              : "Press Play to watch %1 strokes.",
+            this.replay.s.length,
+          )
+        : t("Port_Replay_NoStrokes", "No strokes recorded — this run was forfeited before shooting."));
       this.draw();
       this.startLoop();
     } catch (err) {
       if (DEV) console.warn("[replay] boot failed", err);
-      this.setStatus("Replay failed to load: " + String(err));
+      this.setStatus(t("Port_Replay_LoadFailed", "Replay failed to load: %1", String(err)));
     }
   }
 
@@ -190,7 +197,11 @@ export class ReplayPanel implements Panel {
       return;
     }
     this.paused = !this.paused;
-    if (this.playBtn) this.playBtn.textContent = this.paused ? "Play" : "Pause";
+    if (this.playBtn) {
+      this.playBtn.textContent = this.paused
+        ? t("Port_Replay_Play", "Play")
+        : t("Port_Replay_Pause", "Pause");
+    }
     if (!this.paused && !this.simulating) {
       this.armNextStroke();
     }
@@ -201,12 +212,18 @@ export class ReplayPanel implements Panel {
     this.simulating = false;
     this.finished = false;
     this.paused = true;
-    if (this.playBtn) this.playBtn.textContent = "Play";
+    if (this.playBtn) this.playBtn.textContent = t("Port_Replay_Play", "Play");
     this.placeAtFirstStrokeOrigin();
     this.updateStrokeLabel();
     this.setStatus(this.replay.s.length > 0
-      ? `Press Play to watch ${this.replay.s.length} stroke${this.replay.s.length === 1 ? "" : "s"}.`
-      : "No strokes recorded.");
+      ? t(
+          this.replay.s.length === 1 ? "Port_Replay_PressPlay1" : "Port_Replay_PressPlayN",
+          this.replay.s.length === 1
+            ? "Press Play to watch %1 stroke."
+            : "Press Play to watch %1 strokes.",
+          this.replay.s.length,
+        )
+      : t("Port_Replay_NoStrokesShort", "No strokes recorded."));
     this.draw();
   }
 
@@ -252,10 +269,15 @@ export class ReplayPanel implements Panel {
     this.finished = true;
     this.paused = true;
     this.simulating = false;
-    if (this.playBtn) this.playBtn.textContent = "Restart";
-    const verb = this.replay.holed ? "Holed in" : "Forfeited at";
+    if (this.playBtn) this.playBtn.textContent = t("Port_Replay_Restart", "Restart");
     const n = this.replay.s.length;
-    this.setStatus(`${verb} ${n} stroke${n === 1 ? "" : "s"}.`);
+    const key = this.replay.holed
+      ? (n === 1 ? "Port_Replay_HoledIn1" : "Port_Replay_HoledInN")
+      : (n === 1 ? "Port_Replay_Forfeited1" : "Port_Replay_ForfeitedN");
+    const fallback = this.replay.holed
+      ? (n === 1 ? "Holed in %1 stroke." : "Holed in %1 strokes.")
+      : (n === 1 ? "Forfeited at %1 stroke." : "Forfeited at %1 strokes.");
+    this.setStatus(t(key, fallback, n));
   }
 
   // ----- physics tick ---------------------------------------------------
@@ -323,6 +345,6 @@ export class ReplayPanel implements Panel {
     // strokeIdx is incremented when a stroke is armed, so it doubles as the
     // 1-based count of strokes already started.
     const cur = Math.min(this.strokeIdx, total);
-    this.strokeEl.textContent = total > 0 ? `Stroke ${cur} / ${total}` : "";
+    this.strokeEl.textContent = total > 0 ? t("Port_Replay_StrokeNOfM", "Stroke %1 / %2", cur, total) : "";
   }
 }

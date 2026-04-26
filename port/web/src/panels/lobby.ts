@@ -1,6 +1,7 @@
 import { PacketType, type Packet } from "@minigolf/shared";
 import type { App } from "../app.ts";
 import type { Panel } from "../panel.ts";
+import { t } from "../i18n.ts";
 
 /**
  * Single-player lobby — visual port of agolf.lobby.LobbySinglePlayerPanel.
@@ -19,15 +20,20 @@ export class LobbyPanel implements Panel {
   private listeners: Array<() => void> = [];
   private tagCounts: number[] | null = null;
 
-  private static readonly TRACK_TYPE_NAMES: Array<[string, string]> = [
-    ["0", "Mixed"],
-    ["1", "Basic"],
-    ["2", "Traditional"],
-    ["3", "Modern"],
-    ["4", "Hole-in-one"],
-    ["5", "Short"],
-    ["6", "Long"],
-  ];
+  /** Indexed by trackType id (0 = mixed, 1..6 = categories). Mirrors
+   *  Java `LobbyReal_TrackTypes<n>` keys. Resolved fresh each call so a
+   *  language change after panel construction picks up the new strings. */
+  private trackTypeNames(): Array<[string, string]> {
+    return [
+      ["0", t("LobbyReal_TrackTypes0", "All kind")],
+      ["1", t("LobbyReal_TrackTypes1", "Basic")],
+      ["2", t("LobbyReal_TrackTypes2", "Traditional")],
+      ["3", t("LobbyReal_TrackTypes3", "Modern")],
+      ["4", t("LobbyReal_TrackTypes4", "Hole-in-one")],
+      ["5", t("LobbyReal_TrackTypes5", "Short")],
+      ["6", t("LobbyReal_TrackTypes6", "Long")],
+    ];
+  }
 
   constructor(app: App) {
     this.app = app;
@@ -39,14 +45,14 @@ export class LobbyPanel implements Panel {
 
     const nameplate = document.createElement("div");
     nameplate.className = "nameplate";
-    nameplate.textContent = "Single player";
+    nameplate.textContent = t("LobbySelect_SinglePlayer", "Single player");
     wrap.appendChild(nameplate);
 
     const controls = document.createElement("div");
     controls.className = "controls";
 
     // Track type — populated lazily once `lobby tagcounts` arrives.
-    const typeGroup = this.makeGroup("Track type");
+    const typeGroup = this.makeGroup(t("LobbyReal_TrackTypes", "Track types:").replace(/:$/, ""));
     const trackType = document.createElement("select");
     typeGroup.appendChild(trackType);
     controls.appendChild(typeGroup);
@@ -55,7 +61,7 @@ export class LobbyPanel implements Panel {
     trackType.value = "2"; // Traditional default
 
     // Number of tracks
-    const numGroup = this.makeGroup("Tracks");
+    const numGroup = this.makeGroup(t("LobbyReal_ListTitleTracks", "Tracks"));
     const num = document.createElement("select");
     for (const n of [1, 3, 5, 9, 18]) {
       const opt = document.createElement("option");
@@ -69,11 +75,11 @@ export class LobbyPanel implements Panel {
     this.numTracksSel = num;
 
     // Water-event
-    const waterGroup = this.makeGroup("Water");
+    const waterGroup = this.makeGroup(t("LobbyReal_WaterEvent", "When ball goes to water:").replace(/:$/, ""));
     const water = document.createElement("select");
     for (const [v, label] of [
-      ["0", "Back to last hit"],
-      ["1", "Back to shore"],
+      ["0", t("LobbyReal_WaterEvent1", "Back to start")],
+      ["1", t("LobbyReal_WaterEvent2", "Stay on shore")],
     ] as const) {
       const opt = document.createElement("option");
       opt.value = v;
@@ -89,7 +95,7 @@ export class LobbyPanel implements Panel {
     const startBtn = document.createElement("button");
     startBtn.type = "button";
     startBtn.className = "btn-green";
-    startBtn.textContent = "Start training";
+    startBtn.textContent = t("LobbyReal_Start", "Start");
     const startHandler = (): void => this.startTraining();
     startBtn.addEventListener("click", startHandler);
     this.listeners.push(() => startBtn.removeEventListener("click", startHandler));
@@ -98,7 +104,7 @@ export class LobbyPanel implements Panel {
     const backBtn = document.createElement("button");
     backBtn.type = "button";
     backBtn.className = "btn-red";
-    backBtn.textContent = "Back";
+    backBtn.textContent = t("LobbyControl_Main", "« Back");
     const backHandler = (): void => {
       // `lobbyselect leave` removes us from this lobby on the server and the
       // server replies with `status lobbyselect 300`, which routes us back.
@@ -155,7 +161,7 @@ export class LobbyPanel implements Panel {
     if (!sel) return;
     const prev = sel.value || "2";
     while (sel.firstChild) sel.removeChild(sel.firstChild);
-    for (const [id, name] of LobbyPanel.TRACK_TYPE_NAMES) {
+    for (const [id, name] of this.trackTypeNames()) {
       const opt = document.createElement("option");
       opt.value = id;
       const n = this.tagCounts ? this.tagCounts[parseInt(id, 10)] : undefined;

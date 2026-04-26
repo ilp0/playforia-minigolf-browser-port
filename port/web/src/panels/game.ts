@@ -23,6 +23,7 @@ import {
   type DailyReplay,
   type DailyResult,
 } from "../daily.ts";
+import { t } from "../i18n.ts";
 import { audio } from "../audio.ts";
 
 const DEV = Boolean(import.meta.env?.DEV);
@@ -278,18 +279,18 @@ export class GamePanel implements Panel {
     center.className = "center";
     const statusEl = document.createElement("div");
     statusEl.className = "hud-status";
-    statusEl.textContent = "Loading sprites…";
+    statusEl.textContent = t("Port_Game_LoadingSprites", "Loading sprites…");
     const strokeCountEl = document.createElement("div");
     strokeCountEl.style.fontSize = "13px";
     strokeCountEl.style.fontWeight = "bold";
-    strokeCountEl.textContent = "Stroke 0";
+    strokeCountEl.textContent = t("Port_Game_StrokeFmt", "Stroke %1", 0);
     center.appendChild(strokeCountEl);
     center.appendChild(statusEl);
 
     const forfeit = document.createElement("button");
     forfeit.type = "button";
     forfeit.className = "btn-yellow";
-    forfeit.textContent = "Forfeit hole";
+    forfeit.textContent = t("Port_Game_ForfeitHole", "Forfeit hole");
     forfeit.style.marginTop = "4px";
     forfeit.style.padding = "1px 10px";
     forfeit.style.minHeight = "auto";
@@ -398,7 +399,7 @@ export class GamePanel implements Panel {
 
     void loadAtlases().then((atl) => {
       this.atlases = atl;
-      this.setStatus("Waiting for track…");
+      this.setStatus(t("Port_Game_WaitingForTrack", "Waiting for track…"));
       if (this.pendingStartTrack) {
         const f = this.pendingStartTrack;
         this.pendingStartTrack = null;
@@ -406,7 +407,7 @@ export class GamePanel implements Panel {
       }
     }).catch((err) => {
       if (DEV) console.warn("[game] atlases failed", err);
-      this.setStatus("Sprite load failed: " + String(err));
+      this.setStatus(t("Port_Game_SpriteLoadFailed", "Sprite load failed: %1", String(err)));
     });
 
     this.startLoop();
@@ -496,7 +497,7 @@ export class GamePanel implements Panel {
           this.ensurePlayerSlots(id + 1);
           this.players[id].nick = f[3] ?? "";
           this.players[id].clan = f[4] ?? "";
-          this.appendChat(`* ${this.players[id].nick} joined the game`, "system");
+          this.appendChat("* " + t("Chat_Game_PlayerJoined", "%1 joined the game", this.players[id].nick), "system");
           this.scoreboardDirty = true;
         }
         break;
@@ -504,7 +505,7 @@ export class GamePanel implements Panel {
         {
           const id = parseInt(f[2] ?? "0", 10) || 0;
           if (this.players[id]) {
-            this.appendChat(`* ${this.players[id].nick} left`, "system");
+            this.appendChat("* " + t("Chat_Game_PlayerLeft", "Player %1 left the game", this.players[id].nick), "system");
             this.players[id].active = false;
           }
           this.scoreboardDirty = true;
@@ -551,11 +552,11 @@ export class GamePanel implements Panel {
         {
           const id = parseInt(f[2] ?? "0", 10) || 0;
           const nick = this.players[id]?.nick ?? "?";
-          this.appendChat(`<${nick}> ${f[3] ?? ""}`, "say");
+          this.appendChat(t("Chat_UserSay", "<%1> %2", nick, f[3] ?? ""), "say");
         }
         break;
       case "sayp":
-        this.appendChat(`[whisper from ${f[2] ?? "?"}] ${f[3] ?? ""}`, "whisper");
+        this.appendChat(t("Port_Chat_WhisperFromFmt", "[whisper from %1] %2", f[2] ?? "?", f[3] ?? ""), "whisper");
         break;
       case "end":
         this.showEndOverlay(f);
@@ -586,7 +587,7 @@ export class GamePanel implements Panel {
     this.gameId = f[3] ?? "0";
     const tLine = extractField(f, "T ");
     if (!tLine) {
-      this.setStatus("Could not load track (no T-line).");
+      this.setStatus(t("Port_Game_NoTLine", "Could not load track (no T-line)."));
       return;
     }
     try {
@@ -650,7 +651,7 @@ export class GamePanel implements Panel {
       this.dailyReplayStrokes = [];
       this.dailyResultRecorded = false;
 
-      this.setStatus("Click to shoot when you're ready.");
+      this.setStatus(t("Port_Game_ClickToShoot", "Click to shoot when you're ready."));
       this.removeOverlay();
       this.scoreboardDirty = true;
       // Replay any beginstrokes that arrived too early.
@@ -659,7 +660,7 @@ export class GamePanel implements Panel {
       for (const q of queued) this.handleBeginStroke(q);
     } catch (err) {
       if (DEV) console.warn("[game] track build failed", err);
-      this.setStatus("Track parse error: " + String(err));
+      this.setStatus(t("Port_Game_TrackParseError", "Track parse error: %1", String(err)));
     }
   }
 
@@ -877,7 +878,7 @@ export class GamePanel implements Panel {
   private updateStrokeCount(): void {
     const slot = this.players[this.myPlayerId];
     if (this.strokeCountEl) {
-      this.strokeCountEl.textContent = `Stroke ${slot?.strokesThisTrack ?? 0}`;
+      this.strokeCountEl.textContent = t("Port_Game_StrokeFmt", "Stroke %1", slot?.strokesThisTrack ?? 0);
     }
   }
 
@@ -888,7 +889,12 @@ export class GamePanel implements Panel {
     bestPlayer: string,
   ): void {
     if (this.trackProgressEl) {
-      this.trackProgressEl.textContent = `Track ${this.currentTrackIdx}/${this.numTracks}`;
+      this.trackProgressEl.textContent = t(
+        "GameTrackInfo_CurrentTrack",
+        "Track %1/%2",
+        this.currentTrackIdx,
+        this.numTracks,
+      );
     }
     // Stash for the daily-share text; both fields are blank until the first
     // starttrack arrives.
@@ -896,12 +902,12 @@ export class GamePanel implements Panel {
     this.trackAverage = info && info.plays > 0 ? info.totalStrokes / info.plays : 0;
     if (this.trackTitleEl) this.trackTitleEl.textContent = name;
     if (this.trackAuthorEl) {
-      this.trackAuthorEl.textContent = author ? `by ${author}` : "";
+      this.trackAuthorEl.textContent = author ? t("Port_Game_AuthorByFmt", "by %1", author) : "";
     }
     if (this.avgParEl) {
       if (info && info.plays > 0) {
         const avg = info.totalStrokes / info.plays;
-        this.avgParEl.textContent = `Average: ${avg.toFixed(1)} strokes`;
+        this.avgParEl.textContent = t("GameTrackInfo_AverageResultL", "Average of all players: %1 strokes", avg.toFixed(1));
       } else {
         this.avgParEl.textContent = "";
       }
@@ -909,9 +915,12 @@ export class GamePanel implements Panel {
     if (this.bestParEl) {
       if (info && info.plays > 0 && info.bestPar > 0) {
         const pct = (info.numBestPar / info.plays) * 100;
-        const who = bestPlayer ? ` by ${bestPlayer}` : "";
-        this.bestParEl.textContent =
-          `Best: ${info.bestPar} stroke${info.bestPar === 1 ? "" : "s"} (${pct.toFixed(1)}%)${who}`;
+        // Stitch the L-form "Best: %1 strokes" with the optional "by <player>"
+        // tail; mirrors how Java assembles the line at runtime.
+        const head = t("GameTrackInfo_BestResultL", "Best: %1 strokes", info.bestPar);
+        const pctSuffix = t("GameTrackInfo_BestResultPercentL", "(%1% of players)", pct.toFixed(1));
+        const who = bestPlayer ? " " + t("Port_Game_BestByFmt", "by %1", bestPlayer) : "";
+        this.bestParEl.textContent = `${head} ${pctSuffix}${who}`;
       } else {
         this.bestParEl.textContent = "";
       }
@@ -933,7 +942,7 @@ export class GamePanel implements Panel {
       const num = document.createElement("span");
       num.textContent = `${i + 1}.`;
       const name = document.createElement("span");
-      name.textContent = p.nick || `Player ${i + 1}`;
+      name.textContent = p.nick || t("Port_Game_PlayerFmt", "Player %1", i + 1);
       const tracksCol = document.createElement("span");
       const cells: string[] = [];
       let totalSoFar = 0;
@@ -953,9 +962,9 @@ export class GamePanel implements Panel {
       const total = document.createElement("span");
       total.textContent = "= " + totalSoFar;
       const note = document.createElement("span");
-      if (p.holedThisTrack) note.textContent = "in hole";
-      else if (p.forfeitedThisTrack) note.textContent = "forfeited";
-      else if (p.simulating) note.textContent = "shooting";
+      if (p.holedThisTrack) note.textContent = t("Port_Game_StatusInHole", "in hole");
+      else if (p.forfeitedThisTrack) note.textContent = t("Port_Game_StatusForfeited", "forfeited");
+      else if (p.simulating) note.textContent = t("Port_Game_StatusShooting", "shooting");
       row.appendChild(num);
       row.appendChild(name);
       row.appendChild(tracksCol);
@@ -1007,7 +1016,7 @@ export class GamePanel implements Panel {
     const input = document.createElement("input");
     input.type = "text";
     input.maxLength = 200;
-    input.placeholder = "Chat (Enter to send)";
+    input.placeholder = t("Port_Chat_GameInputHelp", "Chat (Enter to send)");
     input.style.flex = "1";
     input.style.fontSize = "11px";
     form.appendChild(input);
@@ -1015,7 +1024,7 @@ export class GamePanel implements Panel {
 
     const send = document.createElement("button");
     send.type = "submit";
-    send.textContent = "Send";
+    send.textContent = t("Port_Chat_Send", "Send");
     send.style.padding = "1px 8px";
     send.style.minHeight = "auto";
     send.style.fontSize = "11px";
@@ -1038,7 +1047,7 @@ export class GamePanel implements Panel {
     if (!text) return;
     input.value = "";
     this.app.connection.sendData("game", "say", text);
-    this.appendChat(`<${this.myNick}> ${text}`, "say-self");
+    this.appendChat(t("Chat_UserSay", "<%1> %2", this.myNick, text), "say-self");
   }
 
   private appendChat(line: string, kind: "say" | "say-self" | "whisper" | "system"): void {
@@ -1157,7 +1166,7 @@ export class GamePanel implements Panel {
     ov.className = "game-end-overlay";
 
     const title = document.createElement("div");
-    title.textContent = "Game over";
+    title.textContent = t("GameFin_W_GameOver", "Game over!");
     ov.appendChild(title);
 
     if (f.length > 2) {
@@ -1168,8 +1177,11 @@ export class GamePanel implements Panel {
       lines.style.textAlign = "center";
       for (let i = 0; i < this.numPlayers; i++) {
         const result = parseInt(f[2 + i] ?? "0", 10);
-        const nick = this.players[i]?.nick ?? `Player ${i + 1}`;
-        const word = result === 1 ? "Winner" : result === 0 ? "Draw" : "—";
+        const nick = this.players[i]?.nick ?? t("Port_Game_PlayerFmt", "Player %1", i + 1);
+        const word =
+          result === 1 ? t("GamePlayerInfo_Winner", "Winner!").replace(/!$/, "") :
+          result === 0 ? t("GamePlayerInfo_Draw", "Draw") :
+          "—";
         const row = document.createElement("div");
         row.textContent = `${nick}: ${word}`;
         lines.appendChild(row);
@@ -1186,7 +1198,7 @@ export class GamePanel implements Panel {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "btn-green";
-    btn.textContent = "Back to lobby";
+    btn.textContent = t("GameControl_Back", "« To menu");
     btn.addEventListener("click", () => {
       this.app.connection.sendData("game", "back");
     });
@@ -1227,7 +1239,7 @@ export class GamePanel implements Panel {
     ov.className = "game-end-overlay";
 
     const title = document.createElement("div");
-    title.textContent = `Daily Cup — ${dateKey}`;
+    title.textContent = t("Port_Daily_OverlayTitle", "Daily Cup — %1", dateKey);
     ov.appendChild(title);
 
     const lines = document.createElement("div");
@@ -1239,29 +1251,36 @@ export class GamePanel implements Panel {
 
     const score = dailyScore(result.strokes, result.average, result.forfeited);
     const verdict = result.forfeited
-      ? "Forfeited"
+      ? t("Port_Daily_VerdictForfeited", "Forfeited")
       : result.average > 0 && result.strokes < result.average
-        ? "Below average — nice!"
+        ? t("Port_Daily_VerdictBelow", "Below average — nice!")
         : result.average > 0 && result.strokes === Math.round(result.average)
-          ? "Right on average."
+          ? t("Port_Daily_VerdictOn", "Right on average.")
           : result.average > 0
-            ? "Above average."
-            : "First play!";
+            ? t("Port_Daily_VerdictAbove", "Above average.")
+            : t("Port_Daily_VerdictFirst", "First play!");
 
     const row1 = document.createElement("div");
     row1.textContent = result.forfeited
-      ? `You forfeited "${result.trackName}".`
-      : `You finished "${result.trackName}" in ${result.strokes} stroke${result.strokes === 1 ? "" : "s"}.`;
+      ? t("Port_Daily_RowForfeited", "You forfeited \"%1\".", result.trackName)
+      : t(
+          result.strokes === 1 ? "Port_Daily_RowFinished1" : "Port_Daily_RowFinishedN",
+          result.strokes === 1
+            ? "You finished \"%1\" in %2 stroke."
+            : "You finished \"%1\" in %2 strokes.",
+          result.trackName,
+          result.strokes,
+        );
     lines.appendChild(row1);
     if (result.average > 0) {
       const row2 = document.createElement("div");
-      row2.textContent = `Track average: ${result.average.toFixed(1)} strokes`;
+      row2.textContent = t("Port_Daily_RowAverage", "Track average: %1 strokes", result.average.toFixed(1));
       lines.appendChild(row2);
     }
     const row3 = document.createElement("div");
     row3.style.fontWeight = "bold";
     row3.style.marginTop = "4px";
-    row3.textContent = `Score: ${score}  —  ${verdict}`;
+    row3.textContent = t("Port_Daily_RowScore", "Score: %1  —  %2", score, verdict);
     lines.appendChild(row3);
     ov.appendChild(lines);
 
@@ -1273,11 +1292,13 @@ export class GamePanel implements Panel {
     const copyBtn = document.createElement("button");
     copyBtn.type = "button";
     copyBtn.className = "btn-green";
-    copyBtn.textContent = "Copy share text";
+    copyBtn.textContent = t("Port_Daily_CopyShareText", "Copy share text");
     copyBtn.addEventListener("click", () => {
       const text = shareText(result);
       void copyToClipboard(text).then((ok) => {
-        copyBtn.textContent = ok ? "Copied!" : "Copy failed — select & copy manually";
+        copyBtn.textContent = ok
+          ? t("Port_Daily_Copied", "Copied!")
+          : t("Port_Daily_CopyFailed", "Copy failed — select & copy manually");
         if (!ok) {
           // Fallback: drop the text into a visible textarea so the user can
           // hand-copy when the Clipboard API is gated (older browsers / iframes).
@@ -1291,7 +1312,9 @@ export class GamePanel implements Panel {
           ov.appendChild(ta);
           ta.select();
         }
-        window.setTimeout(() => { copyBtn.textContent = "Copy share text"; }, 2000);
+        window.setTimeout(() => {
+          copyBtn.textContent = t("Port_Daily_CopyShareText", "Copy share text");
+        }, 2000);
       });
     });
     btnRow.appendChild(copyBtn);
@@ -1313,7 +1336,7 @@ export class GamePanel implements Panel {
       const linkBtn = document.createElement("button");
       linkBtn.type = "button";
       linkBtn.className = "btn-blue";
-      linkBtn.textContent = "Copy replay link";
+      linkBtn.textContent = t("Port_Daily_CopyReplayLink", "Copy replay link");
       // Click handler:
       //   1. POST the recording to /api/replay → get a short id, copy `?r=<id>`.
       //   2. If the network or server rejects (offline, 5xx, etc.), fall back
@@ -1331,7 +1354,7 @@ export class GamePanel implements Panel {
           }
           const ok = await copyToClipboard(url);
           linkBtn.disabled = false;
-          linkBtn.textContent = ok ? "Link copied!" : "Copy failed";
+          linkBtn.textContent = ok ? t("Port_Daily_LinkCopied", "Link copied!") : t("Port_Daily_CopyFailedShort", "Copy failed");
           if (!ok) {
             const ta = document.createElement("textarea");
             ta.value = url;
@@ -1343,7 +1366,7 @@ export class GamePanel implements Panel {
             ov.appendChild(ta);
             ta.select();
           }
-          window.setTimeout(() => { linkBtn.textContent = "Copy replay link"; }, 2000);
+          window.setTimeout(() => { linkBtn.textContent = t("Port_Daily_CopyReplayLink", "Copy replay link"); }, 2000);
         })();
       });
       btnRow.appendChild(linkBtn);
@@ -1352,7 +1375,7 @@ export class GamePanel implements Panel {
     const backBtn = document.createElement("button");
     backBtn.type = "button";
     backBtn.className = "btn-blue";
-    backBtn.textContent = "Back to menu";
+    backBtn.textContent = t("GameControl_Back", "« To menu");
     backBtn.addEventListener("click", () => {
       this.app.connection.sendData("game", "back");
     });
@@ -1362,7 +1385,7 @@ export class GamePanel implements Panel {
 
     // Hint that other players keep playing even after you exit.
     const hint = document.createElement("div");
-    hint.textContent = "Other players are still on the same track.";
+    hint.textContent = t("Port_Daily_HintOthersStillPlaying", "Other players are still on the same track.");
     hint.style.fontSize = "11px";
     hint.style.color = "#666";
     hint.style.marginTop = "4px";
@@ -1390,7 +1413,7 @@ export class GamePanel implements Panel {
     const me = this.players[this.myPlayerId];
     if (!me) return;
     if (me.holedThisTrack || me.forfeitedThisTrack) return;
-    if (!window.confirm("Forfeit this hole? You'll be capped at the stroke limit.")) return;
+    if (!window.confirm(t("Port_Game_ForfeitConfirm", "Forfeit this hole? You'll be capped at the stroke limit."))) return;
     this.app.connection.sendData("game", "forfeit");
   }
 

@@ -45,8 +45,15 @@ Things we deferred for MVP that the original Java game has:
   `port/web/public/sound/shared/` but the client never plays them. Need
   Web Audio integration: `gamemove` on stroke, `winner`/`loser` on game end,
   `notify` on chat, etc.
-- **Localisation.** `AGolf.xml` for en/fi/sv is bundled but the client uses
-  hard-coded English strings. Wire up a `TextManager` analog if needed.
+- **Localisation extension.** Core wiring exists (`web/src/i18n.ts` —
+  Java `TextManager` analog) and en/fi/sv `AGolf.xml` are loaded via
+  `fetch` from `/l10n/<lang>/AGolf.xml`. Visible strings in the login,
+  lobby-select, single/multi lobby, in-game and replay panels resolve
+  through `t(key, defaultEn, ...args)`. New port-specific strings live
+  under the `Port_*` namespace (not present in the original Java XMLs);
+  add them to `client/src/main/resources/l10n/<lang>/AGolf.xml` if you
+  want them translated, then re-run `npm run assets`. Falls through
+  active-locale → EN → inline `defaultEn` so missing keys still render.
 - **Track-test mode (`logintype ttm`).** Not implemented.
 - **DUAL lobby.** UI button is disabled; the protocol/server handlers
   technically support `select 2` but no `LobbyDualplayerHandler` is wired.

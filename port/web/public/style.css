@@ -208,12 +208,15 @@ button.btn-blue   { background: #9090e0; border-color: #9090e0; }
   top: 100px;
 }
 
-/* Three columns of buttons at the bottom of the bg image, mirroring
-   LobbySelectPanel.create() coordinates (height-150, height-95, etc). */
+/* Three columns of buttons at the bottom of the bg image. Anchored in pixels
+   to the bg image's 735px-wide thirds (0, 245, 490). #app has a 1px border
+   with box-sizing: border-box, so a percent-based layout would resolve
+   against 733px of content and slip the right two columns ~1px left of the
+   image's divider lines. Pixel anchors match the image grid exactly. */
 .panel-lobbyselect .col {
   position: absolute;
   bottom: 0;
-  width: 33.333%;
+  width: 245px;
   height: 165px;
   display: flex;
   flex-direction: column;
@@ -222,9 +225,9 @@ button.btn-blue   { background: #9090e0; border-color: #9090e0; }
   padding-top: 14px;
 }
 
-.panel-lobbyselect .col.col-1 { left: 0%; }
-.panel-lobbyselect .col.col-2 { left: 33.333%; }
-.panel-lobbyselect .col.col-3 { left: 66.666%; }
+.panel-lobbyselect .col.col-1 { left: 0; }
+.panel-lobbyselect .col.col-2 { left: 245px; }
+.panel-lobbyselect .col.col-3 { left: 490px; }
 
 .panel-lobbyselect .col button {
   width: 150px;
