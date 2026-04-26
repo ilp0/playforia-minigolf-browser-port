@@ -142,6 +142,72 @@ export class TrackRenderer {
     }
   }
 
+  /**
+   * Re-blit a single tile into the cached background canvas. Called after
+   * physics mutates the map (movable blocks, breakable bricks) — keeps the
+   * background image in sync with `parsedMap.tiles[][]` without rebuilding
+   * the entire 735×375 bitmap.
+   *
+   * Drained from `parsedMap.dirtyTiles` once per frame in the panel tick.
+   */
+  invalidateTile(tx: number, ty: number): void {
+    const ctx = this.bgCanvas.getContext("2d");
+    if (!ctx) return;
+    const code = this.parsedMap.tiles[tx][ty];
+    const img = ctx.createImageData(PIXEL_PER_TILE, PIXEL_PER_TILE);
+    // Default fill so empty / non-mask pixels start as the playable-area bg
+    // (white per Java default 0xFFFFFF) — matches buildBackground's empty
+    // fall-through.
+    for (let i = 0; i < img.data.length; i += 4) {
+      img.data[i] = 255;
+      img.data[i + 1] = 255;
+      img.data[i + 2] = 255;
+      img.data[i + 3] = 255;
+    }
+    // writeTile expects an ImageData sized to MAP_PIXEL_WIDTH * MAP_PIXEL_HEIGHT
+    // and writes at absolute coords. Build a tiny tile-only ImageData here
+    // and copy via a temp full-size one to reuse writeTile? Simpler: do the
+    // raster inline.
+    this.writeTileToImage(img, tx, ty, code);
+    ctx.putImageData(img, tx * PIXEL_PER_TILE, ty * PIXEL_PER_TILE);
+  }
+
+  /**
+   * Tile-local rasterizer mirroring `writeTile` but writing into a 15×15
+   * ImageData instead of an MAP_PIXEL_WIDTH × MAP_PIXEL_HEIGHT one. Kept
+   * in this class so any future changes to writeTile's substitution rules
+   * stay locally co-located.
+   */
+  private writeTileToImage(img: ImageData, _tx: number, _ty: number, code: number): void {
+    const u = unpackTile(code);
+    const special = u.isNoSpecial;
+    if (special === 0) return; // already filled white above
+    const shape = u.shape;
+    const bgIdx = u.fore;
+    const fgIdx = u.back;
+    const mask =
+      special === 1 ? this.atlases.shapeMasks[shape] : this.atlases.specialMasks[shape];
+    if (!mask) return;
+    const bgPixels = this.atlases.elementPixels[bgIdx];
+    const fgPixels =
+      special === 1
+        ? this.atlases.elementPixels[fgIdx]
+        : this.atlases.specialPixels[shape];
+    if (!bgPixels || !fgPixels) return;
+    for (let py = 0; py < PIXEL_PER_TILE; py++) {
+      for (let px = 0; px < PIXEL_PER_TILE; px++) {
+        const m = mask[py * PIXEL_PER_TILE + px];
+        const src = m === 1 ? bgPixels : fgPixels;
+        const si = (py * PIXEL_PER_TILE + px) * 4;
+        const oi = (py * PIXEL_PER_TILE + px) * 4;
+        img.data[oi] = src[si];
+        img.data[oi + 1] = src[si + 1];
+        img.data[oi + 2] = src[si + 2];
+        img.data[oi + 3] = 255;
+      }
+    }
+  }
+
   private buildBackground(): void {
     const ctx = this.bgCanvas.getContext("2d");
     if (!ctx) return;

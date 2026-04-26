@@ -8,8 +8,8 @@
 //   - Mines (28, 30): on contact, eject ball with random velocity.
 //   - Magnets (44 attract, 45 repel): apply field force from precomputed map.
 
-import { calculateFriction, type Seed } from "@minigolf/shared";
-import { colAt, MAGNET_W, type ParsedMap } from "./map.ts";
+import { calculateFriction, PIXEL_PER_TILE, TILE_WIDTH, TILE_HEIGHT, type Seed } from "@minigolf/shared";
+import { colAt, mutateTile, MAGNET_W, type ParsedMap } from "./map.ts";
 
 export interface BallState {
   x: number;
@@ -49,6 +49,18 @@ export interface PhysicsContext {
   /** Pixel coords of the active start position (chosen by gameId %). */
   startX: number;
   startY: number;
+  /**
+   * Snapshot of OTHER players' resting pixel positions at the moment this
+   * stroke's beginstroke broadcast was processed. Used by movable-block
+   * obstruction checks (Java's `state.playerX/playerY` per-player loop).
+   * `null` for any slot that's currently in motion or the shooter themselves
+   * (they're skipped in the obstruction check).
+   *
+   * Snapshotting once per stroke keeps `canMovableBlockMove` deterministic
+   * across clients even though local ball positions otherwise drift between
+   * clients during async play.
+   */
+  otherPlayers: Array<{ x: number; y: number } | null>;
 }
 
 export function newBall(x: number, y: number): BallState {
@@ -128,6 +140,145 @@ export function applyStrokeImpulse(
   ball.shoreY = ball.y;
 }
 
+/**
+ * Center-in-tile test mirroring Java `Map.isPlayerAtPosition` (Map.java:315).
+ * Pixel-precise: player is "at" tile (tx, ty) iff their CENTER is strictly
+ * inside the tile's 15×15 footprint, with a 1-px exclusion on the +x/+y
+ * edges (Java uses `< x*15 + 15 - 1`, not `<= x*15 + 15`). NOT a radius
+ * overlap — Java doesn't account for the ball's sprite size here.
+ */
+function ballOnTile(tx: number, ty: number, px: number, py: number): boolean {
+  const x0 = tx * PIXEL_PER_TILE;
+  const y0 = ty * PIXEL_PER_TILE;
+  return (
+    px > x0 && px < x0 + PIXEL_PER_TILE - 1 &&
+    py > y0 && py < y0 + PIXEL_PER_TILE - 1
+  );
+}
+
+/**
+ * Whether a movable block at (tx, ty) can slide into the destination tile.
+ * Returns the destination tile's background id (so the caller can decide
+ * if the block keeps sliding on a downhill), or -1 if the destination is
+ * not empty / contains a player.
+ *
+ * Mirrors Java `Map.canMovableBlockMove`: the destination must have
+ * `special === 1`, `shape === 0`, `bg <= 15` (no walls / specials), and no
+ * player ball overlapping it.
+ */
+function canMovableBlockMove(
+  map: ParsedMap,
+  tx: number,
+  ty: number,
+  others: Array<{ x: number; y: number } | null>,
+): number {
+  if (tx < 0 || tx >= TILE_WIDTH || ty < 0 || ty >= TILE_HEIGHT) return -1;
+  const code = map.tiles[tx][ty];
+  const special = (code >>> 24) & 0xff;
+  const shape = (code >>> 16) & 0xff;
+  const bg = (code >>> 8) & 0xff;
+  if (special !== 1 || shape !== 0 || bg > 15) return -1;
+  for (const p of others) {
+    if (!p) continue;
+    if (ballOnTile(tx, ty, p.x, p.y)) return -1;
+  }
+  return bg;
+}
+
+/**
+ * Recursively follow a sunkable block (shape 46) down a chain of downhill
+ * tiles until it either rests on flat ground or hits an obstruction. Returns
+ * `[finalTx, finalTy, finalBg]`. Mirrors Java's
+ * `calculateMovableBlockEndPosition` — same i<1078 recursion cap, same gate
+ * `!nonSunkable && background1 in 4..11`, so non-sunkable shape 27 always
+ * stops after the first slide step.
+ */
+function calculateMovableBlockEndPosition(
+  map: ParsedMap,
+  toTx: number,
+  toTy: number,
+  toBg: number,
+  nonSunkable: boolean,
+  depth: number,
+  others: Array<{ x: number; y: number } | null>,
+): [number, number, number] {
+  let result: [number, number, number] = [toTx, toTy, toBg];
+  if (!nonSunkable && toBg >= 4 && toBg <= 11 && depth < 1078) {
+    let nextTx = toTx;
+    let nextTy = toTy;
+    // Direction by downhill code (4=N, 5=NE, 6=E, 7=SE, 8=S, 9=SW, 10=W, 11=NW).
+    if (toBg === 4 || toBg === 5 || toBg === 11) nextTy--;
+    if (toBg === 8 || toBg === 7 || toBg === 9) nextTy++;
+    if (toBg === 5 || toBg === 6 || toBg === 7) nextTx++;
+    if (toBg === 9 || toBg === 10 || toBg === 11) nextTx--;
+    const nextBg = canMovableBlockMove(map, nextTx, nextTy, others);
+    if (nextBg >= 0) {
+      result = calculateMovableBlockEndPosition(
+        map, nextTx, nextTy, nextBg, nonSunkable, depth + 1, others,
+      );
+    }
+  }
+  return result;
+}
+
+/**
+ * Try to push a movable block at tile (blockTx, blockTy) one step in
+ * direction (dx, dy) (each ±1 or 0). Mutates the map in place: clears the
+ * source tile to bare floor, places the block at its rest position, and
+ * (for sunkable blocks ending on water/acid) flips it to the sunken
+ * silhouette.
+ *
+ * Returns true if the block actually moved (caller uses this to switch the
+ * ball's restitution from 0.8 → 0.325, matching Java getSpeedEffect).
+ */
+function handleMovableBlock(
+  map: ParsedMap,
+  blockTx: number,
+  blockTy: number,
+  dx: number,
+  dy: number,
+  nonSunkable: boolean,
+  others: Array<{ x: number; y: number } | null>,
+): boolean {
+  if (blockTx < 0 || blockTx >= TILE_WIDTH || blockTy < 0 || blockTy >= TILE_HEIGHT) {
+    return false;
+  }
+  const code = map.tiles[blockTx][blockTy];
+  const special = (code >>> 24) & 0xff;
+  const shape = (code >>> 16) & 0xff; // shapeReduced (Java's `shape` is +24)
+  const bg = (code >>> 8) & 0xff;
+  // Validate it really is a live movable block. The collision pixel may have
+  // been a 27/46 even if a previous push has since cleared the source — bail
+  // unless the tile-data still says it's there.
+  const fullShape = shape + 24;
+  if (special !== 2 || (fullShape !== 27 && fullShape !== 46)) return false;
+
+  const destTx = blockTx + dx;
+  const destTy = blockTy + dy;
+  const destBg = canMovableBlockMove(map, destTx, destTy, others);
+  if (destBg === -1) return false;
+
+  // Clear source tile to empty floor with the original background.
+  // 16777216 = (1 << 24): special=1, shape=0, fg=0.
+  mutateTile(map, blockTx, blockTy, 16777216 + bg * 256);
+
+  const [finalTx, finalTy, finalBg] = calculateMovableBlockEndPosition(
+    map, destTx, destTy, destBg, nonSunkable, 0, others,
+  );
+
+  if (!nonSunkable && (finalBg === 12 || finalBg === 13)) {
+    // Sunken: special=2, shapeReduced=23 (shape 47), fg=0, bg=water/acid.
+    // 35061760 = (2 << 24) | (23 << 16).
+    mutateTile(map, finalTx, finalTy, 35061760 + finalBg * 256);
+  } else {
+    // Place block at its rest tile preserving the destination background.
+    // 33554432 = (2 << 24); shapeReduced is 3 for shape 27, 22 for shape 46.
+    const shapeReduced = (nonSunkable ? 27 : 46) - 24;
+    mutateTile(map, finalTx, finalTy, 33554432 + shapeReduced * 256 * 256 + finalBg * 256);
+  }
+  return true;
+}
+
 function isWall(v: number): boolean {
   // 16..23 except 19, plus 27, 40..43, 46. Per handleWallCollision.
   if (v >= 16 && v <= 23 && v !== 19) return true;
@@ -186,10 +337,44 @@ function readNeighbors(map: ParsedMap, x: number, y: number): Neighbors {
 }
 
 /**
+ * Compute restitution for a wall hit, AND if the wall happens to be a
+ * movable/sunkable block (27/46) try to push it. Block-push uses the
+ * same per-edge offset Java's `getSpeedEffect` does: dx/dy point from the
+ * ball's centre to the neighbour we just sampled, and the block slides
+ * one tile further in that direction.
+ *
+ * The collision pixel may not always be in the block's tile (e.g. the ball
+ * grazes a wall pixel that belongs to the neighbouring tile due to mask
+ * shape) — `handleMovableBlock` validates the tile-data and bails if it
+ * isn't a real block tile, which keeps us correct for those edge cases.
+ */
+function bounceCoeff(
+  ball: BallState,
+  ctx: PhysicsContext,
+  v: number,
+  ix: number,
+  iy: number,
+  sampleDx: number,
+  sampleDy: number,
+  unitDx: number,
+  unitDy: number,
+): number {
+  if (v === 27 || v === 46) {
+    const blockTx = Math.floor((ix + sampleDx) / PIXEL_PER_TILE);
+    const blockTy = Math.floor((iy + sampleDy) / PIXEL_PER_TILE);
+    const moved = handleMovableBlock(
+      ctx.map, blockTx, blockTy, unitDx, unitDy, v === 27, ctx.otherPlayers,
+    );
+    return moved ? 0.325 : 0.8;
+  }
+  return getRestitution(v, ball);
+}
+
+/**
  * Wall collision — port of GameCanvas.handleWallCollision (lines 1205-1451).
  * Includes one-way wall (20-23) directional pass-through.
  */
-function handleWallCollision(ball: BallState, n: Neighbors): void {
+function handleWallCollision(ball: BallState, ctx: PhysicsContext, n: Neighbors, ix: number, iy: number): void {
   let top = isWall(n.t);
   let right = isWall(n.r);
   let bottom = isWall(n.b);
@@ -251,7 +436,7 @@ function handleWallCollision(ball: BallState, n: Neighbors): void {
         (ball.vx < 0 && ball.vy < 0 && -ball.vy > -ball.vx) ||
         (ball.vx > 0 && ball.vy > 0 && ball.vx > ball.vy))
     ) {
-      const e = getRestitution(n.tr, ball);
+      const e = bounceCoeff(ball, ctx, n.tr, ix, iy, DIAG_OFFSET, -DIAG_OFFSET, 1, -1);
       temp = ball.vx;
       ball.vx = ball.vy * e;
       ball.vy = temp * e;
@@ -263,7 +448,7 @@ function handleWallCollision(ball: BallState, n: Neighbors): void {
         (ball.vx > 0 && ball.vy < 0 && ball.vx > -ball.vy) ||
         (ball.vx < 0 && ball.vy > 0 && ball.vy > -ball.vx))
     ) {
-      const e = getRestitution(n.br, ball);
+      const e = bounceCoeff(ball, ctx, n.br, ix, iy, DIAG_OFFSET, DIAG_OFFSET, 1, 1);
       temp = ball.vx;
       ball.vx = -ball.vy * e;
       ball.vy = -temp * e;
@@ -275,7 +460,7 @@ function handleWallCollision(ball: BallState, n: Neighbors): void {
         (ball.vx > 0 && ball.vy > 0 && ball.vy > ball.vx) ||
         (ball.vx < 0 && ball.vy < 0 && -ball.vx > -ball.vy))
     ) {
-      const e = getRestitution(n.bl, ball);
+      const e = bounceCoeff(ball, ctx, n.bl, ix, iy, -DIAG_OFFSET, DIAG_OFFSET, -1, 1);
       temp = ball.vx;
       ball.vx = ball.vy * e;
       ball.vy = temp * e;
@@ -287,7 +472,7 @@ function handleWallCollision(ball: BallState, n: Neighbors): void {
         (ball.vx < 0 && ball.vy > 0 && -ball.vx > ball.vy) ||
         (ball.vx > 0 && ball.vy < 0 && -ball.vy > ball.vx))
     ) {
-      const e = getRestitution(n.tl, ball);
+      const e = bounceCoeff(ball, ctx, n.tl, ix, iy, -DIAG_OFFSET, -DIAG_OFFSET, -1, -1);
       temp = ball.vx;
       ball.vx = -ball.vy * e;
       ball.vy = -temp * e;
@@ -296,22 +481,22 @@ function handleWallCollision(ball: BallState, n: Neighbors): void {
   }
 
   if (top && ball.vy < 0) {
-    const e = getRestitution(n.t, ball);
+    const e = bounceCoeff(ball, ctx, n.t, ix, iy, 0, -6, 0, -1);
     ball.vx *= e;
     ball.vy *= -e;
   } else if (bottom && ball.vy > 0) {
-    const e = getRestitution(n.b, ball);
+    const e = bounceCoeff(ball, ctx, n.b, ix, iy, 0, 6, 0, 1);
     ball.vx *= e;
     ball.vy *= -e;
   }
   if (right && ball.vx > 0) {
-    const e = getRestitution(n.r, ball);
+    const e = bounceCoeff(ball, ctx, n.r, ix, iy, 6, 0, 1, 0);
     ball.vx *= -e;
     ball.vy *= e;
     return;
   }
   if (left && ball.vx < 0) {
-    const e = getRestitution(n.l, ball);
+    const e = bounceCoeff(ball, ctx, n.l, ix, iy, -6, 0, -1, 0);
     ball.vx *= -e;
     ball.vy *= e;
   }
@@ -538,7 +723,7 @@ export function step(ball: BallState, ctx: PhysicsContext): StepResult {
         handleMine(ball, ctx);
       }
 
-      handleWallCollision(ball, n);
+      handleWallCollision(ball, ctx, n, ix, iy);
     }
 
     const ix = (ball.x + 0.5) | 0;
