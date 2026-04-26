@@ -82,7 +82,12 @@ register({
     type: PacketType.DATA,
     pattern: /^language\t(.+)$/,
     handle: (_server, conn, match) => {
-        if (conn.player) conn.player.language = match[1];
+        if (!conn.player) return;
+        // Same strip as the nick handler: the language ends up caret-joined
+        // into the player record and the whole record tab-joined into lobby
+        // packets. An unsanitised `\t` would shift positional fields on every
+        // peer's user list. `^`/`:` would corrupt the caret-joined record.
+        conn.player.language = match[1].replace(/[\r\n\t^:]+/g, " ").slice(0, 8);
     },
 });
 
@@ -248,8 +253,16 @@ register({
             const name = firstArg;
             const password = rest[0] ?? "-";
             const perms = parseInt(rest[1] ?? "0", 10) || 0;
-            const playerCount = parseInt(rest[2] ?? "2", 10) || 2;
-            const numberOfTracks = parseInt(rest[3] ?? "9", 10) || 9;
+            // Hard cap on playerCount: the value is used as the size of the
+            // server's per-player stroke arrays (`new Array(numPlayers).fill(0)`
+            // in GolfGame's constructor). An unbounded value here is a
+            // single-packet OOM. The lobby form only ever emits 2/3/4.
+            const playerCountRaw = parseInt(rest[2] ?? "2", 10) || 2;
+            const playerCount = Math.max(2, Math.min(playerCountRaw, 4));
+            // numberOfTracks isn't an array size today, but the lobby form
+            // only emits 1/3/5/9/18 — clamp for defence in depth.
+            const numberOfTracksRaw = parseInt(rest[3] ?? "9", 10) || 9;
+            const numberOfTracks = Math.max(1, Math.min(numberOfTracksRaw, 18));
             const trackType = parseInt(rest[4] ?? "1", 10) || 0;
             const maxStrokes = parseInt(rest[5] ?? "10", 10) || 10;
             const strokeTimeout = parseInt(rest[6] ?? "60", 10) || 60;
