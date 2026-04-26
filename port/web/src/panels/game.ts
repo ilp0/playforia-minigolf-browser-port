@@ -924,12 +924,14 @@ export class GamePanel implements Panel {
       return;
     }
     // Drain any tile mutations (movable blocks, breakable bricks) into the
-    // renderer's cached background. Must happen before drawFrame so the new
-    // tile state is visible this frame.
+    // renderer's cached background. The shading pass (applyShading) casts
+    // shadows across tile boundaries, so we rebuild the full bgCanvas rather
+    // than re-blitting individual tiles — otherwise a moved block leaves a
+    // phantom shadow at its old position and shows no bevel/shadow at its new
+    // one. Coalesces any number of mutations into one rebuild per frame.
     if (this.parsedMap && this.parsedMap.dirtyTiles.length > 0) {
-      const dirty = this.parsedMap.dirtyTiles;
-      for (const [tx, ty] of dirty) this.renderer.invalidateTile(tx, ty);
-      dirty.length = 0;
+      this.parsedMap.dirtyTiles.length = 0;
+      this.renderer.rebuildBackground();
     }
     let aim: AimLine | null = null;
     const me = this.players[this.myPlayerId];

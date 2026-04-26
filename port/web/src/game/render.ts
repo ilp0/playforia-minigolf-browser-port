@@ -64,13 +64,20 @@ export interface BallSprite {
   ghost?: boolean;
   /** Optional label drawn above the ball (only shown when `ghost`). */
   label?: string;
+  /**
+   * Death/sink animation. Mirrors Java GameCanvas.drawPlayer's `shrinkAmount`
+   * (the live `onHoleTimer` while ball is on hole/water/acid/swamp). Position
+   * shifts by `shrink` and the rendered size reduces by `shrink * 2`. 0 means
+   * draw at full size. Reaches ~6.0 just before water/acid respawn and
+   * ~2.166 just before a hole-sink completes.
+   */
+  shrink?: number;
 }
 
 export class TrackRenderer {
   private bgCanvas: HTMLCanvasElement;
   private parsedMap: ParsedMap;
   private atlases: Atlases;
-
   constructor(parsedMap: ParsedMap, atlases: Atlases) {
     this.parsedMap = parsedMap;
     this.atlases = atlases;
@@ -143,69 +150,15 @@ export class TrackRenderer {
   }
 
   /**
-   * Re-blit a single tile into the cached background canvas. Called after
-   * physics mutates the map (movable blocks, breakable bricks) — keeps the
-   * background image in sync with `parsedMap.tiles[][]` without rebuilding
-   * the entire 735×375 bitmap.
-   *
-   * Drained from `parsedMap.dirtyTiles` once per frame in the panel tick.
+   * Rebuild the cached background canvas from the current `parsedMap.tiles[][]`
+   * and `parsedMap.collision`. Call after one or more `mutateTile` invocations
+   * (movable blocks, breakable bricks) — the shading pass casts shadows across
+   * tile boundaries, so per-tile reblits aren't enough; we need to re-run
+   * `applyShading` against the full collision state. Drained from
+   * `parsedMap.dirtyTiles` once per frame in the panel tick.
    */
-  invalidateTile(tx: number, ty: number): void {
-    const ctx = this.bgCanvas.getContext("2d");
-    if (!ctx) return;
-    const code = this.parsedMap.tiles[tx][ty];
-    const img = ctx.createImageData(PIXEL_PER_TILE, PIXEL_PER_TILE);
-    // Default fill so empty / non-mask pixels start as the playable-area bg
-    // (white per Java default 0xFFFFFF) — matches buildBackground's empty
-    // fall-through.
-    for (let i = 0; i < img.data.length; i += 4) {
-      img.data[i] = 255;
-      img.data[i + 1] = 255;
-      img.data[i + 2] = 255;
-      img.data[i + 3] = 255;
-    }
-    // writeTile expects an ImageData sized to MAP_PIXEL_WIDTH * MAP_PIXEL_HEIGHT
-    // and writes at absolute coords. Build a tiny tile-only ImageData here
-    // and copy via a temp full-size one to reuse writeTile? Simpler: do the
-    // raster inline.
-    this.writeTileToImage(img, tx, ty, code);
-    ctx.putImageData(img, tx * PIXEL_PER_TILE, ty * PIXEL_PER_TILE);
-  }
-
-  /**
-   * Tile-local rasterizer mirroring `writeTile` but writing into a 15×15
-   * ImageData instead of an MAP_PIXEL_WIDTH × MAP_PIXEL_HEIGHT one. Kept
-   * in this class so any future changes to writeTile's substitution rules
-   * stay locally co-located.
-   */
-  private writeTileToImage(img: ImageData, _tx: number, _ty: number, code: number): void {
-    const u = unpackTile(code);
-    const special = u.isNoSpecial;
-    if (special === 0) return; // already filled white above
-    const shape = u.shape;
-    const bgIdx = u.fore;
-    const fgIdx = u.back;
-    const mask =
-      special === 1 ? this.atlases.shapeMasks[shape] : this.atlases.specialMasks[shape];
-    if (!mask) return;
-    const bgPixels = this.atlases.elementPixels[bgIdx];
-    const fgPixels =
-      special === 1
-        ? this.atlases.elementPixels[fgIdx]
-        : this.atlases.specialPixels[shape];
-    if (!bgPixels || !fgPixels) return;
-    for (let py = 0; py < PIXEL_PER_TILE; py++) {
-      for (let px = 0; px < PIXEL_PER_TILE; px++) {
-        const m = mask[py * PIXEL_PER_TILE + px];
-        const src = m === 1 ? bgPixels : fgPixels;
-        const si = (py * PIXEL_PER_TILE + px) * 4;
-        const oi = (py * PIXEL_PER_TILE + px) * 4;
-        img.data[oi] = src[si];
-        img.data[oi + 1] = src[si + 1];
-        img.data[oi + 2] = src[si + 2];
-        img.data[oi + 3] = 255;
-      }
-    }
+  rebuildBackground(): void {
+    this.buildBackground();
   }
 
   private buildBackground(): void {
@@ -309,6 +262,11 @@ export class TrackRenderer {
     }
   }
 
+  /**
+   * Per-frame draw. Note: `balls` is sorted in-place to avoid a spread/sort
+   * allocation every frame; callers reuse a scratch array (see GamePanel.draw)
+   * and don't depend on insertion order being preserved.
+   */
   drawFrame(
     ctx: CanvasRenderingContext2D,
     balls: BallSprite[],
@@ -339,23 +297,28 @@ export class TrackRenderer {
     }
 
     // Sort: ghosts first (drawn beneath), self last so it's always visible.
-    const sorted = [...balls].sort((a, b) => {
+    balls.sort((a, b) => {
       const ga = a.ghost ? 0 : 1;
       const gb = b.ghost ? 0 : 1;
       if (ga !== gb) return ga - gb;
       return Number(a.moving) - Number(b.moving);
     });
-    for (const b of sorted) {
+    for (const b of balls) {
       if (b.hidden) continue;
       // balls.gif: 8 sprites total, 4 per row → playerIdx*2 + (moving?1:0).
       const idx = b.playerIdx * 2 + (b.moving ? 1 : 0);
       const { sx, sy } = spriteSrc13(idx, 4);
-      const dx = Math.round(b.x - 6.5);
-      const dy = Math.round(b.y - 6.5);
+      const baseDx = Math.round(b.x - 6.5);
+      const baseDy = Math.round(b.y - 6.5);
+      const shrink = b.shrink && b.shrink > 0 ? b.shrink : 0;
+      const dx = shrink > 0 ? Math.floor(baseDx + shrink) : baseDx;
+      const dy = shrink > 0 ? Math.floor(baseDy + shrink) : baseDy;
+      const size = shrink > 0 ? Math.max(0, Math.floor(13 - shrink * 2)) : 13;
+      if (size <= 0) continue;
       if (b.ghost) {
         ctx.save();
         ctx.globalAlpha = 0.5;
-        ctx.drawImage(this.atlases.balls, sx, sy, 13, 13, dx, dy, 13, 13);
+        ctx.drawImage(this.atlases.balls, sx, sy, 13, 13, dx, dy, size, size);
         if (b.label) {
           // Small white-with-shadow label above the ghost ball.
           ctx.globalAlpha = 0.85;
@@ -364,13 +327,13 @@ export class TrackRenderer {
           ctx.textBaseline = "alphabetic";
           ctx.lineWidth = 3;
           ctx.strokeStyle = "rgba(0,0,0,0.7)";
-          ctx.strokeText(b.label, b.x, dy - 2);
+          ctx.strokeText(b.label, b.x, baseDy - 2);
           ctx.fillStyle = "#fff";
-          ctx.fillText(b.label, b.x, dy - 2);
+          ctx.fillText(b.label, b.x, baseDy - 2);
         }
         ctx.restore();
       } else {
-        ctx.drawImage(this.atlases.balls, sx, sy, 13, 13, dx, dy, 13, 13);
+        ctx.drawImage(this.atlases.balls, sx, sy, 13, 13, dx, dy, size, size);
       }
     }
   }
