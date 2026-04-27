@@ -3,6 +3,30 @@ import type { App } from "../app.ts";
 import type { Panel } from "../panel.ts";
 import { i18n, saveLang, t, type Lang } from "../i18n.ts";
 
+const NICK_STORAGE_KEY = "pmg.nick";
+
+function loadSavedNick(): string | null {
+  try {
+    const v = window.localStorage.getItem(NICK_STORAGE_KEY);
+    if (v && v.length > 0) return v;
+  } catch {
+    // localStorage may throw in private mode / sandboxed iframes.
+  }
+  return null;
+}
+
+function saveNick(nick: string): void {
+  try {
+    if (nick.length === 0) {
+      window.localStorage.removeItem(NICK_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(NICK_STORAGE_KEY, nick);
+    }
+  } catch {
+    // noop
+  }
+}
+
 /**
  * Drives the login handshake:
  *   c new (already sent during loading)
@@ -45,7 +69,7 @@ export class LoginPanel implements Panel {
     const nameInput = document.createElement("input");
     nameInput.type = "text";
     nameInput.id = "field-username";
-    nameInput.value = "Guest" + this.randomDigits(4);
+    nameInput.value = loadSavedNick() ?? "Guest" + this.randomDigits(4);
     nameInput.maxLength = 20;
     nameRow.appendChild(nameLabel);
     nameRow.appendChild(nameInput);
@@ -196,6 +220,7 @@ export class LoginPanel implements Panel {
     // Server-side sanitiser will accept/reject; we only strip our own framing
     // chars here so we never split the packet on the wire.
     const nick = rawNick.replace(/[\r\n\t]+/g, " ").slice(0, 20);
+    saveNick(nick);
 
     // Full guest-login handshake. The server processes these in order; the
     // final `login` is what triggers basicinfo + status\tlobbyselect.
