@@ -2,7 +2,7 @@ name: Port Docker Image
 
 on:
   push:
-    branches: [master]
+    branches: [master, beta]
     tags: ['v*']
   pull_request:
     branches: [master]
