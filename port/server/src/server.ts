@@ -174,7 +174,13 @@ export class GolfServer {
         }
         this.removePlayer(player.id);
         player.disconnectedAt = null;
-        logEvent("player_disconnect", { id: player.id, nick: player.nick, reason });
+        logEvent("player_disconnect", {
+            id: player.id,
+            nick: player.nick,
+            reason,
+            cid: player.connection.clientId,
+            conn: player.connection.connId,
+        });
     }
 
     /**
@@ -199,12 +205,31 @@ export class GolfServer {
             this.reconnectTimers.delete(id);
         }
         player.disconnectedAt = null;
+        // Carry the persistent client id forward onto the new socket. The
+        // transparent reconnect protocol (`c old <id>`) doesn't re-send the
+        // `cid` packet, so without this the post-reattach socket's
+        // `clientId` would stay null and analytics on the same browser
+        // would look like two distinct identities across a network blip.
+        if (conn.clientId === null && player.connection.clientId !== null) {
+            conn.clientId = player.connection.clientId;
+        }
         player.connection = conn;
         conn.player = player;
         // The new Connection's outSeq/inSeq are 0 by construction; no reset
         // needed here. Client mirrors this on receipt of `c rcok`.
         console.log(`[reconnect] reattached ${id}/${player.nick}`);
-        logEvent("player_reconnect", { id, nick: player.nick });
+        // The reattached socket carries its own cid (the client re-sent it on
+        // the new connection's `cid` packet — or, for a same-tab transparent
+        // reconnect that happens before login, the new conn has a fresh cid
+        // that will be filled later). Either way, log against `conn.clientId`
+        // (the new socket) and `conn.connId` (the new socket id) so the trail
+        // shows the post-reattach identity.
+        logEvent("player_reconnect", {
+            id,
+            nick: player.nick,
+            cid: conn.clientId,
+            conn: conn.connId,
+        });
         return true;
     }
 

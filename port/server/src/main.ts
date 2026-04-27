@@ -329,8 +329,14 @@ export async function startServer(args: CliArgs): Promise<RunningServer> {
             ipConnCount.set(remote, cur + 1);
         }
 
+        // User-Agent for analytics. Most browsers send one; non-browser
+        // clients (test harnesses, server-to-server tooling) often don't.
+        // Stored verbatim — we don't strip or normalise here; consumer-side
+        // jq queries are fine with the raw header.
+        const ua = String(req.headers["user-agent"] ?? "");
+
         wss.handleUpgrade(req, sock, head, (ws) => {
-            new Connection(ws, golfServer, args.verbose);
+            new Connection(ws, golfServer, args.verbose, remote, ua);
             ws.on("close", () => {
                 if (maxConnsPerIp > 0) {
                     const cur = ipConnCount.get(remote) ?? 0;

@@ -9,6 +9,7 @@ import type { WebSocket } from "ws";
 import { decode, type Packet, PacketType, buildCommand, buildData } from "@minigolf/shared";
 import type { Player } from "./player.ts";
 import type { GolfServer } from "./server.ts";
+import { logEvent } from "./log.ts";
 
 // Browsers throttle JS in background tabs (Chrome down to ~1Hz, sometimes
 // even less). The original Java applet didn't have that problem, but our
@@ -38,11 +39,42 @@ export class Connection {
     public readonly ws: WebSocket;
     public readonly server: GolfServer;
     public readonly verbose: boolean;
+    /** Short random per-connection id (e.g. `c-x3k9q1mt`). Stamped on every
+     *  analytics event involving this socket so a downstream consumer can
+     *  group `client_connect` / `player_login` / `player_disconnect` lines
+     *  for the same WS, even if the player record is reused via reconnect. */
+    public readonly connId: string;
+    /** Remote address from the HTTP upgrade socket. May be IPv4-mapped IPv6
+     *  (`::ffff:1.2.3.4`) — left as-is so it round-trips back to the same
+     *  bucket that `main.ts` uses for per-IP rate limiting. */
+    public readonly remoteAddress: string;
+    /** User-Agent header from the WS upgrade. Non-browser clients (smoke
+     *  tests, server-to-server tooling) typically send `undefined` — we
+     *  store the empty string so the field is always present in logs. */
+    public readonly userAgent: string;
+    /** Persistent browser-side UUID (from `localStorage["mg.clientId"]`) sent
+     *  by the web client during the login handshake via the `cid` packet.
+     *  Survives page refresh; lets analytics distinguish "same browser
+     *  reloading" from "two unrelated guests". Null until the packet lands
+     *  (or for non-browser clients that don't send one). Lives on Connection
+     *  rather than Player so the `client_connect`/`client_disconnect` events
+     *  — which fire pre-login and post-player-removal respectively — can
+     *  still surface it. */
+    public clientId: string | null = null;
 
-    constructor(ws: WebSocket, server: GolfServer, verbose: boolean) {
+    constructor(
+        ws: WebSocket,
+        server: GolfServer,
+        verbose: boolean,
+        remoteAddress: string,
+        userAgent: string,
+    ) {
         this.ws = ws;
         this.server = server;
         this.verbose = verbose;
+        this.remoteAddress = remoteAddress;
+        this.userAgent = userAgent;
+        this.connId = "c-" + Math.random().toString(36).slice(2, 10);
         ws.on("message", (data) => {
             const text = typeof data === "string" ? data : data.toString("utf-8");
             this.lastActivity = Date.now();
@@ -55,6 +87,16 @@ export class Connection {
         });
 
         this.heartbeatTimer = setInterval(() => this.checkHeartbeat(), 1_000);
+
+        // Connection-level analytics ping. Fires for every WS upgrade, even
+        // ones that abort before login — so we see "browser opened a socket"
+        // separately from "player completed handshake". `conn` ties it to
+        // the eventual `player_login`/`player_disconnect` lines.
+        logEvent("client_connect", {
+            conn: this.connId,
+            ip: this.remoteAddress,
+            ua: this.userAgent,
+        });
 
         // Send the initial handshake — this is what Java sends in ClientConnectedEvent.
         this.sendRaw("h 1");
@@ -131,6 +173,15 @@ export class Connection {
             clearInterval(this.heartbeatTimer);
             this.heartbeatTimer = null;
         }
+        // Connection-level disconnect — pairs with `client_connect`. The
+        // higher-level `player_disconnect` (emitted from server.ts) fires
+        // only when the socket carried a logged-in player; this one fires
+        // even for sockets that never got past the handshake. `cid` is
+        // included if the client got far enough to send it.
+        logEvent("client_disconnect", {
+            conn: this.connId,
+            cid: this.clientId,
+        });
         this.server.handleDisconnect(this);
     }
 
