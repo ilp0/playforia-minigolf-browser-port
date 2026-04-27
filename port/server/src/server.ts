@@ -58,10 +58,17 @@ export class GolfServer {
         if (!this.dailyGame) {
             const id = this.getNextGameId();
             this.dailyGame = new DailyGame(id, this.trackManager, today);
-            this.getLobby(LobbyType.DAILY).addGame(this.dailyGame);
         } else {
             this.dailyGame.rotateIfNewDay(today);
         }
+        // Re-register on every access. `fullyRemovePlayer` unregisters the game
+        // when the room empties via mid-game disconnect, but the singleton
+        // itself lives on; without re-adding here, `daily_lobby.gameCount()`,
+        // `inGamePlayerCount()`, and `totalPlayerCount()` perpetually report 0
+        // even when subsequent joiners are sitting in the daily room — breaking
+        // both the analytics snapshot and the lobbyselect "Daily Cup: N players"
+        // display. `addGame` is idempotent (no-op if already registered).
+        this.getLobby(LobbyType.DAILY).addGame(this.dailyGame);
         return this.dailyGame;
     }
 

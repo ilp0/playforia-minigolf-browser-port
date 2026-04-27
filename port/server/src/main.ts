@@ -248,6 +248,8 @@ function tryServeStatic(req: IncomingMessage, res: ServerResponse, webDist: stri
 
 export interface RunningServer {
     close(): Promise<void>;
+    /** Test hook — peek at lobby state directly. Not used in production. */
+    golfServer: GolfServer;
 }
 
 export async function startServer(args: CliArgs): Promise<RunningServer> {
@@ -376,6 +378,7 @@ export async function startServer(args: CliArgs): Promise<RunningServer> {
     snapshotTimer.unref();
 
     return {
+        golfServer,
         close: async () => {
             clearInterval(snapshotTimer);
             await new Promise<void>((resolve) => {
