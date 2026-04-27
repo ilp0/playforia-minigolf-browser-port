@@ -19,27 +19,21 @@ export const TILE = Object.freeze({
     WALL_NORMAL: 1,
     WALL_BOUNCY: 2,
     WALL_STICKY: 3,
-    // 4..11 — slope / arrows / etc (treated as "fast" surfaces, friction 0.9935)
-    SAND_LIGHT: 12,
-    SAND_DARK: 13,
-    WATER_LIGHT: 14,
-    WATER_DARK: 15,
-    // 16..23 — illusion-wall variants
+    // 4..11 — slope tiles (8 directions; "fast" surfaces, friction 0.9935)
+    WATER: 12,
+    ACID: 13,
+    WATER_SWAMP: 14,
+    ACID_SWAMP: 15,
+    // 16..23 — wall variants (19 = illusion); 20..23 = one-way walls
     ILLUSION_WALL: 19,
-    ICE: 25,
-    BRICK_LIGHT: 40,
-    BRICK_MEDIUM: 41,
-    BRICK_DARK: 42,
-    BRICK_DARKEST: 43,
-    MAGNET: 44,
-    MAGNET_REPEL: 45,
-    HOLE: 47,
-
-    // Special starting-position markers
     START_COMMON: 24,
+    HOLE: 25,
     FAKE_HOLE: 26,
-
-    // Teleport values
+    MOVABLE_BLOCK: 27,
+    MINE_SMALL: 28,
+    MINE_SMALL_SPENT: 29,
+    MINE_BIG: 30,
+    MINE_BIG_SPENT: 31,
     TELEPORT_BLUE_START: 32,
     TELEPORT_BLUE_EXIT: 33,
     TELEPORT_RED_START: 34,
@@ -48,6 +42,18 @@ export const TILE = Object.freeze({
     TELEPORT_YELLOW_EXIT: 37,
     TELEPORT_GREEN_START: 38,
     TELEPORT_GREEN_EXIT: 39,
+    BRICK_FULL: 40,
+    BRICK_3Q: 41,
+    BRICK_HALF: 42,
+    BRICK_QUARTER: 43,
+    MAGNET_ATTRACT: 44,
+    MAGNET_REPEL: 45,
+    SUNKABLE_BLOCK: 46,
+    SUNKEN_BLOCK: 47,
+    START_BLUE: 48,
+    START_RED: 49,
+    START_YELLOW: 50,
+    START_GREEN: 51,
 });
 
 /**
@@ -59,13 +65,13 @@ export const TILE = Object.freeze({
  *   v == 1 (normal wall)                        -> 0.92
  *   v == 2 (bouncy wall)                        -> 0.8
  *   v == 3 / 32 / 34 / 36 / 38 (sticky / tele)  -> 0.9975
- *   v == 12 / 13 (sand)                         -> 0.0
- *   v == 14 / 15 (water)                        -> 0.95
+ *   v == 12 / 13 (water / acid)                 -> 0.0
+ *   v == 14 / 15 (water_swamp / acid_swamp)     -> 0.95
  *   v in 20..23 (illusion non-shadow)           -> 0.995
- *   v == 25 (ice)                               -> 0.96
- *   v == 28 / 30                                -> 1.0
- *   v == 29 / 31                                -> 0.9
- *   v == 44 (magnet)                            -> 0.9
+ *   v == 25 (hole)                              -> 0.96
+ *   v == 28 / 30 (mine_small / mine_big)        -> 1.0
+ *   v == 29 / 31 (mine spent)                   -> 0.9
+ *   v == 44 (magnet_attract)                    -> 0.9
  *   v == 19 / 47 / 4..11                        -> 0.9935 (the "fast surface" outer branch)
  */
 export function getFriction(value: number): number {

@@ -37,20 +37,20 @@ describe("tiles — getFriction", () => {
         }
     });
 
-    it("sand returns 0.0 and water returns 0.95", () => {
+    it("water/acid returns 0.0 and swamp variants return 0.95", () => {
         assert.equal(getFriction(12), 0.0);
         assert.equal(getFriction(13), 0.0);
         assert.equal(getFriction(14), 0.95);
         assert.equal(getFriction(15), 0.95);
     });
 
-    it("illusion-walls 20..23 return 0.995", () => {
+    it("one-way walls 20..23 return 0.995", () => {
         for (const v of [20, 21, 22, 23]) {
             assert.equal(getFriction(v), 0.995);
         }
     });
 
-    it("ice (25) returns 0.96 and magnet (44) returns 0.9", () => {
+    it("hole (25) returns 0.96 and magnet_attract (44) returns 0.9", () => {
         assert.equal(getFriction(25), 0.96);
         assert.equal(getFriction(44), 0.9);
     });
@@ -88,10 +88,17 @@ describe("tiles — getYPixelsFromSpecialId", () => {
 });
 
 describe("tiles — TILE name table", () => {
-    it("has stable named ids for common values", () => {
+    it("has stable named ids matching Java tile semantics", () => {
         assert.equal(TILE.EMPTY, 0);
         assert.equal(TILE.WALL_NORMAL, 1);
-        assert.equal(TILE.HOLE, 47);
-        assert.equal(TILE.MAGNET, 44);
+        assert.equal(TILE.WATER, 12);
+        assert.equal(TILE.ACID, 13);
+        assert.equal(TILE.WATER_SWAMP, 14);
+        assert.equal(TILE.ACID_SWAMP, 15);
+        assert.equal(TILE.HOLE, 25);
+        assert.equal(TILE.MAGNET_ATTRACT, 44);
+        assert.equal(TILE.MAGNET_REPEL, 45);
+        assert.equal(TILE.SUNKABLE_BLOCK, 46);
+        assert.equal(TILE.SUNKEN_BLOCK, 47);
     });
 });
