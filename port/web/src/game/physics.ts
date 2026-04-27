@@ -694,17 +694,62 @@ function handleTeleport(ball: BallState, ctx: PhysicsContext, n: Neighbors, ix: 
   }
 }
 
-/** Mine detonation (28 / 30): give ball random velocity in [5.2, 6.5] magnitude. */
-function handleMine(ball: BallState, ctx: PhysicsContext): void {
+/**
+ * Mine detonation (28 / 30): mutate the tile so it can't retrigger, optionally
+ * dig a crater for big mines, then eject the ball with a random velocity in
+ * [5.2, 6.5] magnitude. Mirrors Java GameCanvas.handleMines.
+ */
+function handleMine(ball: BallState, ctx: PhysicsContext, ix: number, iy: number, isBigMine: boolean): void {
+  const map = ctx.map;
+  const tx = (ix / 15) | 0;
+  const ty = (iy / 15) | 0;
+  if (tx < 0 || tx >= TILE_WIDTH || ty < 0 || ty >= TILE_HEIGHT) return;
+  const code = map.tiles[tx][ty];
+  const special = (code >>> 24) & 0xff;
+  const shape = (code >>> 16) & 0xff; // shapeReduced; 4 = small mine, 6 = big mine
+  const bg = (code >>> 8) & 0xff;
+  const fg = code & 0xff;
+  if (special !== 2 || (shape !== 4 && shape !== 6)) return;
+
+  // Java handleMines encodes `foreground * 256 + background` here, which swaps
+  // the bg/fg byte order versus every other mutate call (e.g. handleBreakableBlock
+  // uses `background * 256 + foreground`). Reproduce the swap for replay parity.
+  mutateTile(map, tx, ty, 33554432 + (shape + 1) * 256 * 256 + fg * 256 + bg);
+
+  if (isBigMine) {
+    // 9-tile crater: surrounding empty-grass tiles (code === 16777216) are
+    // replaced with downhill slopes pointing away from the mine. Tiles that
+    // are anything else (walls, water, other specials) are left untouched.
+    const downhills = [17039367, 16779264, 17104905, 16778752, -1, 16779776, 17235973, 16778240, 17170443];
+    let tileIndex = 0;
+    for (let y = ty - 1; y <= ty + 1; y++) {
+      for (let x = tx - 1; x <= tx + 1; x++) {
+        if (
+          x >= 0 && x < TILE_WIDTH && y >= 0 && y < TILE_HEIGHT &&
+          (y !== ty || x !== tx) &&
+          map.tiles[x][y] === 16777216
+        ) {
+          mutateTile(map, x, y, downhills[tileIndex]);
+        }
+        tileIndex++;
+      }
+    }
+  }
+
+  // Reroll vx/vy until the magnitude is in the [5.2, 6.5] annulus. Java's loop
+  // is unbounded; acceptance probability per attempt is ~28%, so a cap risks
+  // breaking determinism without preventing any practical infinite loop.
   let speed: number;
-  let attempts = 0;
   do {
     ball.vx = (-65 + (ctx.seed.next() % 131)) / 10;
     ball.vy = (-65 + (ctx.seed.next() % 131)) / 10;
     speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
-    attempts++;
-    if (attempts > 50) break;
   } while (speed < 5.2 || speed > 6.5);
+
+  if (!isBigMine) {
+    ball.vx *= 0.8;
+    ball.vy *= 0.8;
+  }
 }
 
 /** Magnet field force per Java handleMagnetForce. */
@@ -780,7 +825,7 @@ export function step(ball: BallState, ctx: PhysicsContext): StepResult {
 
       // Mines: centre on a mine tile triggers detonation.
       if (n.c === 28 || n.c === 30) {
-        handleMine(ball, ctx);
+        handleMine(ball, ctx, ix, iy, n.c === 30);
       }
 
       handleWallCollision(ball, ctx, n, ix, iy);
