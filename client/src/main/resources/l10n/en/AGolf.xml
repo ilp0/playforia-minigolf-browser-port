@@ -1272,6 +1272,24 @@
 	<str key="Tournament_QuitGameButton">
 		<![CDATA[Quit game]]>
 	</str>
+	<str key="Port_Game_Menu">
+		<![CDATA[Menu]]>
+	</str>
+	<str key="Port_Game_Menu_ShowNames">
+		<![CDATA[Show player names]]>
+	</str>
+	<str key="Port_Game_Menu_SendCursor">
+		<![CDATA[Show my aim to other players]]>
+	</str>
+	<str key="Port_Game_Menu_ShowPeerCursors">
+		<![CDATA[Show others' aim lines]]>
+	</str>
+	<str key="Port_Game_Volume">
+		<![CDATA[Volume]]>
+	</str>
+	<str key="Port_Game_VolumeTitle">
+		<![CDATA[Master volume]]>
+	</str>
 	<str key="UserList_Ignore">
 		<![CDATA[Ignore selected user]]>
 	</str>

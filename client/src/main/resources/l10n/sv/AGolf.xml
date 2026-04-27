@@ -1272,6 +1272,24 @@
 	<str key="Tournament_QuitGameButton">
 		<![CDATA[Avsluta spel]]>
 	</str>
+	<str key="Port_Game_Menu">
+		<![CDATA[Meny]]>
+	</str>
+	<str key="Port_Game_Menu_ShowNames">
+		<![CDATA[Visa spelarnamn]]>
+	</str>
+	<str key="Port_Game_Menu_SendCursor">
+		<![CDATA[Visa mitt sikte för andra spelare]]>
+	</str>
+	<str key="Port_Game_Menu_ShowPeerCursors">
+		<![CDATA[Visa andras siktlinjer]]>
+	</str>
+	<str key="Port_Game_Volume">
+		<![CDATA[Volym]]>
+	</str>
+	<str key="Port_Game_VolumeTitle">
+		<![CDATA[Huvudvolym]]>
+	</str>
 	<str key="UserList_Ignore">
 		<![CDATA[Ignorera vald användare]]>
 	</str>
