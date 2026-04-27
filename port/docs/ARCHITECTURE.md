@@ -103,7 +103,9 @@ A simplified-but-faithful port of `GameCanvas.run`'s inner loop, located in
   snapshot taken at `beginstroke` keeps `canMovableBlockMove` in agreement
   across clients during async play.
 - Speed cap at 7.0 units.
-- Stroke-time safety net — force-stop after ~1500 iterations (~9 sec).
+- Stroke-time safety net — force-stop after ~4000 iterations (~24 sec), matching
+  Java's `loopStuckCounter > 4000` threshold; per-ball stuck counters and the
+  bouncy-block decay typically settle strokes well before this cap.
 
 Not implemented: sand/ice surface special handling beyond the friction table,
 breakable block (40–43) visual decay (bounce works; the wall doesn't "break"

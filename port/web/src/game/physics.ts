@@ -106,8 +106,14 @@ const DIAG_OFFSET = Math.round(6 * MAGIC_OFFSET); // 4
  */
 export const PHYSICS_STEP_MS = 6;
 
-/** Hard cap on a single stroke. 1500 iterations / 166 Hz ≈ 9 seconds. */
-const MAX_STROKE_ITERATIONS = 1500;
+/** Hard cap on a single stroke. 4000 iterations / 166 Hz ≈ 24 seconds — matches
+ *  Java's `loopStuckCounter > 4000` first-tier safety threshold (GameCanvas.run
+ *  line 445). Java zeroes bounciness at that point and gives the ball another
+ *  3000 iterations to settle; we instead lean on the per-ball stuck counters
+ *  (downhill/magnet/spinning) plus the `bounciness -= 0.01` per tile-18 hit
+ *  decay (which drives super-bouncy back to static 0.84 within ~100 hits) to
+ *  organically settle stuck strokes well before this cap. */
+const MAX_STROKE_ITERATIONS = 4000;
 
 /** Apply stroke impulse with deterministic noise — matches GameCanvas.doStroke.
  *  `shootingMode` mirrors the original right-click cycle: 0=normal, 1=reverse,
