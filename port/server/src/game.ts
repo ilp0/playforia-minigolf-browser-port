@@ -396,6 +396,15 @@ export class GolfGame extends Game {
             ),
         );
 
+        // If this stroke just finished the player, the set of unfinished
+        // players shrank — clear any pending skip votes so the survivors can
+        // re-vote (or use the skip button as a solo-forfeit when only one
+        // player is left mid-track). Skipped on `nextTrack` paths because that
+        // already broadcasts its own `resetvoteskip`.
+        if (resolvedStatus !== "f" && !this.allDoneOnCurrentTrack()) {
+            this.resetSkipVotesIfAny();
+        }
+
         if (this.allDoneOnCurrentTrack()) this.nextTrack();
     }
 
@@ -421,7 +430,25 @@ export class GolfGame extends Game {
 
         this.writeAll(tabularize("game", "endstroke", id, cap, "p"));
 
+        if (!this.allDoneOnCurrentTrack()) this.resetSkipVotesIfAny();
+
         if (this.allDoneOnCurrentTrack()) this.nextTrack();
+    }
+
+    /**
+     * Clear all `hasSkipped` flags and broadcast `resetvoteskip` if anyone
+     * had voted. No-op if nobody had voted, so it's safe to call eagerly
+     * whenever the unfinished-player set shrinks.
+     */
+    private resetSkipVotesIfAny(): void {
+        let any = false;
+        for (const p of this.players) {
+            if (p.hasSkipped) {
+                p.hasSkipped = false;
+                any = true;
+            }
+        }
+        if (any) this.writeAll(tabularize("game", "resetvoteskip"));
     }
 
     private allDoneOnCurrentTrack(): boolean {
@@ -446,6 +473,19 @@ export class GolfGame extends Game {
         for (const player of this.players) {
             if (!player.hasSkipped && this.playStatus.charAt(this.getPlayerId(player)) === "f") return;
         }
+        // Vote passed — cap any player still mid-track at the stroke limit
+        // (mirroring `forfeit`). Players already holed ('t') or forfeited ('p')
+        // keep their actual score; only those still in 'f' get the max.
+        const psArr = this.playStatus.split("");
+        while (psArr.length < this.players.length) psArr.push("f");
+        for (let i = 0; i < this.players.length; i++) {
+            if (psArr[i] !== "f") continue;
+            const cap = this.maxStrokes > 0 ? this.maxStrokes : this.playerStrokesThisTrack[i] + 1;
+            this.playerStrokesThisTrack[i] = cap;
+            psArr[i] = "p";
+            this.writeAll(tabularize("game", "endstroke", i, cap, "p"));
+        }
+        this.playStatus = psArr.join("");
         this.nextTrack();
     }
 

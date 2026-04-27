@@ -234,6 +234,8 @@ export class GamePanel implements Panel {
   private chatLogEl: HTMLElement | null = null;
   private chatInputEl: HTMLInputElement | null = null;
   private chatStripEl: HTMLElement | null = null;
+  /** The `.panel-game` wrap. Used to toggle the `.is-multi` layout class. */
+  private panelEl: HTMLElement | null = null;
 
   private parsedMap: ParsedMap | null = null;
   private renderer: TrackRenderer | null = null;
@@ -338,6 +340,7 @@ export class GamePanel implements Panel {
     this.root = root;
     const wrap = document.createElement("div");
     wrap.className = "panel-game";
+    this.panelEl = wrap;
 
     const scoreboard = document.createElement("div");
     scoreboard.className = "scoreboard";
@@ -353,16 +356,7 @@ export class GamePanel implements Panel {
     wrap.appendChild(frame);
 
     const bottomBand = document.createElement("div");
-    bottomBand.style.display = "grid";
-    bottomBand.style.gridTemplateColumns = "1fr 280px";
-    // Pin the row to the flex-allocated band height. Without this the implicit
-    // grid row sizes to max-content, so the chat log's accumulating messages
-    // would grow the row taller instead of scrolling inside the log.
-    bottomBand.style.gridTemplateRows = "minmax(0, 1fr)";
-    bottomBand.style.gap = "8px";
-    bottomBand.style.padding = "4px 8px";
-    bottomBand.style.flex = "1";
-    bottomBand.style.minHeight = "0";
+    bottomBand.className = "bottom-band";
 
     const trackinfo = document.createElement("div");
     trackinfo.className = "trackinfo";
@@ -378,29 +372,29 @@ export class GamePanel implements Panel {
     left.appendChild(trackTitle);
     left.appendChild(trackAuthor);
 
+    // `.center` holds the single-player HUD: stroke counter, status hint, and
+    // the forfeit button. Hidden via CSS in multiplayer mode (see `.is-multi`),
+    // where the original Playforia layout had no such hint and the scoreboard
+    // already shows the current-track stroke count per row.
     const center = document.createElement("div");
     center.className = "center";
     const statusEl = document.createElement("div");
     statusEl.className = "hud-status";
     statusEl.textContent = t("Port_Game_LoadingSprites", "Loading sprites…");
     const strokeCountEl = document.createElement("div");
+    strokeCountEl.className = "stroke-count";
     strokeCountEl.style.fontSize = "13px";
     strokeCountEl.style.fontWeight = "bold";
     strokeCountEl.textContent = t("Port_Game_StrokeFmt", "Stroke %1", 0);
     center.appendChild(strokeCountEl);
     center.appendChild(statusEl);
 
-    // Forfeit + Skip live in a row so the existing centered HUD column doesn't
-    // grow taller when both are visible (3-player+ rooms with vote-skip).
     const buttonRow = document.createElement("div");
-    buttonRow.style.display = "flex";
-    buttonRow.style.gap = "4px";
-    buttonRow.style.justifyContent = "center";
-    buttonRow.style.marginTop = "4px";
+    buttonRow.className = "button-row";
 
     const forfeit = document.createElement("button");
     forfeit.type = "button";
-    forfeit.className = "btn-yellow";
+    forfeit.className = "btn-yellow forfeit-btn";
     forfeit.textContent = t("Port_Game_ForfeitHole", "Forfeit hole");
     forfeit.style.padding = "1px 10px";
     forfeit.style.minHeight = "auto";
@@ -408,43 +402,48 @@ export class GamePanel implements Panel {
     forfeit.addEventListener("click", () => this.forfeitHole());
     buttonRow.appendChild(forfeit);
 
-    // Skip-track vote — only meaningful in multiplayer + non-daily rooms; the
-    // visibility logic in `updateSkipButtonVisibility` keeps it hidden in
-    // 1-player and daily modes. Mirrors Java GameControlPanel's `buttonSkip`.
+    center.appendChild(buttonRow);
+
+    // Right-side container holds two stacked blocks: stats (avg + best) and
+    // actions (skip + menu). In single-player they stack vertically; in
+    // multiplayer the `.right` container becomes a horizontal row so the
+    // bottom band mirrors the original Playforia layout.
+    const right = document.createElement("div");
+    right.className = "right";
+
+    const stats = document.createElement("div");
+    stats.className = "stats";
+    const avgPar = document.createElement("div");
+    const bestPar = document.createElement("div");
+    stats.appendChild(avgPar);
+    stats.appendChild(bestPar);
+    right.appendChild(stats);
+
+    const actions = document.createElement("div");
+    actions.className = "actions";
+
+    // Skip-track — Java GameControlPanel `buttonSkip`. Lives in `.actions`
+    // so in multiplayer it sits next to the Menu button on the far right
+    // (matching the original "Radan väliinjättö" position). Hidden by
+    // `updateSkipButtonVisibility` in 1-player and daily rooms.
     const skip = document.createElement("button");
     skip.type = "button";
-    skip.className = "btn-blue";
+    skip.className = "btn-blue skip-btn";
     skip.textContent = t("GameControl_Skip", "Skip track");
     skip.style.padding = "1px 10px";
     skip.style.minHeight = "auto";
     skip.style.fontSize = "11px";
     skip.style.display = "none";
     skip.addEventListener("click", () => this.voteSkip());
-    buttonRow.appendChild(skip);
+    actions.appendChild(skip);
     this.skipButton = skip;
-    this.skipButtonHost = buttonRow;
+    this.skipButtonHost = actions;
 
-    center.appendChild(buttonRow);
-
-    const right = document.createElement("div");
-    right.className = "right";
-    const avgPar = document.createElement("div");
-    const bestPar = document.createElement("div");
-    right.appendChild(avgPar);
-    right.appendChild(bestPar);
-
-    // "Valikko" — opens a popover with name/cursor toggles, volume slider,
-    // and quit. Replaces the bottom-strip volume row from earlier so this
-    // tight band only carries one control. Also opened via ESC.
-    const menuRow = document.createElement("div");
-    menuRow.style.display = "flex";
-    menuRow.style.alignItems = "center";
-    menuRow.style.justifyContent = "flex-end";
-    menuRow.style.marginTop = "2px";
-    menuRow.style.position = "relative";
+    // "Valikko" — opens the ESC popover (settings + quit). Replaces the
+    // original "<- Valikkoon" button position.
     const menuBtn = document.createElement("button");
     menuBtn.type = "button";
-    menuBtn.className = "btn-yellow";
+    menuBtn.className = "btn-yellow menu-btn";
     menuBtn.textContent = t("Port_Game_Menu", "Menu");
     menuBtn.style.padding = "1px 12px";
     menuBtn.style.minHeight = "auto";
@@ -455,18 +454,21 @@ export class GamePanel implements Panel {
       ev.stopPropagation();
       this.toggleSettingsMenu();
     });
-    menuRow.appendChild(menuBtn);
-    right.appendChild(menuRow);
+    actions.appendChild(menuBtn);
     this.menuButtonEl = menuBtn;
+
+    right.appendChild(actions);
 
     trackinfo.appendChild(left);
     trackinfo.appendChild(center);
     trackinfo.appendChild(right);
-    bottomBand.appendChild(trackinfo);
 
+    // Chat first in DOM order — single-player CSS hides it, multi-player CSS
+    // gives it `flex: 1` so it takes the left half of the bottom band.
     const chatStrip = this.makeChatStrip();
     bottomBand.appendChild(chatStrip);
     this.chatStripEl = chatStrip;
+    bottomBand.appendChild(trackinfo);
 
     wrap.appendChild(bottomBand);
     root.appendChild(wrap);
@@ -602,6 +604,7 @@ export class GamePanel implements Panel {
     this.skipButtonHost = null;
     this.playAgainButton = null;
     this.overlay = null;
+    this.panelEl = null;
     this.root = null;
     this.players = [];
     this.pendingBeginStrokes = [];
@@ -786,15 +789,19 @@ export class GamePanel implements Panel {
         // unhandled-packet log; the comparison panel is a deferred follow-up.
         break;
       case "start":
-        // Server's "round begins" broadcast (one per game session). Mirrors
-        // the Java GamePanel.java:241 trigger for SoundManager.playNotify().
-        // Java's PlayerInfoPanel.reset() also clears voteSkip/readyForNewGame
-        // here so a fresh round doesn't start with stale badges from a
-        // play-again vote that just succeeded.
+        // Server's "round begins" broadcast — fires both at first game start
+        // AND on "uusi peli" (new game) restart after the end overlay. Reset
+        // per-game scoreboard state so a fresh round doesn't carry forward
+        // the prior game's hole scores or track index.
         for (const slot of this.players) {
           slot.votedToSkip = false;
           slot.wantsNewGame = false;
+          slot.holeScores = [];
+          slot.strokesThisTrack = 0;
+          slot.holedThisTrack = false;
+          slot.forfeitedThisTrack = false;
         }
+        this.currentTrackIdx = 0;
         // Tear down any leftover end-of-game overlay before the new round
         // starts; otherwise the play-again button stays on screen even though
         // the new game has begun.
@@ -1233,16 +1240,19 @@ export class GamePanel implements Panel {
       }
     }
     if (this.bestParEl) {
+      while (this.bestParEl.firstChild) this.bestParEl.removeChild(this.bestParEl.firstChild);
       if (info && info.plays > 0 && info.bestPar > 0) {
         const pct = (info.numBestPar / info.plays) * 100;
-        // Stitch the L-form "Best: %1 strokes" with the optional "by <player>"
-        // tail; mirrors how Java assembles the line at runtime.
+        // Two-line layout: "Paras: %1 lyöntiä by <player>" / "(%1% pelanneista)".
         const head = t("GameTrackInfo_BestResultL", "Best: %1 strokes", info.bestPar);
         const pctSuffix = t("GameTrackInfo_BestResultPercentL", "(%1% of players)", pct.toFixed(1));
         const who = bestPlayer ? " " + t("Port_Game_BestByFmt", "by %1", bestPlayer) : "";
-        this.bestParEl.textContent = `${head} ${pctSuffix}${who}`;
-      } else {
-        this.bestParEl.textContent = "";
+        const line1 = document.createElement("div");
+        line1.textContent = head + who;
+        const line2 = document.createElement("div");
+        line2.textContent = pctSuffix;
+        this.bestParEl.appendChild(line1);
+        this.bestParEl.appendChild(line2);
       }
     }
   }
@@ -1268,22 +1278,28 @@ export class GamePanel implements Panel {
       // Match the ball+cursor palette — same `playerIdx` used by render.ts.
       // The inline style overrides `.row.you` / `.row.them` colour rules.
       name.style.color = slotNickColor(i);
+      // Per-hole stroke counts. Each cell renders into its own fixed-width
+      // span (`.track-cell`) so that 2-digit scores (10+) don't shift the
+      // total/note columns out of alignment relative to other rows. Mirrors
+      // the column-aligned scoreboard in the original Java client.
       const tracksCol = document.createElement("span");
-      const cells: string[] = [];
+      tracksCol.className = "tracks-cells";
       let totalSoFar = 0;
       for (let t = 0; t < this.numTracks; t++) {
+        const cell = document.createElement("span");
+        cell.className = "track-cell";
         if (t + 1 < this.currentTrackIdx) {
           const score = p.holeScores[t] ?? 0;
-          cells.push(String(score));
+          cell.textContent = String(score);
           totalSoFar += score;
         } else if (t + 1 === this.currentTrackIdx) {
-          cells.push(String(p.strokesThisTrack));
+          cell.textContent = String(p.strokesThisTrack);
           totalSoFar += p.strokesThisTrack;
         } else {
-          cells.push("—");
+          cell.textContent = "—";
         }
+        tracksCol.appendChild(cell);
       }
-      tracksCol.textContent = cells.join("  ");
       const total = document.createElement("span");
       total.textContent = "= " + totalSoFar;
       const note = document.createElement("span");
@@ -1321,12 +1337,10 @@ export class GamePanel implements Panel {
 
   private makeChatStrip(): HTMLElement {
     const strip = document.createElement("div");
-    strip.style.display = "flex";
-    strip.style.flexDirection = "column";
-    strip.style.background = "rgba(255,255,255,0.85)";
-    strip.style.border = "1px solid #000";
-    strip.style.padding = "3px";
-    strip.style.minHeight = "0";
+    // The `.chat-strip` class is referenced by both single-player ("hide via
+    // CSS") and multi-player (`.is-multi .chat-strip { flex: 1 }`) layout
+    // rules in style.css.
+    strip.className = "chat-strip";
 
     const log = document.createElement("div");
     log.style.flex = "1";
@@ -2040,31 +2054,31 @@ export class GamePanel implements Panel {
    * skip flow); we extend that to also hide it in daily mode (the singleton
    * room has no concept of voting to skip a deterministic daily track).
    * Local-player vote also hides until the server's `resetvoteskip` clears.
+   *
+   * In multiplayer the button uses `visibility: hidden` rather than
+   * `display: none` once we've voted, so the actions column doesn't collapse
+   * and the Menu button doesn't jump positions. Single-player and daily mode
+   * collapse the space entirely (no skip is ever shown there).
    */
   private updateSkipButtonVisibility(): void {
     const btn = this.skipButton;
     if (!btn) return;
     const me = this.players[this.myPlayerId];
-    const eligible =
-      this.numPlayers > 1 &&
-      !this.dailyMode &&
-      !!me &&
-      !me.votedToSkip;
-    btn.style.display = eligible ? "" : "none";
+    const isMulti = this.numPlayers > 1 && !this.dailyMode;
+    if (!isMulti) {
+      btn.style.display = "none";
+      btn.style.visibility = "";
+      return;
+    }
+    btn.style.display = "";
+    btn.style.visibility = me && !me.votedToSkip ? "visible" : "hidden";
   }
 
   private applyChatVisibility(): void {
-    const strip = this.chatStripEl;
-    if (!strip) return;
-    const showChat = this.numPlayers > 1;
-    // Restore "flex" rather than "" — clearing the inline style would fall
-    // back to the <div> default of "block", which breaks the flex column +
-    // min-height:0 setup the log relies on to scroll instead of growing.
-    strip.style.display = showChat ? "flex" : "none";
-    const parent = strip.parentElement as HTMLElement | null;
-    if (parent) {
-      parent.style.gridTemplateColumns = showChat ? "1fr 280px" : "1fr";
-    }
+    // The `.is-multi` class on the panel root drives the entire bottom-band
+    // layout switch (chat visible on left, stroke/status/forfeit hidden,
+    // `.right` becomes a horizontal row). See style.css for the rules.
+    if (this.panelEl) this.panelEl.classList.toggle("is-multi", this.numPlayers > 1);
   }
 
   private ensurePlayerSlots(n: number): void {
