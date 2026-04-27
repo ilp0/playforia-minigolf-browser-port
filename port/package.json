@@ -19,6 +19,7 @@
     "dev:logs": "node scripts/devctl.mjs logs",
     "dev:init": "node scripts/devctl.mjs init",
     "test": "npm -w shared test",
-    "assets": "node scripts/prepare-assets.mjs"
+    "assets": "node scripts/prepare-assets.mjs",
+    "sim": "node scripts/sim-room.mjs"
   }
 }
