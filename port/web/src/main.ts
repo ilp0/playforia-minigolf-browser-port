@@ -49,7 +49,27 @@ function mountReplay(replay: DailyReplay): void {
   new ReplayPanel(replay).mount(root);
 }
 
+/**
+ * Update the `--mobile-scale` CSS variable so the landscape-touch media query
+ * can apply `transform: scale(var(--mobile-scale))` to #app. CSS `scale()`
+ * requires a unitless number; `min(100vw/735, 100vh/525)` resolves to a
+ * length and silently fails to parse, so the scale factor has to be computed
+ * in JS. Idempotent and cheap; safe to run on resize/orientation change.
+ */
+function setupMobileScale(): void {
+  const APP_W = 735;
+  const APP_H = 525;
+  const update = () => {
+    const scale = Math.min(window.innerWidth / APP_W, window.innerHeight / APP_H);
+    document.documentElement.style.setProperty("--mobile-scale", String(scale));
+  };
+  update();
+  window.addEventListener("resize", update);
+  window.addEventListener("orientationchange", update);
+}
+
 async function boot(): Promise<void> {
+  setupMobileScale();
   // Load EN first so every panel that mounts can already resolve
   // `t("Key", "default")`. If EN fails to load (e.g. assets weren't prepared),
   // panels still fall back to the inline English defaults — they just don't

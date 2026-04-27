@@ -1,6 +1,11 @@
 /* Playforia Minigolf — browser port. Visual goal: pixel-faithful match to the
    original Java AWT client (light-green background #99FF99, pastel buttons,
-   serif titles, AWT-style 3D-bevel widgets). */
+   serif titles, AWT-style 3D-bevel widgets).
+
+   Mobile/touch support is appended at the bottom: a portrait-mode "rotate
+   your phone" prompt and a transform-scale fit on the fixed 735×525 #app for
+   landscape touch devices. The game.ts mount handler hooks touch events on
+   the canvas and floats a magnifier loupe above the finger during drag-to-shoot. */
 
 *,
 *::before,
@@ -712,4 +717,237 @@ input[type="range"].win98-slider::-moz-range-thumb {
   border-bottom: 1px solid #404040;
   box-shadow: inset -1px -1px 0 #808080;
   border-radius: 0;
+}
+
+/* ---------- Mobile / touch support ---------- */
+
+/* Rotate-phone prompt: hidden by default; only shown for coarse-pointer
+   devices in portrait orientation. Lives in HTML so it appears before the
+   TS bundle even runs. */
+#rotate-prompt {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  /* Match the in-game playfield green so the prompt feels like part of the
+     world rather than an OS-style modal. */
+  background: #99ff99;
+  color: #000;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  padding: 24px;
+  text-align: center;
+  font-family: "Times New Roman", "Liberation Serif", serif;
+}
+
+#rotate-prompt .rotate-prompt__art {
+  width: 140px;
+  height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The phone is a small AWT-bezel rectangle drawn entirely with CSS — a
+   3D-bevel border, dark grey body, a screen window in pastel green with a
+   white golf ball inside, and a home indicator pill. The whole assembly
+   rotates from upright to landscape on a loop, mimicking the gesture the
+   user needs to perform. */
+#rotate-prompt .rotate-prompt__phone {
+  position: relative;
+  width: 60px;
+  height: 100px;
+  background: #c0c0c0;
+  border: 2px solid #2a2d33;
+  border-top-color: #ffffff;
+  border-left-color: #ffffff;
+  border-right-color: #404040;
+  border-bottom-color: #404040;
+  border-radius: 8px;
+  box-shadow:
+    inset 0 0 0 1px #808080,
+    0 4px 0 #2a2d33,
+    0 4px 8px rgba(0, 0, 0, 0.25);
+  animation: rotate-prompt-phone 2.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  transform-origin: 50% 50%;
+}
+
+#rotate-prompt .rotate-prompt__notch {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 18px;
+  height: 3px;
+  background: #2a2d33;
+  border-radius: 2px;
+}
+
+#rotate-prompt .rotate-prompt__screen {
+  position: absolute;
+  inset: 12px 4px 12px 4px;
+  background: #99ff99;
+  border: 1px solid #2a2d33;
+  border-top-color: #4a8040;
+  border-left-color: #4a8040;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+/* Golf ball — white circle with a faint shading dot in the corner so it
+   reads as a ball rather than a flat disc. Rolls left↔right inside the
+   "screen" so there's a hint of motion even mid-rotation. */
+#rotate-prompt .rotate-prompt__ball {
+  width: 14px;
+  height: 14px;
+  background: radial-gradient(circle at 35% 35%, #ffffff 0 60%, #c8e0c8 75%, #88a888 100%);
+  border-radius: 50%;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+  animation: rotate-prompt-ball 2.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+#rotate-prompt .rotate-prompt__home {
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 22px;
+  height: 3px;
+  background: #2a2d33;
+  border-radius: 2px;
+}
+
+#rotate-prompt .rotate-prompt__text {
+  font-size: 22px;
+  font-weight: bold;
+  max-width: 320px;
+  /* Subtle 1-px white drop so the text stays legible against the bright
+     green background, matching the original Playforia title styling. */
+  text-shadow: 0 1px 0 #ffffff;
+}
+
+/* Phone tilts from portrait to landscape and holds, then snaps back. */
+@keyframes rotate-prompt-phone {
+  0%   { transform: rotate(0deg); }
+  35%  { transform: rotate(-90deg); }
+  75%  { transform: rotate(-90deg); }
+  100% { transform: rotate(0deg); }
+}
+
+/* Ball nudges sideways on the rotation peak — implies the ball is "ready
+   to roll" once the phone is in the right orientation. */
+@keyframes rotate-prompt-ball {
+  0%   { transform: translateX(0); }
+  35%  { transform: translateX(0); }
+  55%  { transform: translateX(8px); }
+  75%  { transform: translateX(0); }
+  100% { transform: translateX(0); }
+}
+
+/* Magnifier loupe — a fixed-position circular canvas painted from the main
+   game canvas every frame while a touch drag is active. Floats above the
+   finger so the user sees what's hidden under their fingertip. */
+.aim-loupe {
+  display: none;
+  position: fixed;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  border: 3px solid #ffffff;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.6);
+  background: #99ff99;
+  pointer-events: none;
+  z-index: 1500;
+  /* Pixel art look — keep the zoomed-in pixels crisp instead of blurry. */
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+.aim-loupe.is-visible {
+  display: block;
+}
+
+/* Mobile shoot-mode cycle button — desktop right-click parity. The button
+   itself is created in TS and lives inside `.canvas-frame` so it scales with
+   the canvas under the landscape `transform: scale()`. The default rule
+   below hides it on every device; the touch-primary @media block re-enables
+   it. Uses absolute positioning anchored to the canvas-frame's lower-right
+   corner so it doesn't cover the playfield. */
+.panel-game .canvas-frame {
+  position: relative;
+}
+.panel-game .shoot-mode-btn {
+  display: none;
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  font-size: 24px;
+  font-weight: bold;
+  line-height: 1;
+  font-family: "Verdana", Tahoma, sans-serif;
+  background: rgba(255, 255, 255, 0.85);
+  color: #000;
+  border: 2px outset #d9d9d9;
+  border-radius: 6px;
+  cursor: pointer;
+  z-index: 10;
+  /* Each shootingMode picks a tint so the player can recognise the active
+     mode at a glance without reading the glyph. */
+  transition: background 0.15s ease;
+}
+.panel-game .shoot-mode-btn[data-mode="0"] { background: rgba(255, 255, 255, 0.85); }
+.panel-game .shoot-mode-btn[data-mode="1"] { background: rgba(255, 220, 160, 0.95); }
+.panel-game .shoot-mode-btn[data-mode="2"] { background: rgba(180, 220, 255, 0.95); }
+.panel-game .shoot-mode-btn[data-mode="3"] { background: rgba(220, 180, 255, 0.95); }
+.panel-game .shoot-mode-btn:active {
+  border-style: inset;
+}
+
+/* Touch device adjustments. We scope these with both `(hover: none)` and
+   `(pointer: coarse)` so they apply to phones and tablets but not to
+   touch-enabled laptops, where mouse input is still primary. */
+@media (hover: none) and (pointer: coarse) {
+  .panel-game .shoot-mode-btn { display: block; }
+
+  /* Block default scroll/zoom gestures on the play canvas — touch input is
+     consumed by drag-to-shoot. Buttons and chat scrolling outside the
+     canvas remain unaffected. */
+  .panel-game canvas {
+    touch-action: none;
+    cursor: default;
+  }
+
+  /* Portrait — show prompt, hide everything else. */
+  @media (orientation: portrait) {
+    #app { display: none !important; }
+    #rotate-prompt { display: flex; }
+  }
+
+  /* Landscape — fit the fixed-size #app inside the viewport via a uniform
+     transform, preserving the 735×525 internal layout. We can't use
+     `width: 100vw` etc. because every child has hardcoded pixel sizes
+     keyed to that 735×525 design; CSS-scaling the whole thing keeps the
+     pixel art lined up exactly while filling the screen. The scale
+     factor is computed in JS (see `setupMobileScale` in main.ts) and
+     written to `--mobile-scale` because `scale()` requires a unitless
+     number — `min(100vw/735, 100vh/525)` resolves to a length and
+     fails to parse. */
+  @media (orientation: landscape) {
+    body {
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    #app {
+      transform: scale(var(--mobile-scale, 1));
+      transform-origin: center center;
+      flex: 0 0 auto;
+    }
+  }
 }

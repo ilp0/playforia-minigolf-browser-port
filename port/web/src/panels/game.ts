@@ -71,6 +71,14 @@ function normalizeClan(raw: string | undefined): string {
  * cosmetic + bandwidth knobs without leaving the match. Volume lives on the
  * audio singleton (which has its own persistence key); the rest live here.
  */
+/**
+ * Where the magnifier loupe floats while the player drags. The default
+ * `above` puts it directly over the finger; the corner placements pin it to
+ * one side so it never moves with the finger (useful for left-handed users
+ * or anyone whose thumb covers the loupe at the natural offset).
+ */
+type LoupePlacement = "above" | "below" | "top-left" | "top-right";
+
 interface GameSettings {
   /** Render in-game name labels above other players' balls. */
   showNames: boolean;
@@ -78,13 +86,20 @@ interface GameSettings {
   sendCursor: boolean;
   /** Render peers' aim lines from their broadcast cursor positions. */
   showPeerCursors: boolean;
+  /** Mobile-only: where the magnifier loupe is placed during a drag. */
+  loupePlacement: LoupePlacement;
+  /** Mobile-only: magnifier zoom factor. 1.5 / 2 / 3 cover the useful range. */
+  loupeZoom: number;
 }
 
 const SETTINGS_KEY = "minigolf.game.settings";
+const LOUPE_PLACEMENTS: readonly LoupePlacement[] = ["above", "below", "top-left", "top-right"] as const;
 const DEFAULT_SETTINGS: GameSettings = {
   showNames: true,
   sendCursor: true,
   showPeerCursors: true,
+  loupePlacement: "above",
+  loupeZoom: 2,
 };
 
 function loadSettings(): GameSettings {
@@ -92,11 +107,19 @@ function loadSettings(): GameSettings {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return { ...DEFAULT_SETTINGS };
     const parsed = JSON.parse(raw);
+    const place: LoupePlacement = LOUPE_PLACEMENTS.includes(parsed.loupePlacement)
+      ? parsed.loupePlacement
+      : DEFAULT_SETTINGS.loupePlacement;
+    // Clamp the zoom even if a hand-edited localStorage carries a junk value.
+    const zoomRaw = typeof parsed.loupeZoom === "number" ? parsed.loupeZoom : DEFAULT_SETTINGS.loupeZoom;
+    const zoom = Math.max(1.2, Math.min(4, zoomRaw));
     return {
       showNames: typeof parsed.showNames === "boolean" ? parsed.showNames : DEFAULT_SETTINGS.showNames,
       sendCursor: typeof parsed.sendCursor === "boolean" ? parsed.sendCursor : DEFAULT_SETTINGS.sendCursor,
       showPeerCursors:
         typeof parsed.showPeerCursors === "boolean" ? parsed.showPeerCursors : DEFAULT_SETTINGS.showPeerCursors,
+      loupePlacement: place,
+      loupeZoom: zoom,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -332,6 +355,44 @@ export class GamePanel implements Panel {
   private mouseMoveHandler: ((ev: MouseEvent) => void) | null = null;
   private clickHandler: ((ev: MouseEvent) => void) | null = null;
   private contextMenuHandler: ((ev: MouseEvent) => void) | null = null;
+  /** Touch-input handlers for mobile drag-to-shoot. Stored so unmount can
+   *  detach them, and grouped with the magnifier-loupe element they update. */
+  private touchStartHandler: ((ev: TouchEvent) => void) | null = null;
+  private touchMoveHandler: ((ev: TouchEvent) => void) | null = null;
+  private touchEndHandler: ((ev: TouchEvent) => void) | null = null;
+  private touchCancelHandler: ((ev: TouchEvent) => void) | null = null;
+  /**
+   * Active touch-aim state. `activeTouchId` is the identifier of the touch we
+   * are tracking (so a second finger doesn't hijack the aim); `null` when no
+   * touch is in progress. `aimingByTouch` gates the aim-line render and the
+   * loupe so we don't draw a stale aim from the last finger position after
+   * release.
+   */
+  private activeTouchId: number | null = null;
+  private aimingByTouch = false;
+  /** Magnifier loupe — circular canvas floating above the finger during a
+   *  drag-to-shoot. Painted from the main canvas inside `draw()` so the
+   *  zoomed-in view always reflects the current aim line. */
+  private loupeEl: HTMLCanvasElement | null = null;
+  /** Mobile-only shoot-mode cycle button. Floats over the canvas (visible
+   *  only on touch-primary devices), shows the current `shootingMode` glyph,
+   *  and cycles 0..3 on tap — replacing the desktop right-click that's
+   *  unavailable on mobile. Created in `mount`, re-synced on every cycle. */
+  private shootModeBtnEl: HTMLButtonElement | null = null;
+  /** Last touch position in viewport coords — used to position the loupe. */
+  private touchClientX = 0;
+  private touchClientY = 0;
+  /**
+   * Cached "is this a phone/tablet" check via the standard touch-primary
+   * media query. On `true`, the aim line and cursor broadcasts are gated on
+   * an active touch — otherwise mouseX/Y starts at (0,0) and the aim line
+   * would point to the top-left corner before the user has even tapped.
+   * Desktop browsers (`hover: hover`) keep the always-visible aim line.
+   */
+  private isTouchPrimary =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(hover: none) and (pointer: coarse)").matches;
   /** Toggleable user prefs (names, cursor send/recv) — persisted via localStorage. */
   private settings: GameSettings = loadSettings();
   private settingsMenuEl: HTMLElement | null = null;
@@ -385,6 +446,25 @@ export class GamePanel implements Panel {
     canvas.width = 735;
     canvas.height = 375;
     frame.appendChild(canvas);
+
+    // Mobile-only shoot-mode cycle button. Lives inside `.canvas-frame` so it
+    // scales with the canvas under the landscape `transform: scale()`. CSS
+    // hides it outside touch-primary devices, so it's invisible on desktop
+    // while still being instantiated unconditionally (keeps the lifecycle
+    // simple and avoids feature-detect branching on mount).
+    const shootModeBtn = document.createElement("button");
+    shootModeBtn.type = "button";
+    shootModeBtn.className = "shoot-mode-btn";
+    shootModeBtn.setAttribute("aria-label", "Shooting mode");
+    shootModeBtn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.cycleShootingMode();
+    });
+    frame.appendChild(shootModeBtn);
+    this.shootModeBtnEl = shootModeBtn;
+    this.refreshShootModeBtn();
+
     wrap.appendChild(frame);
 
     const bottomBand = document.createElement("div");
@@ -580,11 +660,7 @@ export class GamePanel implements Panel {
       // is gated on the same "ball at rest" condition as a shot.
       if (ev.button !== 0) {
         ev.preventDefault();
-        this.shootingMode = (this.shootingMode + 1) % 4;
-        // Force the next cursor sample through the throttle so peers see the
-        // new orientation immediately, even if the cursor is stationary.
-        this.lastCursorSentX = -9999;
-        this.lastCursorSentY = -9999;
+        this.cycleShootingMode();
         return;
       }
       const [mx, my] = localCoords(ev);
@@ -612,6 +688,100 @@ export class GamePanel implements Panel {
     canvas.addEventListener("contextmenu", contextMenuHandler);
     this.contextMenuHandler = contextMenuHandler;
 
+    // ----- touch input (drag-to-shoot, mobile) ---------------------------
+    // Mirrors the mouse pipeline: touchstart/move set mouseX/Y so the existing
+    // aim-line render and cursor broadcast already work; touchend triggers the
+    // same beginstroke send as a click. preventDefault on touchstart suppresses
+    // iOS's synthesized 300 ms-later mousedown/click that would otherwise fire
+    // a *second* shot.
+    const localCoordsTouch = (t: Touch): [number, number] => {
+      const rect = canvas.getBoundingClientRect();
+      const sx = canvas.width / Math.max(rect.width, 1);
+      const sy = canvas.height / Math.max(rect.height, 1);
+      return [(t.clientX - rect.left) * sx, (t.clientY - rect.top) * sy];
+    };
+
+    // Larger no-shot deadzone for touch than for the 6.5 px mouse threshold:
+    // touch precision is ~10–30 screen px which lands as ~14–42 canvas px
+    // after the landscape-fit downscale. Anything below this counts as a
+    // tap-on-ball cancel rather than a tiny accidental nudge.
+    const TOUCH_SHOT_DEADZONE = 14;
+
+    const touchStartHandler = (ev: TouchEvent) => {
+      // Only track if there is no active touch — multi-finger doesn't aim.
+      if (this.activeTouchId !== null) return;
+      if (ev.changedTouches.length === 0) return;
+      ev.preventDefault();
+      const t = ev.changedTouches[0];
+      this.activeTouchId = t.identifier;
+      const [mx, my] = localCoordsTouch(t);
+      this.mouseX = mx;
+      this.mouseY = my;
+      this.touchClientX = t.clientX;
+      this.touchClientY = t.clientY;
+      this.aimingByTouch = true;
+      this.showLoupe();
+    };
+    canvas.addEventListener("touchstart", touchStartHandler, { passive: false });
+    this.touchStartHandler = touchStartHandler;
+
+    const findActiveTouch = (list: TouchList): Touch | null => {
+      if (this.activeTouchId === null) return null;
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].identifier === this.activeTouchId) return list[i];
+      }
+      return null;
+    };
+
+    const touchMoveHandler = (ev: TouchEvent) => {
+      const t = findActiveTouch(ev.changedTouches);
+      if (!t) return;
+      ev.preventDefault();
+      const [mx, my] = localCoordsTouch(t);
+      this.mouseX = mx;
+      this.mouseY = my;
+      this.touchClientX = t.clientX;
+      this.touchClientY = t.clientY;
+    };
+    canvas.addEventListener("touchmove", touchMoveHandler, { passive: false });
+    this.touchMoveHandler = touchMoveHandler;
+
+    const touchEndHandler = (ev: TouchEvent) => {
+      const t = findActiveTouch(ev.changedTouches);
+      if (!t) return;
+      ev.preventDefault();
+      const [mx, my] = localCoordsTouch(t);
+      this.activeTouchId = null;
+      this.aimingByTouch = false;
+      this.hideLoupe();
+      // Mirror the mousedown shoot path. Same gating: ball must be at rest.
+      const me = this.players[this.myPlayerId];
+      if (!me || me.ball.inHole || me.simulating) return;
+      const dx = me.ball.x - mx;
+      const dy = me.ball.y - my;
+      if (Math.sqrt(dx * dx + dy * dy) < TOUCH_SHOT_DEADZONE) return;
+      const ix = (me.ball.x | 0);
+      const iy = (me.ball.y | 0);
+      this.app.connection.sendData(
+        "game",
+        "beginstroke",
+        encodeCoords(ix, iy, 0) + "\t" + encodeCoords((mx | 0), (my | 0), this.shootingMode),
+      );
+    };
+    canvas.addEventListener("touchend", touchEndHandler, { passive: false });
+    this.touchEndHandler = touchEndHandler;
+
+    const touchCancelHandler = (ev: TouchEvent) => {
+      // OS interruption (notification, system gesture) — abort the aim.
+      const t = findActiveTouch(ev.changedTouches);
+      if (!t) return;
+      this.activeTouchId = null;
+      this.aimingByTouch = false;
+      this.hideLoupe();
+    };
+    canvas.addEventListener("touchcancel", touchCancelHandler);
+    this.touchCancelHandler = touchCancelHandler;
+
     void loadAtlases().then((atl) => {
       this.atlases = atl;
       this.setStatus(t("Port_Game_WaitingForTrack", "Waiting for track…"));
@@ -638,11 +808,26 @@ export class GamePanel implements Panel {
       if (this.mouseMoveHandler) this.canvas.removeEventListener("mousemove", this.mouseMoveHandler);
       if (this.clickHandler) this.canvas.removeEventListener("mousedown", this.clickHandler);
       if (this.contextMenuHandler) this.canvas.removeEventListener("contextmenu", this.contextMenuHandler);
+      if (this.touchStartHandler) this.canvas.removeEventListener("touchstart", this.touchStartHandler);
+      if (this.touchMoveHandler) this.canvas.removeEventListener("touchmove", this.touchMoveHandler);
+      if (this.touchEndHandler) this.canvas.removeEventListener("touchend", this.touchEndHandler);
+      if (this.touchCancelHandler) this.canvas.removeEventListener("touchcancel", this.touchCancelHandler);
     }
     this.keyHandler = null;
     this.mouseMoveHandler = null;
     this.clickHandler = null;
     this.contextMenuHandler = null;
+    this.touchStartHandler = null;
+    this.touchMoveHandler = null;
+    this.touchEndHandler = null;
+    this.touchCancelHandler = null;
+    this.activeTouchId = null;
+    this.aimingByTouch = false;
+    if (this.loupeEl && this.loupeEl.parentNode) {
+      this.loupeEl.parentNode.removeChild(this.loupeEl);
+    }
+    this.loupeEl = null;
+    this.shootModeBtnEl = null;
     this.canvas = null;
     this.scoreboardEl = null;
     this.statusEl = null;
@@ -1039,6 +1224,7 @@ export class GamePanel implements Panel {
       // there's no per-turn boundary, so reset on every track change so a
       // mode picked on the previous hole doesn't leak into the new one.
       this.shootingMode = 0;
+      this.refreshShootModeBtn();
 
       const author = extractField(f, "A ") ?? "";
       const name = extractField(f, "N ") ?? "";
@@ -1156,7 +1342,10 @@ export class GamePanel implements Panel {
     // Java parity: shootingMode resets after the shot is taken. The shooter's
     // server echo is the trigger here so the reset survives any local race
     // with a right-click made between sending the click and the echo.
-    if (id === this.myPlayerId) this.shootingMode = 0;
+    if (id === this.myPlayerId) {
+      this.shootingMode = 0;
+      this.refreshShootModeBtn();
+    }
     // Record OUR strokes when in daily mode for the share-link replay. Stored
     // raw (4-char base36 coords + uint32 seed) so encoding the link is just a
     // straight JSON pack — no further processing needed.
@@ -1216,6 +1405,9 @@ export class GamePanel implements Panel {
     const me = this.players[this.myPlayerId];
     if (!me) return;
     if (me.simulating || me.ball.inHole || me.holedThisTrack || me.forfeitedThisTrack) return;
+    // Touch devices: only broadcast while actively aiming, otherwise peers
+    // would see a frozen aim line at our last finger position.
+    if (this.isTouchPrimary && !this.aimingByTouch) return;
     if (nowMs - this.lastCursorSentMs < 66) return; // 15 Hz cap
     const cx = this.mouseX | 0;
     const cy = this.mouseY | 0;
@@ -1589,7 +1781,11 @@ export class GamePanel implements Panel {
     }
     let aim: AimLine | null = null;
     const me = this.players[this.myPlayerId];
-    if (me && !me.ball.inHole && !me.simulating) {
+    // On touch-primary devices the aim line only shows while a finger is
+    // actively dragging — without this gate, mouseX/Y stays at the last
+    // touch point (or the initial 0,0) and we'd render a stale/origin aim.
+    const aimSuppressedByTouch = this.isTouchPrimary && !this.aimingByTouch;
+    if (me && !me.ball.inHole && !me.simulating && !aimSuppressedByTouch) {
       aim = {
         fromX: me.ball.x,
         fromY: me.ball.y,
@@ -1683,6 +1879,158 @@ export class GamePanel implements Panel {
       }
     }
     this.renderer.drawFrame(ctx, sprites, aim, peerAims);
+    // Update the magnifier loupe AFTER the renderer has painted this frame,
+    // so the zoomed-in copy includes the just-drawn aim line. Sampling in a
+    // touchmove callback would lag the aim line by one frame.
+    if (this.aimingByTouch) this.drawLoupe();
+  }
+
+  // ----- magnifier loupe (mobile) ---------------------------------------
+
+  /**
+   * Mount the loupe canvas on first use and tag it visible. The element lives
+   * directly under <body> (position: fixed) so the landscape transform on
+   * #app doesn't affect its size — we want a constant 120 px circle floating
+   * over the finger regardless of the global scale factor.
+   */
+  private showLoupe(): void {
+    if (!this.loupeEl) {
+      const el = document.createElement("canvas");
+      el.className = "aim-loupe";
+      el.width = 120;
+      el.height = 120;
+      document.body.appendChild(el);
+      this.loupeEl = el;
+    }
+    this.loupeEl.classList.add("is-visible");
+    // Position immediately so the loupe doesn't pop in at (0,0); content gets
+    // painted on the next draw() tick.
+    this.positionLoupe();
+  }
+
+  private hideLoupe(): void {
+    if (this.loupeEl) this.loupeEl.classList.remove("is-visible");
+  }
+
+  /**
+   * Place the loupe according to the user's `loupePlacement` setting:
+   *  - `above` / `below`: track the finger with a 110 px offset; the
+   *    fallback flip happens automatically when the finger is too close to
+   *    the screen edge in that direction.
+   *  - `top-left` / `top-right`: pin to a viewport corner so the loupe never
+   *    moves with the finger (useful when the finger position is fine but
+   *    the user wants the magnified view in a stable spot).
+   *  All variants are clamped to stay fully on screen.
+   */
+  private positionLoupe(): void {
+    if (!this.loupeEl) return;
+    const size = 120;
+    const margin = 8;
+    const fingerGap = 110;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let left = 0;
+    let top = 0;
+    switch (this.settings.loupePlacement) {
+      case "top-left":
+        left = margin;
+        top = margin;
+        break;
+      case "top-right":
+        left = vw - margin - size;
+        top = margin;
+        break;
+      case "below":
+        left = this.touchClientX - size / 2;
+        top = this.touchClientY + fingerGap;
+        // Flip up if there's no room below.
+        if (top + size > vh - margin) top = this.touchClientY - fingerGap - size;
+        break;
+      case "above":
+      default:
+        left = this.touchClientX - size / 2;
+        top = this.touchClientY - fingerGap - size;
+        // Flip down if there's no room above.
+        if (top < margin) top = this.touchClientY + fingerGap;
+        break;
+    }
+    // Viewport clamp common to all placements.
+    if (left < margin) left = margin;
+    if (left + size > vw - margin) left = vw - margin - size;
+    if (top < margin) top = margin;
+    if (top + size > vh - margin) top = vh - margin - size;
+    this.loupeEl.style.left = `${left}px`;
+    this.loupeEl.style.top = `${top}px`;
+  }
+
+  /** Sample around the touch point on the main canvas into the 120×120 loupe
+   *  canvas at the user's chosen zoom factor, with a crosshair overlay
+   *  marking the exact aim point. */
+  private drawLoupe(): void {
+    if (!this.loupeEl || !this.canvas) return;
+    this.positionLoupe();
+    const lctx = this.loupeEl.getContext("2d");
+    if (!lctx) return;
+    // Source region size = loupe size / zoom. Smaller source = stronger zoom.
+    const zoom = this.settings.loupeZoom;
+    const sampleSize = Math.round(120 / zoom);
+    const sx = Math.round(this.mouseX - sampleSize / 2);
+    const sy = Math.round(this.mouseY - sampleSize / 2);
+    lctx.imageSmoothingEnabled = false;
+    lctx.fillStyle = "#99ff99";
+    lctx.fillRect(0, 0, 120, 120);
+    lctx.drawImage(
+      this.canvas,
+      sx, sy, sampleSize, sampleSize,
+      0, 0, 120, 120,
+    );
+    // Crosshair at the loupe centre — marks the exact aim point under the
+    // finger. Two short red strokes with a 6 px gap so the actual pixel of
+    // interest stays visible.
+    lctx.strokeStyle = "rgba(255, 30, 30, 0.95)";
+    lctx.lineWidth = 2;
+    lctx.beginPath();
+    lctx.moveTo(60, 44); lctx.lineTo(60, 56);
+    lctx.moveTo(60, 64); lctx.lineTo(60, 76);
+    lctx.moveTo(44, 60); lctx.lineTo(56, 60);
+    lctx.moveTo(64, 60); lctx.lineTo(76, 60);
+    lctx.stroke();
+  }
+
+  // ----- shoot-mode cycle (mobile parity for desktop right-click) ------
+
+  /**
+   * Cycle shootingMode through 0..3 (normal → reverse → 90° CW → 90° CCW)
+   * and force the next peer-cursor packet through the throttle so watchers
+   * see the new orientation immediately even if the cursor is stationary.
+   * Called from the desktop right-click path AND the mobile in-canvas
+   * shoot-mode button — both go through here so the button glyph and the
+   * cursor broadcast stay in lockstep.
+   */
+  private cycleShootingMode(): void {
+    this.shootingMode = (this.shootingMode + 1) % 4;
+    this.lastCursorSentX = -9999;
+    this.lastCursorSentY = -9999;
+    this.refreshShootModeBtn();
+  }
+
+  /** Update the mobile shoot-mode button glyph + a11y label to match the
+   *  current `shootingMode`. Cheap; safe to call on every cycle/reset. */
+  private refreshShootModeBtn(): void {
+    if (!this.shootModeBtnEl) return;
+    // Glyph picks: a clear-direction-of-aim icon for each mode. The unicode
+    // arrows render reliably at small size and don't need a sprite.
+    const glyphs = ["→", "←", "↻", "↺"];
+    const labels = [
+      "Normal aim",
+      "Reverse aim",
+      "Rotate 90° clockwise",
+      "Rotate 90° counter-clockwise",
+    ];
+    const i = this.shootingMode | 0;
+    this.shootModeBtnEl.textContent = glyphs[i] ?? glyphs[0];
+    this.shootModeBtnEl.setAttribute("aria-label", labels[i] ?? labels[0]);
+    this.shootModeBtnEl.setAttribute("data-mode", String(i));
   }
 
   // ----- game-end overlay -----------------------------------------------
@@ -2077,6 +2425,90 @@ export class GamePanel implements Panel {
         saveSettings(this.settings);
       },
     );
+
+    // Mobile-only loupe controls. Hidden on desktop where there's no
+    // magnifier in play; appended in a divider'd block so the rest of the
+    // menu still reads as the existing AWT-style settings list.
+    if (this.isTouchPrimary) {
+      const sep = document.createElement("div");
+      sep.style.borderTop = "1px solid #ddd";
+      sep.style.margin = "4px 0 2px";
+      menu.appendChild(sep);
+
+      const heading = document.createElement("div");
+      heading.textContent = t("Port_Game_Menu_MobileSection", "Mobile controls");
+      heading.style.fontWeight = "bold";
+      heading.style.padding = "2px 0";
+      menu.appendChild(heading);
+
+      // Loupe placement — radio-style segmented row. Picking a value
+      // immediately persists; the next touch-drag uses the new placement.
+      const placeRow = document.createElement("div");
+      placeRow.style.display = "flex";
+      placeRow.style.alignItems = "center";
+      placeRow.style.gap = "6px";
+      placeRow.style.padding = "2px 0";
+      const placeLabel = document.createElement("span");
+      placeLabel.textContent = t("Port_Game_Menu_LoupePlacement", "Loupe");
+      placeLabel.style.minWidth = "48px";
+      placeRow.appendChild(placeLabel);
+      const placeSelect = document.createElement("select");
+      const placeOpts: Array<[LoupePlacement, string]> = [
+        ["above", t("Port_Game_Menu_LoupeAbove", "Above finger")],
+        ["below", t("Port_Game_Menu_LoupeBelow", "Below finger")],
+        ["top-left", t("Port_Game_Menu_LoupeTopLeft", "Top-left corner")],
+        ["top-right", t("Port_Game_Menu_LoupeTopRight", "Top-right corner")],
+      ];
+      for (const [value, label] of placeOpts) {
+        const opt = document.createElement("option");
+        opt.value = value;
+        opt.textContent = label;
+        if (this.settings.loupePlacement === value) opt.selected = true;
+        placeSelect.appendChild(opt);
+      }
+      placeSelect.style.flex = "1";
+      placeSelect.addEventListener("change", () => {
+        const v = placeSelect.value as LoupePlacement;
+        if (LOUPE_PLACEMENTS.includes(v)) {
+          this.settings.loupePlacement = v;
+          saveSettings(this.settings);
+        }
+      });
+      placeRow.appendChild(placeSelect);
+      menu.appendChild(placeRow);
+
+      // Loupe zoom — range slider. Steps of 0.25 cover 1.5×–3× cleanly.
+      const zoomRow = document.createElement("div");
+      zoomRow.style.display = "flex";
+      zoomRow.style.alignItems = "center";
+      zoomRow.style.gap = "6px";
+      zoomRow.style.padding = "2px 0";
+      const zoomLabel = document.createElement("span");
+      zoomLabel.textContent = t("Port_Game_Menu_LoupeZoom", "Zoom");
+      zoomLabel.style.minWidth = "48px";
+      zoomRow.appendChild(zoomLabel);
+      const zoomSlider = document.createElement("input");
+      zoomSlider.type = "range";
+      zoomSlider.className = "win98-slider";
+      zoomSlider.min = "1.2";
+      zoomSlider.max = "4";
+      zoomSlider.step = "0.1";
+      zoomSlider.value = String(this.settings.loupeZoom);
+      zoomSlider.style.flex = "1";
+      const zoomValue = document.createElement("span");
+      zoomValue.style.minWidth = "30px";
+      zoomValue.style.textAlign = "right";
+      zoomValue.textContent = `${this.settings.loupeZoom.toFixed(1)}×`;
+      zoomSlider.addEventListener("input", () => {
+        const v = zoomSlider.valueAsNumber;
+        this.settings.loupeZoom = v;
+        zoomValue.textContent = `${v.toFixed(1)}×`;
+        saveSettings(this.settings);
+      });
+      zoomRow.appendChild(zoomSlider);
+      zoomRow.appendChild(zoomValue);
+      menu.appendChild(zoomRow);
+    }
 
     // Volume slider — moved here from the bottom strip.
     const volRow = document.createElement("div");

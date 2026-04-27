@@ -2,13 +2,34 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
     <title>Playforia Minigolf</title>
     <link rel="icon" href="/picture/agolf/icon.png" />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
     <div id="app"></div>
+    <!-- Touch-only portrait prompt. Hidden by default; CSS shows it when the
+         viewport is portrait on a coarse-pointer device. Kept in markup so it
+         appears even before main.ts runs. The phone/ball pair is built from
+         CSS shapes so it matches the AWT-era pastel-green theme. -->
+    <div id="rotate-prompt" aria-hidden="true">
+      <div class="rotate-prompt__art" aria-hidden="true">
+        <div class="rotate-prompt__phone">
+          <span class="rotate-prompt__notch"></span>
+          <span class="rotate-prompt__screen">
+            <span class="rotate-prompt__ball"></span>
+          </span>
+          <span class="rotate-prompt__home"></span>
+        </div>
+      </div>
+      <div class="rotate-prompt__text">
+        Käännä puhelin sivuttain
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
