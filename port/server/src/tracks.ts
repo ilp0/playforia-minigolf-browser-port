@@ -90,15 +90,22 @@ export function networkSerialize(stats: TrackStats): string {
     // Java's networkSerialize doesn't include this; we add it as a port extension
     // because the client UI surfaces tags now.
     const cLine = "C " + (t.categories.length > 0 ? t.categories.join(",") : "");
+    // Special-settings flags (mines/magnets/teleports visibility + illusion-wall
+    // shadow). Java's networkSerialize omits this — combined with the buggy
+    // `length() != 6` skip in VersionedTrackFileParser the original client
+    // never honored S at all. The port forwards the raw S body so the renderer
+    // can apply it. Empty string when the track file has no S line; the client
+    // treats that as all-false (Java parser default).
+    const sLine = "S " + (t.settings ?? "");
 
     if (stats.bestPar < 0) {
-        return tabularize("V 1", "A " + t.author, "N " + t.name, "T " + t.map, cLine, iLine, rLine);
+        return tabularize("V 1", "A " + t.author, "N " + t.name, "T " + t.map, cLine, sLine, iLine, rLine);
     }
 
     const bestPlayer = stats.bestPlayer ?? "";
     const bestEpoch = stats.bestParEpoch ?? 0;
     const bLine = "B " + commaize(bestPlayer, bestEpoch);
-    return tabularize("V 1", "A " + t.author, "N " + t.name, "T " + t.map, cLine, iLine, bLine, rLine);
+    return tabularize("V 1", "A " + t.author, "N " + t.name, "T " + t.map, cLine, sLine, iLine, bLine, rLine);
 }
 
 /**

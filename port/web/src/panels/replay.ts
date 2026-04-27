@@ -157,6 +157,10 @@ export class ReplayPanel implements Panel {
     try {
       this.atlases = await loadAtlases();
       this.parsedMap = buildMap(this.replay.t, this.atlases);
+      // DailyReplay doesn't carry the track's S-line body (yet) so the
+      // renderer defaults to all-false flags — mines/magnets/teleports hide,
+      // illusion walls don't cast shadows. Matches Java's "no S" default and
+      // is acceptable since replay physics doesn't depend on visibility.
       this.renderer = new TrackRenderer(this.parsedMap, this.atlases);
       this.placeAtFirstStrokeOrigin();
       this.updateStrokeLabel();

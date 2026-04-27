@@ -134,12 +134,16 @@ server → d K+6 game<TAB>starttrack<TAB>{playStatus}<TAB>{gameId}<TAB>{trackDat
 
 `{trackData}` is the V1 networkSerialize body. Tab-separated lines:
 ```
-V 1<TAB>A {author}<TAB>N {name}<TAB>T {map}<TAB>C {categories}
+V 1<TAB>A {author}<TAB>N {name}<TAB>T {map}<TAB>C {categories}<TAB>S {settings}
 <TAB>I {plays},{strokes},{bestPar},{numBestPar}<TAB>B {bestPlayer},{bestEpochMs}
 <TAB>R {r0},{r1},...,{r10}
 ```
-The `B` line is omitted if `bestPar < 0`. The `C` line is OUR port extension —
-Java doesn't include it. Use `extractField(fields, "C ")` on the client.
+The `B` line is omitted if `bestPar < 0`. The `C` and `S` lines are OUR port
+extensions — Java doesn't include them. `S` carries the four-flag visibility
+string (`mines/magnets/teleports/illusion-shadows`, plus the legacy 2-digit
+player-range suffix); use `parseSettingsFlags` from `@minigolf/shared` to
+decode the first four chars. Use `extractField(fields, "C ")` /
+`extractField(fields, "S ")` on the client.
 
 ## Game info packet (15 fields)
 

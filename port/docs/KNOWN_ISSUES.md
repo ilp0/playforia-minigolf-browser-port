@@ -99,9 +99,13 @@ A few non-obvious pitfalls when modifying things:
   watch out.
 - **`networkSerialize` has a port-specific addition.** It now includes a
   `C <categories>` line that Java's `FileSystemTrackStats.networkSerialize`
-  doesn't emit. Clients use it for the in-game tag chips. If you ever
-  cross-test against a real Java client, expect the Java client to ignore
-  this line (it scans for known prefixes only).
+  doesn't emit, plus an `S <settings>` line that the Java server also
+  omitted (the Java client never honored these flags because of a parser
+  typo on the receiving side — see `parseSettingsFlags` in
+  `shared/src/track.ts`). Clients use C for the in-game tag chips and S
+  for tile-visibility / illusion-shadow rendering. If you ever cross-test
+  against a real Java client, expect it to ignore both lines (it scans
+  for known prefixes only).
 - **The shooter waits for the server broadcast.** Don't optimize the
   click→impulse path by applying locally — it would desync everyone.
 - **HMR delivers physics changes instantly.** The Vite dev server hot-reloads
