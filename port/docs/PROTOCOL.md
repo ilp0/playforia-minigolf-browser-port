@@ -40,10 +40,13 @@ server → d 0 status<TAB>login
 client → d 1 language<TAB>en   (en|fi|sv — server records, no reply)
 client → d 2 logintype<TAB>nr  (nr = guest; the only one we implement)
 server → d 1 status<TAB>login  (yes, twice — Java oddity)
-client → d 3 nick<TAB>{name}   (PORT EXTENSION — optional; if omitted or
+client → d 3 cid<TAB>{uuid}    (PORT EXTENSION — persistent browser id from
+                                localStorage; analytics only, no protocol
+                                use. Optional; missing = no cid logged.)
+client → d 4 nick<TAB>{name}   (PORT EXTENSION — optional; if omitted or
                                 rejected, server falls back to a random
                                 `~anonym-` placeholder)
-client → d 4 login
+client → d 5 login
 server → d 2 basicinfo<TAB>t<TAB>0<TAB>t<TAB>t
 server → d 3 status<TAB>lobbyselect<TAB>300
 ```

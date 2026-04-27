@@ -3,6 +3,74 @@ import type { App } from "../app.ts";
 import type { Panel } from "../panel.ts";
 import { i18n, saveLang, t, type Lang } from "../i18n.ts";
 
+const CLIENT_ID_STORAGE_KEY = "mg.clientId";
+
+/**
+ * Persistent per-browser identifier kept in localStorage. Survives page
+ * refreshes (and even browser restarts) but resets on cleared site data,
+ * private windows, or a different browser/profile. Format is the platform
+ * `crypto.randomUUID()` (RFC 4122 v4) when available, falling back to a
+ * compact random string for execution contexts that don't expose it
+ * (very old test runners, mostly).
+ *
+ * The server only consumes this for analytics — it's logged in
+ * player_login / player_disconnect / player_reconnect, never used for
+ * authentication or session takeover, so a forged or shared id only
+ * confuses our own dashboards.
+ */
+function getOrCreateClientId(): string {
+  try {
+    const existing = localStorage.getItem(CLIENT_ID_STORAGE_KEY);
+    if (existing && existing.length > 0) return existing;
+  } catch {
+    // localStorage unavailable (private mode quota, sandbox). Fall through
+    // and mint a transient id — it'll change on every refresh, which makes
+    // the analytics weaker but still better than nothing.
+  }
+  const fresh = mintClientId();
+  try {
+    localStorage.setItem(CLIENT_ID_STORAGE_KEY, fresh);
+  } catch {
+    /* ignore */
+  }
+  return fresh;
+}
+
+function mintClientId(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  // Fallback: 16 bytes of Math.random in hex. Not cryptographically secure,
+  // but the cid only labels analytics rows — collision risk is what matters,
+  // and 128 bits is plenty for that.
+  let s = "";
+  for (let i = 0; i < 32; i++) s += Math.floor(Math.random() * 16).toString(16);
+  return s;
+}
+
+const NICK_STORAGE_KEY = "pmg.nick";
+
+function loadSavedNick(): string | null {
+  try {
+    const v = window.localStorage.getItem(NICK_STORAGE_KEY);
+    if (v && v.length > 0) return v;
+  } catch {
+    // localStorage may throw in private mode / sandboxed iframes.
+  }
+  return null;
+}
+
+function saveNick(nick: string): void {
+  try {
+    if (nick.length === 0) {
+      window.localStorage.removeItem(NICK_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(NICK_STORAGE_KEY, nick);
+    }
+  } catch {
+    // noop
+  }
+}
+
 /**
  * Drives the login handshake:
  *   c new (already sent during loading)
@@ -45,7 +113,7 @@ export class LoginPanel implements Panel {
     const nameInput = document.createElement("input");
     nameInput.type = "text";
     nameInput.id = "field-username";
-    nameInput.value = "Guest" + this.randomDigits(4);
+    nameInput.value = loadSavedNick() ?? "Guest" + this.randomDigits(4);
     nameInput.maxLength = 20;
     nameRow.appendChild(nameLabel);
     nameRow.appendChild(nameInput);
@@ -196,6 +264,7 @@ export class LoginPanel implements Panel {
     // Server-side sanitiser will accept/reject; we only strip our own framing
     // chars here so we never split the packet on the wire.
     const nick = rawNick.replace(/[\r\n\t]+/g, " ").slice(0, 20);
+    saveNick(nick);
 
     // Full guest-login handshake. The server processes these in order; the
     // final `login` is what triggers basicinfo + status\tlobbyselect.
@@ -203,9 +272,14 @@ export class LoginPanel implements Panel {
     // uses it as the player's display name instead of the random `~anonym-`
     // placeholder, so other players (and ghost labels in daily mode) see the
     // name the user chose at the login screen.
+    // `cid` is the port's persistent browser id (localStorage UUID). The
+    // server logs it in player_login/disconnect/reconnect events so an
+    // operator scanning the analytics log can tell "same browser refreshing"
+    // apart from "two unrelated guests on the same NAT".
     this.app.connection.sendData("version", 35);
     this.app.connection.sendData("language", lang);
     this.app.connection.sendData("logintype", "nr");
+    this.app.connection.sendData("cid", getOrCreateClientId());
     if (nick) this.app.connection.sendData("nick", nick);
     this.app.connection.sendData("login");
 

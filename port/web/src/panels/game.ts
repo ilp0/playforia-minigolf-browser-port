@@ -151,6 +151,28 @@ interface PlayerSlot {
   /** This player gave up on the current track. */
   forfeitedThisTrack: boolean;
   /**
+   * Java `playerVotedToSkip[player]`. Set when we receive `game voteskip <id>`
+   * from the server (or locally when *we* press skip — the server doesn't
+   * echo back the sender). Cleared on every `resetvoteskip` and on starttrack.
+   * Drives the "(Vote: skip track)" badge in the scoreboard row.
+   */
+  votedToSkip: boolean;
+  /**
+   * Java `playerReadyForNewGame[player]`. Set when we receive `game rfng <id>`
+   * (or locally when *we* press the play-again button — server doesn't echo).
+   * Drives the "(Wants a new game!)" badge after the game ends.
+   */
+  wantsNewGame: boolean;
+  /**
+   * Java `playerLeaveReasons[player]`. 0 = present, otherwise the part-reason
+   * byte from `game part <id> <reason>`:
+   *   4 = USERLEFT (voluntary back)
+   *   5 = CONN_PROBLEM (network blip / closed tab)
+   *   6 = SWITCHEDLOBBY (silent — name nulled, no badge)
+   * Drives the trailing badge in the scoreboard row for parted players.
+   */
+  partReason: number;
+  /**
    * Spawn for this player on the current track. On multi-spawn tracks each
    * colour-keyed reset marker (shapes 48..51) yields a per-player spawn; the
    * common shape-24 marker is the fallback. Used when constructing the per-
@@ -234,6 +256,24 @@ export class GamePanel implements Panel {
   /** beginstroke packets that arrived before atlases or track were ready. */
   private pendingBeginStrokes: string[][] = [];
   private pendingStartTrack: string[] | null = null;
+  /**
+   * Per-track score multipliers from the `scoringmulti` packet (Java
+   * `playerInfoPanel.trackScoresMultipliers`). The server doesn't currently
+   * emit `scoringmulti`, so this stays empty and every track is treated as 1×.
+   * When populated, `handleStartTrack` posts a chat notice on a new track
+   * whose multiplier is > 1, mirroring Java's `GameChat_ScoreMultiNotify`.
+   */
+  private trackScoresMultipliers: number[] = [];
+  /**
+   * In-game skip / new-game buttons. Recreated on each `setState`-equivalent
+   * transition (track change, end-of-game) so visibility tracks the Java
+   * GameControlPanel's add/remove dance. The `skipButton` is detached from
+   * the DOM after the local player votes (and re-attached on `resetvoteskip`)
+   * so the user can't spam-vote.
+   */
+  private skipButton: HTMLButtonElement | null = null;
+  private skipButtonHost: HTMLElement | null = null;
+  private playAgainButton: HTMLButtonElement | null = null;
 
   private mouseX = 0;
   private mouseY = 0;
@@ -350,16 +390,41 @@ export class GamePanel implements Panel {
     center.appendChild(strokeCountEl);
     center.appendChild(statusEl);
 
+    // Forfeit + Skip live in a row so the existing centered HUD column doesn't
+    // grow taller when both are visible (3-player+ rooms with vote-skip).
+    const buttonRow = document.createElement("div");
+    buttonRow.style.display = "flex";
+    buttonRow.style.gap = "4px";
+    buttonRow.style.justifyContent = "center";
+    buttonRow.style.marginTop = "4px";
+
     const forfeit = document.createElement("button");
     forfeit.type = "button";
     forfeit.className = "btn-yellow";
     forfeit.textContent = t("Port_Game_ForfeitHole", "Forfeit hole");
-    forfeit.style.marginTop = "4px";
     forfeit.style.padding = "1px 10px";
     forfeit.style.minHeight = "auto";
     forfeit.style.fontSize = "11px";
     forfeit.addEventListener("click", () => this.forfeitHole());
-    center.appendChild(forfeit);
+    buttonRow.appendChild(forfeit);
+
+    // Skip-track vote — only meaningful in multiplayer + non-daily rooms; the
+    // visibility logic in `updateSkipButtonVisibility` keeps it hidden in
+    // 1-player and daily modes. Mirrors Java GameControlPanel's `buttonSkip`.
+    const skip = document.createElement("button");
+    skip.type = "button";
+    skip.className = "btn-blue";
+    skip.textContent = t("GameControl_Skip", "Skip track");
+    skip.style.padding = "1px 10px";
+    skip.style.minHeight = "auto";
+    skip.style.fontSize = "11px";
+    skip.style.display = "none";
+    skip.addEventListener("click", () => this.voteSkip());
+    buttonRow.appendChild(skip);
+    this.skipButton = skip;
+    this.skipButtonHost = buttonRow;
+
+    center.appendChild(buttonRow);
 
     const right = document.createElement("div");
     right.className = "right";
@@ -533,10 +598,14 @@ export class GamePanel implements Panel {
     this.chatLogEl = null;
     this.chatInputEl = null;
     this.chatStripEl = null;
+    this.skipButton = null;
+    this.skipButtonHost = null;
+    this.playAgainButton = null;
     this.overlay = null;
     this.root = null;
     this.players = [];
     this.pendingBeginStrokes = [];
+    this.trackScoresMultipliers = [];
   }
 
   // ----- packet routing -------------------------------------------------
@@ -568,6 +637,7 @@ export class GamePanel implements Panel {
         this.ensurePlayerSlots(this.numPlayers);
         this.scoreboardDirty = true;
         this.applyChatVisibility();
+        this.updateSkipButtonVisibility();
         break;
       case "owninfo":
         this.myPlayerId = parseInt(f[2] ?? "0", 10) || 0;
@@ -620,17 +690,117 @@ export class GamePanel implements Panel {
         break;
       case "part":
         {
+          // Java GamePanel.handlePacket "part" reads args[3] as the reason byte
+          // and routes to PlayerInfoPanel.setPlayerPartStatus, which:
+          //   reason 6 → silent name-null (no chat line)
+          //   reason 4 → "Left the game" badge
+          //   reason 5 → "Connection problem" badge
+          // We mirror those branches here.
           const id = parseInt(f[2] ?? "0", 10) || 0;
-          if (this.players[id]) {
-            this.appendChat("* " + t("Chat_Game_PlayerLeft", "Player %1 left the game", this.players[id].nick), "system");
-            this.players[id].active = false;
+          const reason = parseInt(f[3] ?? "4", 10) || 4;
+          const slot = this.players[id];
+          if (slot) {
+            if (reason === 6) {
+              // SWITCHEDLOBBY — silent removal, just clear the slot's name
+              // so the scoreboard row no longer references them.
+              slot.nick = "";
+              slot.active = false;
+              slot.partReason = 0;
+            } else {
+              slot.active = false;
+              slot.partReason = reason;
+              const nick = slot.nick || t("Port_Game_PlayerFmt", "Player %1", id + 1);
+              if (reason === 5) {
+                this.appendChat(
+                  "* " + t("Port_Chat_PlayerConnProblem", "%1 disconnected (connection problem)", nick),
+                  "system",
+                );
+              } else {
+                this.appendChat(
+                  "* " + t("Chat_Game_PlayerLeft", "Player %1 left the game", nick),
+                  "system",
+                );
+              }
+            }
           }
           this.scoreboardDirty = true;
         }
         break;
+      case "voteskip":
+        {
+          // Server broadcasts to OTHER players only; the local clicker sets
+          // the flag in `voteSkip()`. So this branch fires for peers' votes.
+          const id = parseInt(f[2] ?? "0", 10) || 0;
+          const slot = this.players[id];
+          if (slot) {
+            slot.votedToSkip = true;
+            const nick = slot.nick || t("Port_Game_PlayerFmt", "Player %1", id + 1);
+            this.appendChat(
+              "* " + t("Port_Chat_VoteSkip", "%1 voted to skip the track", nick),
+              "system",
+            );
+          }
+          this.scoreboardDirty = true;
+        }
+        break;
+      case "resetvoteskip":
+        // Server broadcasts on every starttrack and on game start. Java's
+        // `voteSkipReset()` clears all flags; we mirror that and re-show the
+        // skip button so the local player can vote again on the new track.
+        for (const slot of this.players) slot.votedToSkip = false;
+        this.updateSkipButtonVisibility();
+        this.scoreboardDirty = true;
+        break;
+      case "rfng":
+        {
+          // "Ready for new game" from a peer (server uses writeExcluding for
+          // this, so the local clicker sets the flag in `requestNewGame()`).
+          const id = parseInt(f[2] ?? "0", 10) || 0;
+          const slot = this.players[id];
+          if (slot) {
+            slot.wantsNewGame = true;
+            const nick = slot.nick || t("Port_Game_PlayerFmt", "Player %1", id + 1);
+            this.appendChat(
+              "* " + t("Port_Chat_WantsNewGame", "%1 wants a new game", nick),
+              "system",
+            );
+          }
+          this.scoreboardDirty = true;
+        }
+        break;
+      case "scoringmulti":
+        {
+          // Per-track score multipliers. Stored once; each starttrack reads
+          // the entry for the new track and posts a chat notice if > 1.
+          const arr: number[] = [];
+          for (let i = 2; i < f.length; i++) {
+            arr.push(parseInt(f[i] ?? "1", 10) || 1);
+          }
+          this.trackScoresMultipliers = arr;
+        }
+        break;
+      case "cr":
+        // Per-track comparison results. Java feeds this into the player-info
+        // panel's results-comparison view, which the port hasn't built yet
+        // (issue #30). Accept and discard so the verb stops appearing in the
+        // unhandled-packet log; the comparison panel is a deferred follow-up.
+        break;
       case "start":
         // Server's "round begins" broadcast (one per game session). Mirrors
         // the Java GamePanel.java:241 trigger for SoundManager.playNotify().
+        // Java's PlayerInfoPanel.reset() also clears voteSkip/readyForNewGame
+        // here so a fresh round doesn't start with stale badges from a
+        // play-again vote that just succeeded.
+        for (const slot of this.players) {
+          slot.votedToSkip = false;
+          slot.wantsNewGame = false;
+        }
+        // Tear down any leftover end-of-game overlay before the new round
+        // starts; otherwise the play-again button stays on screen even though
+        // the new game has begun.
+        this.removeOverlay();
+        this.updateSkipButtonVisibility();
+        this.scoreboardDirty = true;
         audio.playNotify();
         break;
       case "starttrack":
@@ -680,9 +850,13 @@ export class GamePanel implements Panel {
         break;
       case "dailymode":
         // Server tagging this room as the daily challenge. f[2] is the UTC
-        // date key the server picked the track for.
+        // date key the server picked the track for. The packet arrives AFTER
+        // `starttrack` (server.joinDaily ordering), so refresh the skip
+        // button — the prior starttrack would have shown it for a daily
+        // room with two or more occupants because dailyMode was still false.
         this.dailyMode = true;
         this.dailyDateKey = f[2] ?? null;
+        this.updateSkipButtonVisibility();
         break;
       default:
         break;
@@ -775,6 +949,22 @@ export class GamePanel implements Panel {
 
       this.setStatus(t("Port_Game_ClickToShoot", "Click to shoot when you're ready."));
       this.removeOverlay();
+      // Fresh track: vote-skip flags get cleared by the server's
+      // `resetvoteskip` broadcast (which precedes starttrack), but mirror the
+      // reset locally too in case the packets arrive out of order.
+      for (const slot of this.players) slot.votedToSkip = false;
+      // Java GamePanel.starttrack: after `playerInfoPanel.startNextTrack()`
+      // returns the multiplier for the NEW track, post a chat notice if > 1.
+      // currentTrackIdx was just incremented above so the [-1] indexes the
+      // multiplier entry for the freshly-starting track.
+      const trackMul = this.trackScoresMultipliers[this.currentTrackIdx - 1] ?? 1;
+      if (trackMul > 1) {
+        this.appendChat(
+          t("GameChat_ScoreMultiNotify", "* %1x score from this track *", trackMul),
+          "system",
+        );
+      }
+      this.updateSkipButtonVisibility();
       this.scoreboardDirty = true;
       // Replay any beginstrokes that arrived too early.
       const queued = this.pendingBeginStrokes;
@@ -1097,9 +1287,27 @@ export class GamePanel implements Panel {
       const total = document.createElement("span");
       total.textContent = "= " + totalSoFar;
       const note = document.createElement("span");
-      if (p.holedThisTrack) note.textContent = t("Port_Game_StatusInHole", "in hole");
-      else if (p.forfeitedThisTrack) note.textContent = t("Port_Game_StatusForfeited", "forfeited");
-      else if (p.simulating) note.textContent = t("Port_Game_StatusShooting", "shooting");
+      // Mirrors Java PlayerInfoPanel's `extraMessage` priority chain:
+      // part-reason badges win over voteSkip/wantsNewGame, which win over
+      // the in-progress play-state notes.
+      if (p.partReason === 5) {
+        note.textContent = t(
+          "GamePlayerInfo_Quit_ConnectionProblem",
+          "(Connection problem or closed browser)",
+        );
+      } else if (p.partReason === 4) {
+        note.textContent = t("GamePlayerInfo_Quit_Part", "(Left the game)");
+      } else if (p.wantsNewGame) {
+        note.textContent = t("GamePlayerInfo_ReadyForNewGame", "(Wants a new game!)");
+      } else if (p.votedToSkip) {
+        note.textContent = t("GamePlayerInfo_VoteSkipTrack", "(Vote: skip track)");
+      } else if (p.holedThisTrack) {
+        note.textContent = t("Port_Game_StatusInHole", "in hole");
+      } else if (p.forfeitedThisTrack) {
+        note.textContent = t("Port_Game_StatusForfeited", "forfeited");
+      } else if (p.simulating) {
+        note.textContent = t("Port_Game_StatusShooting", "shooting");
+      }
       row.appendChild(num);
       row.appendChild(name);
       row.appendChild(tracksCol);
@@ -1365,14 +1573,34 @@ export class GamePanel implements Panel {
       else audio.playGameLoser();
     }
 
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "btn-green";
-    btn.textContent = t("GameControl_Back", "« To menu");
-    btn.addEventListener("click", () => {
+    const btnRow = document.createElement("div");
+    btnRow.style.display = "flex";
+    btnRow.style.gap = "6px";
+    btnRow.style.justifyContent = "center";
+
+    // Play-again — only meaningful in multiplayer (Java's `buttonNewGame`
+    // lives in GameControlPanel and is shown for state==2 game-over). In
+    // single-player there's no peer to vote with us, so the server would
+    // just immediately restart on a single click — surface it the same way.
+    if (this.numPlayers > 1) {
+      const playAgain = document.createElement("button");
+      playAgain.type = "button";
+      playAgain.className = "btn-green";
+      playAgain.textContent = t("GameControl_New", "New Game");
+      playAgain.addEventListener("click", () => this.requestNewGame());
+      btnRow.appendChild(playAgain);
+      this.playAgainButton = playAgain;
+    }
+
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = this.numPlayers > 1 ? "btn-yellow" : "btn-green";
+    back.textContent = t("GameControl_Back", "« To menu");
+    back.addEventListener("click", () => {
       this.app.connection.sendData("game", "back");
     });
-    ov.appendChild(btn);
+    btnRow.appendChild(back);
+    ov.appendChild(btnRow);
 
     this.root.appendChild(ov);
     this.overlay = ov;
@@ -1588,6 +1816,10 @@ export class GamePanel implements Panel {
       this.overlay.parentNode.removeChild(this.overlay);
     }
     this.overlay = null;
+    // The play-again button is a child of `overlay`; the GC takes it with
+    // the overlay, but null the ref so a stale `disabled = true` write from
+    // a late `requestNewGame` can't blow up.
+    this.playAgainButton = null;
   }
 
   private quit(): void {
@@ -1767,6 +1999,59 @@ export class GamePanel implements Panel {
     this.app.connection.sendData("game", "forfeit");
   }
 
+  /**
+   * Vote-skip click. Server uses writeExcluding so the local player never
+   * sees their own broadcast — we have to mark our own slot here. Hides the
+   * button so the user can't double-vote; re-shown on `resetvoteskip` (fired
+   * by the server on every starttrack).
+   */
+  private voteSkip(): void {
+    const me = this.players[this.myPlayerId];
+    if (!me) return;
+    if (me.votedToSkip) return;
+    me.votedToSkip = true;
+    this.app.connection.sendData("game", "voteskip");
+    this.updateSkipButtonVisibility();
+    this.scoreboardDirty = true;
+  }
+
+  /**
+   * Play-again click on the end overlay. Server uses writeExcluding for the
+   * `rfng` broadcast; mark our own slot, disable the button so we can't
+   * spam-vote, and tell peers via `game newgame`.
+   */
+  private requestNewGame(): void {
+    const me = this.players[this.myPlayerId];
+    if (!me) return;
+    if (me.wantsNewGame) return;
+    me.wantsNewGame = true;
+    this.app.connection.sendData("game", "newgame");
+    if (this.playAgainButton) {
+      this.playAgainButton.disabled = true;
+      this.playAgainButton.textContent = t("Port_Game_WaitingForPeers", "Waiting for others…");
+    }
+    this.scoreboardDirty = true;
+  }
+
+  /**
+   * Show/hide the in-game skip button. Java's GameControlPanel only shows
+   * the skip button in multiplayer rooms (single-player has its own lobby
+   * skip flow); we extend that to also hide it in daily mode (the singleton
+   * room has no concept of voting to skip a deterministic daily track).
+   * Local-player vote also hides until the server's `resetvoteskip` clears.
+   */
+  private updateSkipButtonVisibility(): void {
+    const btn = this.skipButton;
+    if (!btn) return;
+    const me = this.players[this.myPlayerId];
+    const eligible =
+      this.numPlayers > 1 &&
+      !this.dailyMode &&
+      !!me &&
+      !me.votedToSkip;
+    btn.style.display = eligible ? "" : "none";
+  }
+
   private applyChatVisibility(): void {
     const strip = this.chatStripEl;
     if (!strip) return;
@@ -1793,6 +2078,9 @@ export class GamePanel implements Panel {
         simulating: false,
         holedThisTrack: false,
         forfeitedThisTrack: false,
+        votedToSkip: false,
+        wantsNewGame: false,
+        partReason: 0,
         startX: this.startX,
         startY: this.startY,
         holeScores: [],
