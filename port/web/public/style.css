@@ -327,11 +327,28 @@ button.btn-blue   { background: #9090e0; border-color: #9090e0; }
 
 .panel-game .scoreboard .row {
   display: grid;
-  grid-template-columns: 16px 140px 1fr 64px 80px;
+  /* tracks-col is `auto` (was `1fr`): the per-hole cells are now fixed-width,
+     so the column hugs its content and the leftover width flows into the note
+     column instead. Note column is `1fr` so long status badges
+     ("(Voted to skip)", "(Connection problem…)") aren't clipped. */
+  grid-template-columns: 16px 140px auto 64px 1fr;
   gap: 6px;
   align-items: center;
   white-space: nowrap;
   font-weight: bold;
+}
+
+/* Track-cell row: each per-hole stroke count gets a fixed-width slot so
+   2-digit scores (10+) don't bump the next column out of alignment. */
+.panel-game .scoreboard .tracks-cells {
+  display: inline-flex;
+  gap: 0;
+}
+.panel-game .scoreboard .track-cell {
+  display: inline-block;
+  width: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .panel-game .scoreboard .row.you {
@@ -356,15 +373,27 @@ button.btn-blue   { background: #9090e0; border-color: #9090e0; }
   cursor: crosshair;
 }
 
+/* Bottom band — flex row that holds the chat strip (left, multiplayer only)
+   and the trackinfo block. Trackinfo shrinks/expands depending on whether
+   chat is visible. */
+.panel-game .bottom-band {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  padding: 4px 8px;
+  min-height: 0;
+}
+
 .panel-game .trackinfo {
   flex: 1;
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  padding: 4px 8px;
   font-size: 11px;
   color: #000;
   gap: 8px;
+  min-width: 0;
 }
 
 .panel-game .trackinfo .left,
@@ -384,11 +413,98 @@ button.btn-blue   { background: #9090e0; border-color: #9090e0; }
   font-weight: bold;
 }
 
+.panel-game .trackinfo .button-row {
+  display: flex;
+  gap: 4px;
+  justify-content: center;
+  margin-top: 4px;
+}
+
+.panel-game .trackinfo .stats {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.panel-game .trackinfo .actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 2px;
+  position: relative;
+}
+
 .panel-game .hud-status {
   font-size: 11px;
   color: #406040;
   font-style: italic;
   text-align: center;
+}
+
+/* ---------- Multiplayer bottom-band layout ----------
+   Mirrors the original Playforia layout: chat on the left, then
+   [Rata X/Y + name + author] | [stats] | [skip + menu] on the right.
+   Stroke counter, "Click to shoot" hint, and Forfeit button are hidden —
+   the original had no such elements, and the scoreboard already shows
+   per-hole stroke counts. */
+.panel-game.is-multi .chat-strip {
+  flex: 1;
+  min-width: 0;
+}
+.panel-game.is-multi .trackinfo {
+  flex: 0 0 auto;
+  grid-template-columns: auto auto auto;
+}
+.panel-game.is-multi .trackinfo .center {
+  display: none;
+}
+.panel-game.is-multi .trackinfo .right {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+}
+.panel-game.is-multi .trackinfo .stats {
+  text-align: left;
+  align-items: flex-start;
+}
+.panel-game.is-multi .trackinfo .actions {
+  flex: 0 0 auto;
+  width: 130px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  margin-top: 0;
+}
+.panel-game.is-multi .trackinfo .actions .skip-btn,
+.panel-game.is-multi .trackinfo .actions .menu-btn {
+  width: 100%;
+  text-align: center;
+  white-space: nowrap;
+}
+/* Stats column has a fixed width too, so the bottom band's columns don't
+   reflow when text length changes (e.g. "Paras: 2 lyöntiä by Verylongname"). */
+.panel-game.is-multi .trackinfo .stats {
+  flex: 0 0 auto;
+  width: 220px;
+}
+.panel-game.is-multi .trackinfo .left {
+  flex: 0 0 auto;
+  min-width: 80px;
+}
+
+/* Single-player default: hide chat strip (Java had no chat in 1-player). */
+.panel-game .chat-strip {
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid #000;
+  padding: 3px;
+  min-height: 0;
+}
+.panel-game:not(.is-multi) .chat-strip {
+  display: none;
 }
 
 /* ---------- Game-over overlay ---------- */
