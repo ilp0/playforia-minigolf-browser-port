@@ -383,16 +383,18 @@ export class GamePanel implements Panel {
   private touchClientX = 0;
   private touchClientY = 0;
   /**
-   * Cached "is this a phone/tablet" check via the standard touch-primary
-   * media query. On `true`, the aim line and cursor broadcasts are gated on
-   * an active touch — otherwise mouseX/Y starts at (0,0) and the aim line
-   * would point to the top-left corner before the user has even tapped.
-   * Desktop browsers (`hover: hover`) keep the always-visible aim line.
+   * Cached "is this a phone/tablet" check. Reads the `is-touch-mode` body
+   * class set by `setupTouchMode()` in main.ts, so the in-game flag uses
+   * the same verdict as the CSS gates — single source of truth for both
+   * the touch-only menu rows + shoot-mode button and the aim/cursor
+   * suppression while no finger is down. On `true`, the aim line and
+   * cursor broadcasts are gated on an active touch — otherwise mouseX/Y
+   * starts at (0,0) and the aim line would point to the top-left corner
+   * before the user has even tapped.
    */
   private isTouchPrimary =
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+    typeof document !== "undefined" &&
+    document.body?.classList?.contains("is-touch-mode") === true;
   /** Toggleable user prefs (names, cursor send/recv) — persisted via localStorage. */
   private settings: GameSettings = loadSettings();
   private settingsMenuEl: HTMLElement | null = null;
