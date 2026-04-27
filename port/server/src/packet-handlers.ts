@@ -125,6 +125,24 @@ register({
 });
 
 /**
+ * Browser-port extension: persistent per-browser client id. The web client
+ * keeps a UUID in `localStorage["mg.clientId"]` and forwards it during the
+ * login handshake. Server-side it's only used for analytics — every
+ * `player_login` / `player_disconnect` / `player_reconnect` event carries
+ * the cid so an offline log scan can distinguish "same browser refreshing"
+ * from "two unrelated guests on shared NAT". Length-capped and
+ * character-restricted because it ends up in stdout JSON.
+ */
+register({
+    type: PacketType.DATA,
+    pattern: /^cid\t(.+)$/,
+    handle: (_server, conn, match) => {
+        const cleaned = match[1].replace(/[^A-Za-z0-9._-]/g, "").slice(0, 64);
+        if (cleaned) conn.clientId = cleaned;
+    },
+});
+
+/**
  * Browser-port extension: client sends `nick <name>` between `logintype` and
  * `login` so the player's chosen display name flows through to other clients
  * (scoreboards, chat, daily-mode ghost labels). Without this the server would
@@ -177,6 +195,10 @@ register({
             id: player.id,
             nick: player.nick,
             language: player.language ?? "-",
+            cid: conn.clientId,
+            conn: conn.connId,
+            ip: conn.remoteAddress,
+            ua: conn.userAgent,
         });
     },
 });
