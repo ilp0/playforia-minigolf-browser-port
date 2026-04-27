@@ -10,6 +10,14 @@ interface GameInfo {
   passworded: boolean;
   perms: number;
   numPlayers: number;
+  /**
+   * True once the game has started (server cleared `isPublic`). Field 5 of
+   * the wire gameString — the original Java client treated this slot as
+   * an unused legacy `-1` value, so emitting `0`/`1` is back-compatible
+   * with anyone still parsing the old format. Drives the "(In progress)"
+   * badge and the Join enable/disable in the games list.
+   */
+  inProgress: boolean;
   numTracks: number;
   trackType: number;
   maxStrokes: number;
@@ -68,7 +76,10 @@ function parseGameFields(fields: string[], offset: number): GameInfo {
     passworded: f(2) === "t",
     perms: parseInt(f(3), 10) || 0,
     numPlayers: parseInt(f(4), 10) || 0,
-    // f(5) is the always-`-1` slot
+    // f(5) was the legacy `-1` slot; we emit "1" once the room has started
+    // so the client can show "(In progress)". Older servers send "-1" — any
+    // non-"1" value parses as "still waiting", which matches the old UX.
+    inProgress: f(5) === "1",
     numTracks: parseInt(f(6), 10) || 0,
     trackType: parseInt(f(7), 10) || 0,
     maxStrokes: parseInt(f(8), 10) || 0,
@@ -629,12 +640,18 @@ export class LobbyMultiPanel implements Panel {
   }
 
   private makeGameRow(g: GameInfo): HTMLElement {
+    // Two-line content with single-line slot/button column: a 4-column grid
+    // (lock | name+meta block | slots | join button) so the slot count and
+    // Join button vertically center against the stacked name+meta cell. The
+    // narrow Games column couldn't fit everything inline once
+    // "(In progress)" was added — splitting the middle cell lets the name
+    // breathe while keeping the action controls anchored to the right.
     const row = document.createElement("div");
     row.style.display = "grid";
-    row.style.gridTemplateColumns = "16px 1fr auto auto auto";
+    row.style.gridTemplateColumns = "16px 1fr auto auto";
     row.style.gap = "6px";
     row.style.alignItems = "center";
-    row.style.padding = "3px 4px";
+    row.style.padding = "4px 4px";
     row.style.borderBottom = "1px solid #ccc";
 
     const lock = document.createElement("span");
@@ -642,19 +659,41 @@ export class LobbyMultiPanel implements Panel {
     lock.style.fontSize = "11px";
     row.appendChild(lock);
 
+    // Stacked middle cell: bold name on top, meta + badge underneath.
+    const block = document.createElement("div");
+    block.style.display = "flex";
+    block.style.flexDirection = "column";
+    block.style.gap = "1px";
+    block.style.minWidth = "0";
+
     const name = document.createElement("span");
     name.textContent = g.name;
     name.style.fontWeight = "bold";
     name.style.overflow = "hidden";
     name.style.textOverflow = "ellipsis";
-    row.appendChild(name);
+    name.style.whiteSpace = "nowrap";
+    name.title = g.name; // Hover reveals long names in full.
+    block.appendChild(name);
+
+    const metaLine = document.createElement("div");
+    metaLine.style.display = "flex";
+    metaLine.style.gap = "8px";
+    metaLine.style.fontSize = "11px";
 
     const meta = document.createElement("span");
     const ttype = trackTypeName(g.trackType);
     meta.textContent = `${ttype} · ${g.numTracks}t`;
-    meta.style.fontSize = "11px";
     meta.style.color = "#406040";
-    row.appendChild(meta);
+    metaLine.appendChild(meta);
+
+    if (g.inProgress) {
+      const badge = document.createElement("span");
+      badge.textContent = t("Port_Lobby_InProgress", "(In progress)");
+      badge.style.color = "#806040";
+      metaLine.appendChild(badge);
+    }
+    block.appendChild(metaLine);
+    row.appendChild(block);
 
     const slots = document.createElement("span");
     slots.textContent = `${g.currentPlayers}/${g.numPlayers}`;
@@ -671,6 +710,13 @@ export class LobbyMultiPanel implements Panel {
       join.disabled = true;
       join.textContent = t("LobbySelect_Full", "(Full)");
     } else {
+      // Slot is free regardless of whether the room is waiting or already
+      // running — the server's `addPlayerWithPassword` catches late joiners
+      // up via `start` / `starttrack` / `gametrack`. Surface the verb
+      // difference so users know what they're walking into.
+      if (g.inProgress) {
+        join.textContent = t("Port_Lobby_JoinInProgress", "Drop in");
+      }
       this.bind(join, "click", () => this.joinGame(g));
     }
     row.appendChild(join);

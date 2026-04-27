@@ -276,6 +276,28 @@ export class GamePanel implements Panel {
   private skipButton: HTMLButtonElement | null = null;
   private skipButtonHost: HTMLElement | null = null;
   private playAgainButton: HTMLButtonElement | null = null;
+  /**
+   * Practice-mode button — shown only while a multiplayer room is still
+   * waiting for fillers. Click sends `game practice`; the server answers
+   * with the usual start/starttrack/practicemode trio. Mutually exclusive
+   * with `skipButton` (you only see one or the other depending on whether
+   * a track is currently in play).
+   */
+  private practiceButton: HTMLButtonElement | null = null;
+  /**
+   * True once the server has broadcast `game start` for this room (either
+   * the real game starting because the room filled, or practice mode
+   * starting). Drives the "waiting in lobby" predicate that decides whether
+   * the Practice button is even relevant.
+   */
+  private gameStartedReceived = false;
+  /**
+   * True between `game practicemode t` and the next `game start` (which
+   * either flips this off explicitly or, more commonly, is followed by the
+   * real-game starttrack with no `practicemode t` packet). Suppresses
+   * per-hole columns and shows "Practice" instead of "Track N/M" in the HUD.
+   */
+  private practiceMode = false;
 
   private mouseX = 0;
   private mouseY = 0;
@@ -290,6 +312,16 @@ export class GamePanel implements Panel {
   private rafHandle = 0;
   private gameId: string = "0";
   private numPlayers = 1;
+  /**
+   * Configured room capacity from `gameinfo` — does NOT shrink when a
+   * starttrack arrives with a shorter `playStatus` (which can happen during
+   * practice in a partially-filled room: 1/4 players makes playStatus = "f",
+   * length 1, but the room is still a 4-player room). Drives the
+   * "is this a multiplayer room?" predicate for skip / practice button
+   * visibility, where transient under-population shouldn't flip us into
+   * single-player UI.
+   */
+  private roomCapacity = 1;
   private numTracks = 1;
   private currentTrackIdx = 0;
   private myPlayerId = 0;
@@ -438,6 +470,29 @@ export class GamePanel implements Panel {
     actions.appendChild(skip);
     this.skipButton = skip;
     this.skipButtonHost = actions;
+
+    // Practice — port-original "Harjoittele" button. Occupies the same slot
+    // as the skip button while the multiplayer room is still filling up;
+    // `updateSkipButtonVisibility` keeps the two mutually exclusive (Skip
+    // is meaningless before a track has started; Practice is meaningless
+    // after one has). Larger padding/font give it the "big button" feel
+    // the design calls for.
+    const practice = document.createElement("button");
+    practice.type = "button";
+    practice.className = "btn-green practice-btn";
+    practice.textContent = t("Port_Game_Practice", "Practice");
+    practice.style.padding = "6px 22px";
+    practice.style.minHeight = "auto";
+    practice.style.fontSize = "14px";
+    practice.style.fontWeight = "bold";
+    practice.style.display = "none";
+    practice.title = t(
+      "Port_Game_PracticeHint",
+      "Play random maps while waiting — multiplayer enabled",
+    );
+    practice.addEventListener("click", () => this.startPractice());
+    actions.appendChild(practice);
+    this.practiceButton = practice;
 
     // "Valikko" — opens the ESC popover (settings + quit). Replaces the
     // original "<- Valikkoon" button position.
@@ -603,6 +658,10 @@ export class GamePanel implements Panel {
     this.skipButton = null;
     this.skipButtonHost = null;
     this.playAgainButton = null;
+    this.practiceButton = null;
+    this.gameStartedReceived = false;
+    this.practiceMode = false;
+    this.roomCapacity = 1;
     this.overlay = null;
     this.panelEl = null;
     this.root = null;
@@ -635,8 +694,19 @@ export class GamePanel implements Panel {
     switch (verb) {
       case "gameinfo":
         this.numPlayers = parseInt(f[5] ?? "1", 10) || 1;
+        // Capture the configured room cap before starttrack can shrink
+        // `numPlayers` in a partially-filled room (see `roomCapacity`
+        // declaration).
+        this.roomCapacity = this.numPlayers;
         this.numTracks = parseInt(f[6] ?? "1", 10) || 1;
         this.waterEvent = parseInt(f[10] ?? "0", 10) || 0;
+        // Fresh gameinfo arrives on every join — reset the "started" gate so
+        // the Practice button reappears for any new room (including a
+        // re-join). The trailing `f` flag in the packet always says
+        // "isStarted=false" today; we don't trust it and just track via the
+        // `start` broadcast.
+        this.gameStartedReceived = false;
+        this.practiceMode = false;
         this.ensurePlayerSlots(this.numPlayers);
         this.scoreboardDirty = true;
         this.applyChatVisibility();
@@ -802,6 +872,11 @@ export class GamePanel implements Panel {
           slot.forfeitedThisTrack = false;
         }
         this.currentTrackIdx = 0;
+        this.gameStartedReceived = true;
+        // Default to non-practice. A subsequent `practicemode t` packet will
+        // flip this back on if the start was for practice; otherwise we're
+        // in a real game (full room) and per-hole columns should render.
+        this.practiceMode = false;
         // Tear down any leftover end-of-game overlay before the new round
         // starts; otherwise the play-again button stays on screen even though
         // the new game has begun.
@@ -810,8 +885,37 @@ export class GamePanel implements Panel {
         this.scoreboardDirty = true;
         audio.playNotify();
         break;
+      case "practicemode":
+        // Port-original packet. Sent right after a practice `starttrack` so
+        // the client knows the cycling-random-maps mode is on; absent on
+        // real-game starts. The trailing field is "t"/"f" (default true).
+        this.practiceMode = (f[2] ?? "t") === "t";
+        this.scoreboardDirty = true;
+        this.updateSkipButtonVisibility();
+        this.refreshTrackProgress();
+        break;
       case "starttrack":
+        // A late joiner to a started game gets a personal `starttrack`
+        // (no `start` precedes it on their wire), so flip the
+        // game-started gate here too — otherwise the Practice button
+        // would still be available to a player who's already mid-room.
+        this.gameStartedReceived = true;
         this.handleStartTrack(f);
+        break;
+      case "gametrack":
+        // Late-joiner correction: server tells us which configured track
+        // index this is so the HUD reads "Track N/M" matching the room
+        // rather than the default "Track 1/M" the client would compute
+        // from the single starttrack it just received. No-op for normal
+        // joiners — `handleStartTrack` already incremented to the right
+        // value before this packet arrives, and the server simply doesn't
+        // emit `gametrack` for them.
+        {
+          const idx = parseInt(f[2] ?? "1", 10) || 1;
+          this.currentTrackIdx = idx;
+          this.refreshTrackProgress();
+          this.scoreboardDirty = true;
+        }
         break;
       case "beginstroke":
         // Server broadcasts to ALL (including the shooter) so everyone runs
@@ -1209,13 +1313,15 @@ export class GamePanel implements Panel {
     }
   }
 
-  private setTrackMeta(
-    author: string,
-    name: string,
-    info: TrackInfoLine | null,
-    bestPlayer: string,
-  ): void {
-    if (this.trackProgressEl) {
+  /** Refresh just the track-progress line. Pulled out of `setTrackMeta` so
+   *  `practicemode` packets (which arrive AFTER the starttrack that wrote
+   *  the "Track N/M" text) can re-render it as "Practice" without rebuilding
+   *  the rest of the metadata. */
+  private refreshTrackProgress(): void {
+    if (!this.trackProgressEl) return;
+    if (this.practiceMode) {
+      this.trackProgressEl.textContent = t("Port_Game_PracticeProgress", "Practice");
+    } else {
       this.trackProgressEl.textContent = t(
         "GameTrackInfo_CurrentTrack",
         "Track %1/%2",
@@ -1223,6 +1329,15 @@ export class GamePanel implements Panel {
         this.numTracks,
       );
     }
+  }
+
+  private setTrackMeta(
+    author: string,
+    name: string,
+    info: TrackInfoLine | null,
+    bestPlayer: string,
+  ): void {
+    this.refreshTrackProgress();
     // Stash for the daily-share text; both fields are blank until the first
     // starttrack arrives.
     this.trackName = name;
@@ -1282,26 +1397,50 @@ export class GamePanel implements Panel {
       // span (`.track-cell`) so that 2-digit scores (10+) don't shift the
       // total/note columns out of alignment relative to other rows. Mirrors
       // the column-aligned scoreboard in the original Java client.
+      //
+      // Practice mode: tracks cycle (server picks a new random map every
+      // hole-in), so per-hole columns and a running "total" don't carry
+      // any meaning. Show just the live stroke counter for the current map.
       const tracksCol = document.createElement("span");
       tracksCol.className = "tracks-cells";
       let totalSoFar = 0;
-      for (let t = 0; t < this.numTracks; t++) {
+      if (this.practiceMode) {
         const cell = document.createElement("span");
         cell.className = "track-cell";
-        if (t + 1 < this.currentTrackIdx) {
-          const score = p.holeScores[t] ?? 0;
-          cell.textContent = String(score);
-          totalSoFar += score;
-        } else if (t + 1 === this.currentTrackIdx) {
-          cell.textContent = String(p.strokesThisTrack);
-          totalSoFar += p.strokesThisTrack;
-        } else {
-          cell.textContent = "—";
-        }
+        cell.textContent = String(p.strokesThisTrack);
         tracksCol.appendChild(cell);
+        totalSoFar = p.strokesThisTrack;
+      } else {
+        for (let t = 0; t < this.numTracks; t++) {
+          const cell = document.createElement("span");
+          cell.className = "track-cell";
+          if (t + 1 < this.currentTrackIdx) {
+            // `holeScores[t]` is undefined when this player joined the
+            // room AFTER track `t+1` ended (the server can't replay
+            // historical per-track stroke counts — the client only
+            // accumulates them from live `endstroke` broadcasts during
+            // the run). Render "—" instead of "0" so a late joiner's
+            // scoreboard distinguishes "didn't play" from "scored 0".
+            const score = p.holeScores[t];
+            if (score === undefined) {
+              cell.textContent = "—";
+            } else {
+              cell.textContent = String(score);
+              totalSoFar += score;
+            }
+          } else if (t + 1 === this.currentTrackIdx) {
+            cell.textContent = String(p.strokesThisTrack);
+            totalSoFar += p.strokesThisTrack;
+          } else {
+            cell.textContent = "—";
+          }
+          tracksCol.appendChild(cell);
+        }
       }
       const total = document.createElement("span");
-      total.textContent = "= " + totalSoFar;
+      // In practice mode the "= N" total would just duplicate the single
+      // strokes cell — drop it for a cleaner read.
+      total.textContent = this.practiceMode ? "" : "= " + totalSoFar;
       const note = document.createElement("span");
       // Mirrors Java PlayerInfoPanel's `extraMessage` priority chain:
       // part-reason badges win over voteSkip/wantsNewGame, which win over
@@ -2059,19 +2198,41 @@ export class GamePanel implements Panel {
    * `display: none` once we've voted, so the actions column doesn't collapse
    * and the Menu button doesn't jump positions. Single-player and daily mode
    * collapse the space entirely (no skip is ever shown there).
+   *
+   * Skip is also suppressed while the room is still waiting for fillers
+   * (`!gameStartedReceived`): the Practice button takes that slot. Once
+   * either practice or the real game starts, Skip takes over.
    */
   private updateSkipButtonVisibility(): void {
     const btn = this.skipButton;
-    if (!btn) return;
+    const practiceBtn = this.practiceButton;
     const me = this.players[this.myPlayerId];
-    const isMulti = this.numPlayers > 1 && !this.dailyMode;
-    if (!isMulti) {
+    // Use `roomCapacity` (configured) rather than `numPlayers` (which a
+    // practice starttrack can transiently shrink to 1 in a 1/4 room) so
+    // the multiplayer-only buttons stay shown for the whole room lifetime.
+    const isMulti = this.roomCapacity > 1 && !this.dailyMode;
+
+    if (practiceBtn) {
+      const showPractice = isMulti && !this.gameStartedReceived;
+      practiceBtn.style.display = showPractice ? "" : "none";
+    }
+
+    if (!btn) return;
+    if (!isMulti || !this.gameStartedReceived) {
       btn.style.display = "none";
       btn.style.visibility = "";
       return;
     }
     btn.style.display = "";
     btn.style.visibility = me && !me.votedToSkip ? "visible" : "hidden";
+  }
+
+  /** "Harjoittele" click — kick off (or no-op join) shared practice. The
+   *  server filters out repeat presses while practice is already running
+   *  and after the real game has started. */
+  private startPractice(): void {
+    if (this.gameStartedReceived) return;
+    this.app.connection.sendData("game", "practice");
   }
 
   private applyChatVisibility(): void {
