@@ -1158,6 +1158,22 @@ export class GamePanel implements Panel {
       // Daily mode: render every other player as a translucent ghost with a
       // name label above. Self renders normally.
       const ghost = this.dailyMode && !isMine;
+      // Multiplayer name labels (issue #26). Mirrors Java GameCanvas
+      // playerNamesDisplayMode default (`playerCount <= 2 ? 0 : 3`): off in
+      // 1- and 2-player games, name+clan otherwise. Self is intentionally
+      // skipped — the user already knows which ball is theirs and Java's
+      // white-self / black-other colour split is moot in the port's continuous
+      // render model where every ball is potentially "current". Ghosts
+      // short-circuit since they already render their own centered label.
+      const showName =
+        !ghost &&
+        !isMine &&
+        this.numPlayers >= 3 &&
+        p.active &&
+        !p.holedThisTrack &&
+        !p.forfeitedThisTrack &&
+        !p.ball.inHole &&
+        (p.nick?.length ?? 0) > 0;
       sprites.push({
         x: p.ball.x,
         y: p.ball.y,
@@ -1169,6 +1185,9 @@ export class GamePanel implements Panel {
         hidden: p.ball.inHole,
         ghost,
         label: ghost ? (p.nick || `Player ${i + 1}`) : undefined,
+        nameDisplay: showName
+          ? { mode: 3, name: p.nick, clan: p.clan }
+          : undefined,
       });
       // Peer aim preview — only for non-self peers whose ball is at rest and
       // who have a fresh cursor sample. The cursor is cleared on track change

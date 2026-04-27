@@ -110,6 +110,23 @@ export interface BallSprite {
   /** Optional label drawn above the ball (only shown when `ghost`). */
   label?: string;
   /**
+   * Multiplayer name display for non-ghost balls. Mode mirrors Java
+   * GameCanvas.playerNamesDisplayMode (drawPlayer at 1737 on the Java side):
+   *   1 = single-letter initial centered above the ball, no outline
+   *   2 = full name beside the ball, outlined, edge-aware horizontal alignment
+   *   3 = name + "[clan]" stacked beside the ball; falls back to mode-2 layout
+   *       when clan is empty
+   * Java draws self in white and others in black; the port deliberately omits
+   * self entirely (issue #26 spec) since the user already knows which ball is
+   * theirs, so the colour split is moot here and labels just render in a
+   * single readable colour.
+   */
+  nameDisplay?: {
+    mode: 1 | 2 | 3;
+    name: string;
+    clan?: string;
+  };
+  /**
    * Death/sink animation. Mirrors Java GameCanvas.drawPlayer's `shrinkAmount`
    * (the live `onHoleTimer` while ball is on hole/water/acid/swamp). Position
    * shifts by `shrink` and the rendered size reduces by `shrink * 2`. 0 means
@@ -428,6 +445,73 @@ export class TrackRenderer {
         ctx.restore();
       } else {
         ctx.drawImage(this.atlases.balls, sx, sy, 13, 13, dx, dy, size, size);
+        const nd = b.nameDisplay;
+        if (nd) {
+          // Java GameCanvas.drawPlayer:1754. The Java client uses
+          // backgroundColour (rgb(19,167,19)) as the outline colour, but that
+          // bright green doesn't read well across all tiles when labels render
+          // continuously (Java only drew them during simulation). Use a dark
+          // semi-transparent outline instead — matches the daily-mode ghost
+          // label treatment a few lines up.
+          ctx.save();
+          ctx.font = '10px "Dialog", Verdana, sans-serif';
+          ctx.textBaseline = "alphabetic";
+          if (nd.mode === 1) {
+            // Initial: centered above ball, no outline (matches Java's
+            // drawString call which has no outline).
+            const initial = nd.name.charAt(0);
+            ctx.textAlign = "center";
+            ctx.fillStyle = "#000";
+            ctx.fillText(initial, baseDx + 6, baseDy + 13 - 3);
+          } else {
+            ctx.lineWidth = 2;
+            ctx.lineJoin = "round";
+            ctx.strokeStyle = "rgba(0,0,0,0.7)";
+            ctx.fillStyle = "#fff";
+            const clan =
+              nd.mode === 3 && nd.clan && nd.clan.length > 0
+                ? `[${nd.clan}]`
+                : null;
+            const nameWidth = ctx.measureText(nd.name).width;
+            const clanWidth = clan ? ctx.measureText(clan).width : 0;
+            // Java edge-clip threshold (canvas width 735, Java compares >= 733).
+            const overflow =
+              baseDx + 13 + 2 + Math.max(nameWidth, clanWidth) >= 733;
+            if (clan) {
+              // Mode 3: name above ball-vertical-center, clan below bottom.
+              const yName = baseDy + 13 - 3 - 6;
+              const yClan = baseDy + 13 - 3 + 7;
+              if (overflow) {
+                // Java: alignment flips to RIGHT, textX = x - 2 (text ends at x-2).
+                ctx.textAlign = "right";
+                const tx = baseDx - 2;
+                ctx.strokeText(nd.name, tx, yName);
+                ctx.fillText(nd.name, tx, yName);
+                ctx.strokeText(clan, tx, yClan);
+                ctx.fillText(clan, tx, yClan);
+              } else {
+                ctx.textAlign = "left";
+                const tx = baseDx + 13 + 2;
+                ctx.strokeText(nd.name, tx, yName);
+                ctx.fillText(nd.name, tx, yName);
+                ctx.strokeText(clan, tx, yClan);
+                ctx.fillText(clan, tx, yClan);
+              }
+            } else {
+              // Mode 2 (or mode 3 with no clan): single name line beside ball.
+              const yLine = baseDy + 13 - 3;
+              ctx.textAlign = "left";
+              // Java keeps LEFT alignment on overflow but shifts X to
+              // (x - 2 - nameWidth) so the text ends at x-2.
+              const tx = overflow
+                ? baseDx - 2 - nameWidth
+                : baseDx + 13 + 2;
+              ctx.strokeText(nd.name, tx, yLine);
+              ctx.fillText(nd.name, tx, yLine);
+            }
+          }
+          ctx.restore();
+        }
       }
     }
   }
