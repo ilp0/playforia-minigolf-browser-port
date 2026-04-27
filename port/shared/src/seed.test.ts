@@ -42,6 +42,14 @@ for (const [seedStr, expected] of Object.entries(REFERENCE)) {
   });
 }
 
+test("Integer.MIN_VALUE branch returns 0 (Java overflow quirk)", () => {
+  // top32 == 0x80000000 makes Java compute -MIN_VALUE -> MIN_VALUE -> pinned to 0.
+  // Pre-image of post-LCG state 0x800000000000 (computed via modular inverse of MULT mod 2^48).
+  const s = new Seed(0n);
+  (s as unknown as { rnd: bigint }).rnd = 0xe15c0e462aa9n;
+  assert.equal(s.next(), 0);
+});
+
 test("clone forks state", () => {
   const a = new Seed(42n);
   a.next();

@@ -22,11 +22,10 @@ export class Seed {
 
     // Java's quirk:
     //   if (v < 0) { v = -v; if (v < 0) v = 0; }
-    // -Integer.MIN_VALUE overflows back to itself in Java; the second check pins it to 0.
-    if (v < 0) {
-      v = -v;
-      if (v < 0) v = 0; // would only fire for v === Integer.MIN_VALUE, which after -v is still negative in 32-bit Java
-    }
+    // In Java's 32-bit int arithmetic, -Integer.MIN_VALUE overflows back to itself,
+    // and the inner check pins it to 0. JS Numbers don't overflow, so -(-2^31) yields
+    // 2^31 and would skip the pin — handle MIN_VALUE explicitly.
+    if (v < 0) v = v === -0x80000000 ? 0 : -v;
     return v;
   }
 
