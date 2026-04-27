@@ -264,9 +264,57 @@ async function main(): Promise<void> {
         await e.waitFor((s) => /^d \d+ game\tend$/.test(s), "E gets personal end (sparse-id finisher)");
         console.log("[OK] sparse-id daily finisher receives personal `game end`");
 
-        c.close();
+        // Regression: mid-game disconnect must not orphan the daily singleton.
+        // Pre-fix: when the last player in the daily room dropped their
+        // socket, `fullyRemovePlayer` called `lobby.removeGame(daily_game)`,
+        // unregistering the singleton from `daily_lobby.games`. The singleton
+        // object lived on in `golfServer.dailyGame`, so subsequent joiners
+        // entered a "ghost" room — `daily_lobby.gameCount()` and
+        // `inGamePlayerCount()` both stayed at 0 for the rest of the server's
+        // lifetime, breaking the analytics snapshot and the lobbyselect
+        // "Daily Cup: N players" display alike.
+        //
+        // Setup: D and E are still in the daily room here. Close them to drop
+        // both sockets — the in-game disconnect path runs synchronously, so
+        // by the time both `close` calls have round-tripped through their
+        // server-side `handleDisconnect`, the daily room has emptied and
+        // (pre-fix) been unregistered.
         d.close();
         e.close();
+        // Yield so the WebSocket close events surface to the server. The
+        // server's in-game disconnect handler is synchronous once it runs,
+        // but the close itself is async — give Windows CI extra slack.
+        await new Promise((r) => setTimeout(r, 250));
+
+        const dailyLobby = server.golfServer.getLobby("d");
+        if (dailyLobby.inGamePlayerCount() !== 0) {
+            throw new Error(
+                `daily lobby in_game count after dropouts = ${dailyLobby.inGamePlayerCount()}; want 0`,
+            );
+        }
+
+        // Fresh joiner re-enters the (still-cached) singleton. Pre-fix:
+        // `gameCount() = 0` here because the singleton was orphaned and
+        // `getDailyGame()` doesn't re-register it. Post-fix: re-add is
+        // idempotent and self-heals.
+        const f = new Client("F");
+        await f.open();
+        await login(f);
+        await enterDaily(f);
+        if (dailyLobby.gameCount() !== 1) {
+            throw new Error(
+                `daily lobby game count after re-entry = ${dailyLobby.gameCount()}; want 1 (singleton must be re-registered)`,
+            );
+        }
+        if (dailyLobby.inGamePlayerCount() !== 1) {
+            throw new Error(
+                `daily lobby in_game count after re-entry = ${dailyLobby.inGamePlayerCount()}; want 1`,
+            );
+        }
+        console.log("[OK] daily singleton stays counted after mid-game dropouts and re-entry");
+
+        c.close();
+        f.close();
         a.close();
         b.close();
         console.log("\nALL DAILY-CHALLENGE PHASES PASSED");

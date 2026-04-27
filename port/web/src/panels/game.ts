@@ -1381,25 +1381,39 @@ export class GamePanel implements Panel {
       const linkBtn = document.createElement("button");
       linkBtn.type = "button";
       linkBtn.className = "btn-blue";
-      linkBtn.textContent = t("Port_Daily_CopyReplayLink", "Copy replay link");
-      // Click handler:
-      //   1. POST the recording to /api/replay → get a short id, copy `?r=<id>`.
-      //   2. If the network or server rejects (offline, 5xx, etc.), fall back
-      //      to the long fragment-embedded link so the user always gets
-      //      *something* shareable rather than a dead button.
+      linkBtn.disabled = true;
+      linkBtn.textContent = t("Port_Daily_SavingReplay", "Saving replay…");
+
+      // Auto-upload as soon as the overlay opens. The previous behaviour was
+      // to defer the POST until the user clicked, which meant a fresh upload
+      // (and possible failure) on every share. Doing it eagerly:
+      //   - Makes the "Copy replay link" click instant once it lands.
+      //   - Surfaces upload failures immediately so the user sees the
+      //     fallback fragment-embedded link without waiting.
+      // Falls back to `replayLink(replay)` (long URL with the run packed into
+      // the URL fragment) on network/server failure so the user always gets
+      // *something* shareable.
+      let cachedUrl: string | null = null;
+      void (async () => {
+        let url: string;
+        try {
+          url = await shortReplayLink(replay);
+        } catch {
+          url = replayLink(replay);
+        }
+        cachedUrl = url;
+        linkBtn.disabled = false;
+        linkBtn.textContent = t("Port_Daily_CopyReplayLink", "Copy replay link");
+      })();
+
       linkBtn.addEventListener("click", () => {
-        linkBtn.disabled = true;
-        linkBtn.textContent = "Saving…";
+        if (!cachedUrl) return;
+        const url = cachedUrl;
         void (async () => {
-          let url: string;
-          try {
-            url = await shortReplayLink(replay);
-          } catch {
-            url = replayLink(replay);
-          }
           const ok = await copyToClipboard(url);
-          linkBtn.disabled = false;
-          linkBtn.textContent = ok ? t("Port_Daily_LinkCopied", "Link copied!") : t("Port_Daily_CopyFailedShort", "Copy failed");
+          linkBtn.textContent = ok
+            ? t("Port_Daily_LinkCopied", "Link copied!")
+            : t("Port_Daily_CopyFailedShort", "Copy failed");
           if (!ok) {
             const ta = document.createElement("textarea");
             ta.value = url;
@@ -1411,7 +1425,9 @@ export class GamePanel implements Panel {
             ov.appendChild(ta);
             ta.select();
           }
-          window.setTimeout(() => { linkBtn.textContent = t("Port_Daily_CopyReplayLink", "Copy replay link"); }, 2000);
+          window.setTimeout(() => {
+            linkBtn.textContent = t("Port_Daily_CopyReplayLink", "Copy replay link");
+          }, 2000);
         })();
       });
       btnRow.appendChild(linkBtn);

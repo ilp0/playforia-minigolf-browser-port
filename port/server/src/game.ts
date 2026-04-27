@@ -666,6 +666,14 @@ export class DailyGame extends GolfGame {
         if (resolvedStatus === "t" || resolvedStatus === "p") {
             // Tell only this player their daily run is over (others keep playing).
             player.connection.sendData("game", "end");
+            logEvent("daily_play_end", {
+                date: this.dateKey,
+                id: player.id,
+                nick: player.nick,
+                strokes: this.playerStrokesThisTrack[id],
+                holed: resolvedStatus === "t",
+                forfeited: resolvedStatus === "p",
+            });
         }
     }
 
@@ -682,6 +690,14 @@ export class DailyGame extends GolfGame {
         this.playStatus = psArr.join("");
         this.writeAll(tabularize("game", "endstroke", id, cap, "p"));
         player.connection.sendData("game", "end");
+        logEvent("daily_play_end", {
+            date: this.dateKey,
+            id: player.id,
+            nick: player.nick,
+            strokes: cap,
+            holed: false,
+            forfeited: true,
+        });
     }
 
     override handlePacket(player: Player, fields: string[]): boolean {

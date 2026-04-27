@@ -41,6 +41,11 @@ function showError(message: string): void {
 
 function mountReplay(replay: DailyReplay): void {
   if (!root) return;
+  // Drop the loading shim before mounting — its `.panel-loading` div is
+  // 100% width/height with a green background, so without this the replay
+  // canvas is rendered underneath an opaque "Loading replay…" cover and
+  // the user sees the loading message forever.
+  root.innerHTML = "";
   new ReplayPanel(replay).mount(root);
 }
 
