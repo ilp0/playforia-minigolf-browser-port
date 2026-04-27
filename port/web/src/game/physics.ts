@@ -36,6 +36,13 @@ export interface BallState {
   /** Track teleport-cooldown per colour (so we don't infinitely re-teleport). */
   teleported: boolean;
   iterationsThisStroke: number;
+  /** Per-ball stuck counters mirroring Java GameCanvas.run. Each one drops the
+   *  corresponding force on this ball when the ball has been *slow* under that
+   *  force for too many iterations — so a ball resting on a slope (or magnet,
+   *  or hole rim) clears within ~1.5s instead of riding out the 9s safety cap. */
+  downhillStuckCounter: number;
+  magnetStuckCounter: number;
+  spinningStuckCounter: number;
   stopped: boolean;
   inHole: boolean;
 }
@@ -80,6 +87,9 @@ export function newBall(x: number, y: number): BallState {
     shoreY: y,
     teleported: false,
     iterationsThisStroke: 0,
+    downhillStuckCounter: 0,
+    magnetStuckCounter: 0,
+    spinningStuckCounter: 0,
     stopped: false,
     inHole: false,
   };
@@ -149,6 +159,9 @@ export function applyStrokeImpulse(
   ball.liquidTimer = 0;
   ball.teleported = false;
   ball.iterationsThisStroke = 0;
+  ball.downhillStuckCounter = 0;
+  ball.magnetStuckCounter = 0;
+  ball.spinningStuckCounter = 0;
   // Capture the position the ball had when this stroke began. Java's
   // tempCoordX/Y; water-event=0 returns here on water death.
   ball.strokeStartX = ball.x;
@@ -777,14 +790,26 @@ export function step(ball: BallState, ctx: PhysicsContext): StepResult {
     const iy = (ball.y + 0.5) | 0;
     const n = readNeighbors(map, ix, iy);
 
-    const isDownhill = handleDownhill(ball, centerVal);
-    const isMagnet = !onLiquid && !ball.onHole && !ball.onLiquidOrSwamp
+    let isDownhill = handleDownhill(ball, centerVal);
+    let isMagnet = !onLiquid && !ball.onHole && !ball.onLiquidOrSwamp
       ? handleMagnet(ball, ctx, ix, iy)
       : false;
 
     let spinning = false;
     if (!ball.onHole) {
       spinning = handleHolePull(ball, n, map, ix, iy);
+    }
+
+    // Spinning-stuck gate (Java GameCanvas.run line 411-418): if the ball has
+    // been hovering on a hole rim for >500 iterations, drop the hole pull so
+    // friction can settle it.
+    if (spinning) {
+      ball.spinningStuckCounter++;
+      if (ball.spinningStuckCounter > 500) {
+        spinning = false;
+      }
+    } else {
+      ball.spinningStuckCounter = 0;
     }
 
     // Track shore (last solid-ground position) for water-shore respawn.
@@ -806,6 +831,29 @@ export function step(ball: BallState, ctx: PhysicsContext): StepResult {
         ball.vy *= k;
         speed *= k;
       }
+    }
+
+    // Downhill-stuck gate (Java line 454-461): a ball that's been creeping on
+    // a slope (speed < 0.225) for 250 iterations (~1.5s) loses the slope force
+    // for this iteration, letting the < 0.075 stop check below fire cleanly.
+    if (isDownhill && speed < 0.225) {
+      ball.downhillStuckCounter++;
+      if (ball.downhillStuckCounter >= 250) {
+        isDownhill = false;
+      }
+    } else {
+      ball.downhillStuckCounter = 0;
+    }
+
+    // Magnet-stuck gate (Java line 463-470): same idea as downhill but at 150
+    // iterations, since magnet drag tends to be weaker than slope acceleration.
+    if (isMagnet && speed < 0.225) {
+      ball.magnetStuckCounter++;
+      if (ball.magnetStuckCounter >= 150) {
+        isMagnet = false;
+      }
+    } else {
+      ball.magnetStuckCounter = 0;
     }
 
     if (
