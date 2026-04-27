@@ -1465,15 +1465,16 @@ export class GamePanel implements Panel {
       // Daily mode: render every other player as a translucent ghost with a
       // name label above. Self renders normally.
       const ghost = this.dailyMode && !isMine;
-      // Multiplayer name labels — match Java GameCanvas.drawPlayer:1754
-      // (white-self / black-others, green outline). Java's
-      // `playerNamesDisplayMode` defaults to `playerCount <= 2 ? 0 : 3`, so
-      // labels only appear in 3+ player games (the AI / 2-player matches
-      // showed nothing). The Valikko toggle still lets the user hide them
-      // in larger games. Ghosts short-circuit since they already render
-      // their own centered label.
+      // Multiplayer name labels — Java's `playerNamesDisplayMode` defaults
+      // to `playerCount <= 2 ? 0 : 3`, so labels only appear in 3+ player
+      // games. Self is intentionally suppressed: the user knows which ball
+      // is theirs, and Java's white-self / black-others colour split was
+      // moot in our continuous-render model anyway. The Valikko toggle
+      // still lets the user hide them in larger games. Ghosts short-circuit
+      // since they already render their own centered label.
       const showName =
         !ghost &&
+        !isMine &&
         this.settings.showNames &&
         this.numPlayers >= 3 &&
         p.active &&
