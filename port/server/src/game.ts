@@ -90,13 +90,20 @@ export abstract class Game {
         return true;
     }
 
-    removePlayer(player: Player): boolean {
+    /**
+     * Remove a player from the game and broadcast `game part <id> <reason>` to
+     * the rest. `reason` follows the Java codes consumed by GamePanel:
+     *   4 = USERLEFT (voluntary back / `back` packet)
+     *   5 = CONN_PROBLEM (grace expired after disconnect)
+     *   6 = SWITCHEDLOBBY (silent — client just nulls the name)
+     * Defaults to USERLEFT so the back-button path keeps its existing wire.
+     */
+    removePlayer(player: Player, reason: number = PartReason.USERLEFT): boolean {
         const idx = this.players.indexOf(player);
         if (idx < 0) return false;
-        // game\tpart\t<numberIndex>\t<reason=4>
         const num = this.playersNumber[idx];
         for (const p of this.players) {
-            if (p !== player) p.connection.sendData("game", "part", num, 4);
+            if (p !== player) p.connection.sendData("game", "part", num, reason);
         }
         this.playersNumber.splice(idx, 1);
         this.players.splice(idx, 1);
@@ -891,11 +898,11 @@ export class MultiGame extends GolfGame {
         return true;
     }
 
-    override removePlayer(player: Player): boolean {
+    override removePlayer(player: Player, reason: number = PartReason.USERLEFT): boolean {
         if (!this.players.includes(player)) return false;
         const wasPublic = this.isPublic;
         const playerNum = this.getPlayerId(player);
-        super.removePlayer(player);
+        super.removePlayer(player, reason);
 
         const lobby = player.lobby;
         if (this.players.length > 0) {

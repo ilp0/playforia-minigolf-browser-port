@@ -156,8 +156,12 @@ export class GolfServer {
     private fullyRemovePlayer(player: Player, reason: string): void {
         if (player.game) {
             const lob = player.lobby;
+            // Disconnect-driven removal: peers see "Connection problem or closed
+            // browser" rather than the voluntary-leave phrasing. Voluntary exits
+            // travel through game.handlePacket "back", which calls
+            // game.removePlayer() without an override and stays on reason 4.
             try {
-                player.game.removePlayer(player);
+                player.game.removePlayer(player, PartReason.CONN_PROBLEM);
             } catch {
                 // ignore
             }
