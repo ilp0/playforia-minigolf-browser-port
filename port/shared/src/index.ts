@@ -26,8 +26,12 @@ export {
     type Track,
     type TrackSet,
     type TrackSetDifficulty,
+    type SettingsFlags,
+    NO_SETTINGS_FLAGS,
     parseTrack,
     parseTrackset,
+    parseSettingsFlags,
+    applySettingsToTileCode,
 } from "./track.ts";
 
 export {

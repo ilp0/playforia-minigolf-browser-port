@@ -1,4 +1,4 @@
-import { PacketType, Seed, type Packet } from "@minigolf/shared";
+import { PacketType, Seed, parseSettingsFlags, type Packet } from "@minigolf/shared";
 import type { App } from "../app.ts";
 import type { Panel } from "../panel.ts";
 import { loadAtlases, type Atlases } from "../game/sprites.ts";
@@ -620,7 +620,12 @@ export class GamePanel implements Panel {
     try {
       const parsed = buildMap(tLine, this.atlases);
       this.parsedMap = parsed;
-      this.renderer = new TrackRenderer(parsed, this.atlases);
+      // S line: 4 visibility/shadow flags + legacy 2-digit player range. Server
+      // forwards the raw body; we decode the first four chars. Missing/short
+      // S → all-false, mirroring `new boolean[4]` in Java's track parser.
+      const settingsBody = extractField(f, "S ") ?? "";
+      const settingsFlags = parseSettingsFlags(settingsBody);
+      this.renderer = new TrackRenderer(parsed, this.atlases, settingsFlags);
       // Pick the common (shape-24) start, deterministic from gameId.
       const commonStart: [number, number] | null =
         parsed.startPositions.length > 0

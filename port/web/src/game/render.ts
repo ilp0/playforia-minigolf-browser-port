@@ -13,6 +13,9 @@ import {
   PIXEL_PER_TILE,
   MAP_PIXEL_WIDTH,
   MAP_PIXEL_HEIGHT,
+  NO_SETTINGS_FLAGS,
+  applySettingsToTileCode,
+  type SettingsFlags,
   unpackTile,
 } from "@minigolf/shared";
 import type { ParsedMap } from "./map.ts";
@@ -123,12 +126,35 @@ export class TrackRenderer {
   private bgCanvas: HTMLCanvasElement;
   private parsedMap: ParsedMap;
   private atlases: Atlases;
-  constructor(parsedMap: ParsedMap, atlases: Atlases) {
+  /**
+   * Track 'S'-line flags (see `parseSettingsFlags` in @minigolf/shared).
+   *   [0] mines visible / hidden as plain bg
+   *   [1] magnets visible / hidden as plain bg
+   *   [2] teleports coloured / reduced to colourless blue start+exit
+   *   [3] illusion-wall (collision id 19) casts shadow / not
+   * Java applies these only at draw time (via `Tile.getSpecialsettingCode` and
+   * `Map.castShadow`); collision/physics keeps the original tile semantics so
+   * "hidden" mines/magnets/teleports still trigger normally — that's the whole
+   * point of the flags as a puzzle-design knob.
+   */
+  private settingsFlags: SettingsFlags;
+  constructor(parsedMap: ParsedMap, atlases: Atlases, settingsFlags: SettingsFlags = NO_SETTINGS_FLAGS) {
     this.parsedMap = parsedMap;
     this.atlases = atlases;
+    this.settingsFlags = settingsFlags;
     this.bgCanvas = document.createElement("canvas");
     this.bgCanvas.width = MAP_PIXEL_WIDTH;
     this.bgCanvas.height = MAP_PIXEL_HEIGHT;
+    this.buildBackground();
+  }
+
+  /**
+   * Replace the active settings flags and rebuild the cached background. Used
+   * if the S line ever arrives after `TrackRenderer` was constructed (the
+   * panel currently passes flags up-front, but this keeps the door open).
+   */
+  setSettingsFlags(flags: SettingsFlags): void {
+    this.settingsFlags = flags;
     this.buildBackground();
   }
 
@@ -147,6 +173,10 @@ export class TrackRenderer {
     ty: number,
     code: number,
   ): void {
+    // Visibility / colour-key remap per the track's S-line flags. Done here
+    // (visual layer) only — collision/physics keeps the unmodified code so
+    // hidden mines still detonate, hidden magnets still pull, etc.
+    code = applySettingsToTileCode(code, this.settingsFlags);
     const u = unpackTile(code);
     const special = u.isNoSpecial;
     if (special === 0) {
@@ -251,12 +281,15 @@ export class TrackRenderer {
     const data = img.data;
     const collision = this.parsedMap.collision;
 
+    // Java `Map.castShadow`: solid pixels are collision id 16..23, with id 19
+    // (illusion wall) gated by `specialSettings[3]` — when the flag is on,
+    // illusion walls cast shadows like normal walls; when off, they don't.
+    const illusionShadow = this.settingsFlags[3];
     const isSolid = (x: number, y: number): boolean => {
       if (x < 0 || x >= W || y < 0 || y >= H) return false;
       const c = collision[y * W + x];
-      // Java: c >= 16 && c <= 23 && c != 19  (specialSettings[3]==false; the
-      // illusion-wall block doesn't cast shadows in the default ruleset).
-      return c >= 16 && c <= 23 && c !== 19;
+      if (c < 16 || c > 23) return false;
+      return c !== 19 || illusionShadow;
     };
     const isTeleStart = (x: number, y: number): boolean => {
       if (x < 0 || x >= W || y < 0 || y >= H) return false;
