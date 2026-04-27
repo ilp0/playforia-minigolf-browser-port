@@ -507,7 +507,15 @@ export class GolfGame extends Game {
         this.tracks = this.initTracks();
     }
 
-    /** 15-field game string used in lobby gamelist packets. Mirrors Java GolfGame.getGameString. */
+    /**
+     * 15-field game string used in lobby gamelist packets. Mirrors Java
+     * GolfGame.getGameString.
+     *
+     * Field 5 (formerly the always-`-1` legacy slot) is repurposed as an
+     * "in-progress" flag: `1` once the game has started (`!isPublic`),
+     * `0` while it is still waiting / practicing. Old clients that ignored
+     * the field keep working; new clients use it to badge running rooms.
+     */
     override getGameString(): string {
         return tabularize(
             this.gameId,
@@ -515,7 +523,7 @@ export class GolfGame extends Game {
             this.passworded,
             this.perms,
             this.numPlayers,
-            -1,
+            this.isPublic ? 0 : 1,
             this.tracks.length,
             this.tracksType,
             this.maxStrokes,
@@ -842,8 +850,19 @@ export class TrainingGame extends GolfGame {
  *      `lobby gamelist remove <gameId>` and game broadcasts `game start`.
  *   4. Players left during play continue with each other; the game ends when
  *      all tracks are complete or all players leave.
+ *
+ * Browser-port extension: **practice mode**. While the room is still waiting
+ * for players to fill, anyone in the room can press the Practice button to
+ * start a shared run of random tracks that auto-cycle on each hole-in. Late
+ * joiners drop into the current practice track. When the last player joins,
+ * practice ends and the configured tracks list is played from track 1 — the
+ * existing `startGame()` flow runs untouched.
  */
 export class MultiGame extends GolfGame {
+    /** True between `game practice` request and the real-game `startGame()`. */
+    public practiceActive = false;
+    /** The map currently in play during practice. Replaced on every hole-in. */
+    private practiceTrack: Track | null = null;
     constructor(
         creator: Player,
         gameId: number,
@@ -923,15 +942,223 @@ export class MultiGame extends GolfGame {
             // Update game-list entry (player count changed).
             lobby.writeAll(tabularize("lobby", "gamelist", "change", this.getGameString()));
         }
-        if (this.players.length === this.numPlayers) {
-            // Game just filled — kick it off.
+
+        if (this.isPublic && this.players.length === this.numPlayers) {
+            // Room just filled for the first time — kick the real game off.
+            // `startGame()` clears any active practice state so the configured
+            // track list is what plays. Re-broadcast `gamelist change` so the
+            // inProgress flag flips for everyone in the lobby (the room stays
+            // visible — we no longer drop it from the list on fill so vacated
+            // slots can be refilled later).
             this.isPublic = false;
             if (lobby) {
-                lobby.writeAll(tabularize("lobby", "gamelist", "remove", String(this.gameId)));
+                lobby.writeAll(tabularize("lobby", "gamelist", "change", this.getGameString()));
             }
             this.startGame();
+        } else if (!this.isPublic) {
+            // Game already running — catch the late joiner up to the current
+            // track. `addPlayer` already broadcast `game join` to the rest;
+            // they keep playing untouched.
+            this.sendCurrentTrackTo(player);
+        } else if (this.practiceActive) {
+            // Late joiner during practice — drop them into the current track.
+            this.sendPracticeTrackTo(player);
         }
         return true;
+    }
+
+    /**
+     * Catch-up packet sequence for a player who joined a started game with a
+     * free slot. Walks them through the same `start` / `resetvoteskip` /
+     * `starttrack` trio existing players saw at the start of this track,
+     * stamps `gametrack` so their HUD reads "Track N/M" matching the room,
+     * and replays per-slot `endstroke` packets so peers who already finished
+     * the current track render correctly on the joiner's scoreboard.
+     *
+     * Per-track stroke counts for prior tracks aren't recoverable — the
+     * server doesn't keep per-track history per slot, only the rolling
+     * `playerStrokesTotal`. The joiner's scoreboard renders prior columns
+     * as "—" via the client's `holeScores[t] === undefined` branch.
+     */
+    private sendCurrentTrackTo(player: Player): void {
+        const slotId = this.getPlayerId(player);
+
+        // Pad / overwrite the joiner's slot to fresh.
+        const psArr = this.playStatus.split("");
+        while (psArr.length <= slotId) psArr.push("f");
+        psArr[slotId] = "f";
+        this.playStatus = psArr.join("");
+
+        const track = this.tracks[this.currentTrack];
+        if (!track) return;
+        const stats = this.trackManager.getStats(track);
+        const buff = "f".repeat(this.playStatus.length);
+
+        player.connection.sendDataRaw(tabularize("game", "start"));
+        player.connection.sendDataRaw(tabularize("game", "resetvoteskip"));
+        player.connection.sendDataRaw(
+            tabularize("game", "starttrack", buff, this.gameId, networkSerialize(stats)),
+        );
+        // Tell the joiner which configured track this is so their HUD reads
+        // "Track N/M" matching the room rather than "Track 1/M".
+        player.connection.sendDataRaw(
+            tabularize("game", "gametrack", this.currentTrack + 1),
+        );
+
+        // Replay completion state for peers who already finished this track.
+        for (let i = 0; i < this.playStatus.length; i++) {
+            if (i === slotId) continue;
+            const status = this.playStatus.charAt(i);
+            if (status === "t" || status === "p") {
+                const strokes = this.playerStrokesThisTrack[i] ?? 0;
+                player.connection.sendDataRaw(
+                    tabularize("game", "endstroke", i, strokes, status),
+                );
+            }
+        }
+    }
+
+    /**
+     * Begin (or ignore if already running) shared practice mode. Picks a
+     * random track from the room's configured category and broadcasts a
+     * `game start`/`starttrack` pair to everyone currently in the room. New
+     * joiners get a personal version of the same broadcast via
+     * `sendPracticeTrackTo`. The configured `this.tracks` list is left
+     * untouched — `sendGameInfo`'s `numTracks` and the eventual real-game
+     * track sequence both keep working.
+     *
+     * No-op if the real game has already started (`!this.isPublic`).
+     */
+    startPractice(): void {
+        if (this.practiceActive) return;
+        if (!this.isPublic) return;
+
+        const cat: TrackCategoryId = trackCategoryByTypeId(this.tracksType);
+        const picked = this.trackManager.getRandomTracks(1, cat);
+        if (picked.length === 0) return;
+
+        this.practiceActive = true;
+        this.practiceTrack = picked[0];
+        this.strokeCounter = 0;
+        this.strokeSeedCounter = 0;
+        for (let i = 0; i < this.playerStrokesThisTrack.length; i++) {
+            this.playerStrokesThisTrack[i] = 0;
+            this.playerStrokesTotal[i] = 0;
+        }
+        for (const p of this.players) p.hasSkipped = false;
+
+        const buff = "f".repeat(this.players.length);
+        this.playStatus = buff;
+        const stats = this.trackManager.getStats(this.practiceTrack);
+        this.writeAll(tabularize("game", "start"));
+        this.writeAll(tabularize("game", "resetvoteskip"));
+        this.writeAll(
+            tabularize("game", "starttrack", buff, this.gameId, networkSerialize(stats)),
+        );
+        // Tell clients to render this as practice (HUD shows "Practice", no
+        // per-hole columns). Sent after `starttrack` so the panel has the
+        // track loaded by the time it flips into practice mode.
+        this.writeAll(tabularize("game", "practicemode", "t"));
+        logEvent("practice_start", {
+            game_id: this.gameId,
+            players: this.players.length,
+            track: this.practiceTrack.name,
+        });
+    }
+
+    /**
+     * Drop a single player into the currently-running practice track. Pads
+     * `playStatus` to cover their slot, sends them the same `start` /
+     * `resetvoteskip` / `starttrack` / `practicemode` sequence existing
+     * players already saw, and replays per-slot `endstroke` packets so any
+     * peers who already finished the current track render correctly on the
+     * joiner's scoreboard.
+     */
+    private sendPracticeTrackTo(player: Player): void {
+        if (!this.practiceTrack) return;
+
+        const slotId = this.getPlayerId(player);
+        const psArr = this.playStatus.split("");
+        while (psArr.length <= slotId) psArr.push("f");
+        // Joiner is fresh on the current track regardless of what was there.
+        psArr[slotId] = "f";
+        this.playStatus = psArr.join("");
+
+        const buff = "f".repeat(this.playStatus.length);
+        const stats = this.trackManager.getStats(this.practiceTrack);
+        player.connection.sendDataRaw(tabularize("game", "start"));
+        player.connection.sendDataRaw(tabularize("game", "resetvoteskip"));
+        player.connection.sendDataRaw(
+            tabularize("game", "starttrack", buff, this.gameId, networkSerialize(stats)),
+        );
+        player.connection.sendDataRaw(tabularize("game", "practicemode", "t"));
+
+        // Replay completion state for peers who already finished this track.
+        for (let i = 0; i < this.playStatus.length; i++) {
+            if (i === slotId) continue;
+            const status = this.playStatus.charAt(i);
+            if (status === "t" || status === "p") {
+                const strokes = this.playerStrokesThisTrack[i] ?? 0;
+                player.connection.sendDataRaw(
+                    tabularize("game", "endstroke", i, strokes, status),
+                );
+            }
+        }
+    }
+
+    /** During practice each hole-in / forfeit-all advances to a fresh random
+     *  track instead of walking through `this.tracks`. */
+    protected override nextTrack(): void {
+        if (!this.practiceActive) {
+            super.nextTrack();
+            return;
+        }
+        const cat: TrackCategoryId = trackCategoryByTypeId(this.tracksType);
+        const picked = this.trackManager.getRandomTracks(1, cat);
+        if (picked.length === 0) return;
+        this.practiceTrack = picked[0];
+        this.strokeCounter = 0;
+        this.strokeSeedCounter = 0;
+        for (let i = 0; i < this.players.length; i++) {
+            const slot = this.playersNumber[i];
+            this.playerStrokesThisTrack[slot] = 0;
+            this.players[i].hasSkipped = false;
+        }
+        const buff = "f".repeat(this.playStatus.length);
+        this.playStatus = buff;
+        const stats = this.trackManager.getStats(this.practiceTrack);
+        this.writeAll(tabularize("game", "resetvoteskip"));
+        this.writeAll(
+            tabularize("game", "starttrack", buff, this.gameId, networkSerialize(stats)),
+        );
+    }
+
+    /** Real-game start. Wipes any practice residue (track ref + per-player
+     *  stroke counters incremented during practice) before delegating to the
+     *  base `GolfGame.startGame`. The base broadcasts `game start`, which the
+     *  client uses to drop back into normal-mode rendering. */
+    override startGame(): void {
+        if (this.practiceActive) {
+            this.practiceActive = false;
+            this.practiceTrack = null;
+            for (let i = 0; i < this.playerStrokesThisTrack.length; i++) {
+                this.playerStrokesThisTrack[i] = 0;
+                this.playerStrokesTotal[i] = 0;
+            }
+            this.strokeCounter = 0;
+        }
+        super.startGame();
+    }
+
+    /** Inject the `practice` verb before falling through to the standard
+     *  GolfGame handler. Practice can only start while the room is still
+     *  open (`isPublic`) — the request is ignored otherwise. */
+    override handlePacket(player: Player, fields: string[]): boolean {
+        if (fields.length >= 2 && fields[1] === "practice") {
+            this.startPractice();
+            return true;
+        }
+        return super.handlePacket(player, fields);
     }
 
     /**
@@ -1002,24 +1229,56 @@ export class MultiGame extends GolfGame {
     override removePlayer(player: Player, reason: number = PartReason.USERLEFT): boolean {
         if (!this.players.includes(player)) return false;
         const wasPublic = this.isPublic;
+        const wasPracticing = this.practiceActive;
         const playerNum = this.getPlayerId(player);
         super.removePlayer(player, reason);
+
+        if (this.playStatus.length > playerNum) {
+            // Don't let the leaver's `'f'` slot trap survivors waiting on a
+            // ball that's never going to roll. Stamp the slot 'p' (passed)
+            // so `allDoneOnCurrentTrack` sees only still-present players
+            // as needing to finish; advance the track if they all did.
+            // Applies to both practice and real games — a vacated slot
+            // should never block progression for whoever's still here.
+            const cur = this.playStatus.charAt(playerNum);
+            if (cur === "f") {
+                const psArr = this.playStatus.split("");
+                psArr[playerNum] = "p";
+                this.playStatus = psArr.join("");
+                if (this.players.length > 0) {
+                    let allDone = true;
+                    for (const c of this.playStatus) {
+                        if (c === "f") { allDone = false; break; }
+                    }
+                    if (allDone) this.nextTrack();
+                }
+            }
+        }
+
+        if (wasPracticing && this.players.length === 0) {
+            // Room emptied mid-practice — drop the practice ref so a future
+            // re-use of this object (none today, defensive) doesn't leak.
+            this.practiceActive = false;
+            this.practiceTrack = null;
+        }
 
         const lobby = player.lobby;
         if (this.players.length > 0) {
             if (!wasPublic) {
                 // Game was in progress — pick the first remaining player to shoot.
                 this.broadcast(tabularize("game", "startturn", this.playersNumber[0] ?? 0));
-            } else if (lobby) {
-                // Still in the lobby phase — update the visible player count.
+            }
+            if (lobby) {
+                // Always update the gamelist row so the freed slot is visible
+                // to lobby-side joiners (covers both waiting and in-progress
+                // games — full rooms now stay in the list and shrink back to
+                // joinable when someone leaves).
                 lobby.writeAll(tabularize("lobby", "gamelist", "change", this.getGameString()));
             }
         } else if (lobby) {
             lobby.writeAll(tabularize("lobby", "gamelist", "remove", String(this.gameId)));
             lobby.removeGame(this);
         }
-        // Touch playerNum so TS doesn't whine.
-        void playerNum;
         return true;
     }
 }

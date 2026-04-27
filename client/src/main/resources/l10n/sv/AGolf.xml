@@ -1290,6 +1290,21 @@
 	<str key="Port_Game_VolumeTitle">
 		<![CDATA[Huvudvolym]]>
 	</str>
+	<str key="Port_Game_Practice">
+		<![CDATA[Träna]]>
+	</str>
+	<str key="Port_Game_PracticeHint">
+		<![CDATA[Spela slumpmässiga banor under väntan — flerspelarläge]]>
+	</str>
+	<str key="Port_Game_PracticeProgress">
+		<![CDATA[Träning]]>
+	</str>
+	<str key="Port_Lobby_InProgress">
+		<![CDATA[(Pågår)]]>
+	</str>
+	<str key="Port_Lobby_JoinInProgress">
+		<![CDATA[Hoppa in]]>
+	</str>
 	<str key="UserList_Ignore">
 		<![CDATA[Ignorera vald användare]]>
 	</str>

@@ -1290,6 +1290,21 @@
 	<str key="Port_Game_VolumeTitle">
 		<![CDATA[Master volume]]>
 	</str>
+	<str key="Port_Game_Practice">
+		<![CDATA[Practice]]>
+	</str>
+	<str key="Port_Game_PracticeHint">
+		<![CDATA[Play random maps while waiting — multiplayer enabled]]>
+	</str>
+	<str key="Port_Game_PracticeProgress">
+		<![CDATA[Practice]]>
+	</str>
+	<str key="Port_Lobby_InProgress">
+		<![CDATA[(In progress)]]>
+	</str>
+	<str key="Port_Lobby_JoinInProgress">
+		<![CDATA[Drop in]]>
+	</str>
 	<str key="UserList_Ignore">
 		<![CDATA[Ignore selected user]]>
 	</str>

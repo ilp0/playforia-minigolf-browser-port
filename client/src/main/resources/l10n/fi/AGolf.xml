@@ -1290,6 +1290,21 @@
 	<str key="Port_Game_VolumeTitle">
 		<![CDATA[Pää-äänenvoimakkuus]]>
 	</str>
+	<str key="Port_Game_Practice">
+		<![CDATA[Harjoittele]]>
+	</str>
+	<str key="Port_Game_PracticeHint">
+		<![CDATA[Pelaa satunnaisia ratoja odottaessa — moninpelinä]]>
+	</str>
+	<str key="Port_Game_PracticeProgress">
+		<![CDATA[Harjoitus]]>
+	</str>
+	<str key="Port_Lobby_InProgress">
+		<![CDATA[(Käynnissä)]]>
+	</str>
+	<str key="Port_Lobby_JoinInProgress">
+		<![CDATA[Liity peliin]]>
+	</str>
 	<str key="UserList_Ignore">
 		<![CDATA[Mykistä valittu käyttäjä]]>
 	</str>

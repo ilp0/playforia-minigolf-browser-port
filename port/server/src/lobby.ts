@@ -132,20 +132,23 @@ export class Lobby {
         for (const p of this.players) p.connection.sendDataRaw(body);
     }
 
-    /** Send the current public-game list to one player. Mirrors Java Lobby.sendGameList. */
+    /**
+     * Send the multiplayer game list to one player. Mirrors Java
+     * Lobby.sendGameList. Today this is only called for `LobbyType.MULTI`,
+     * which contains exclusively MultiGame rooms — full and ongoing rooms
+     * are included so the player can see what's happening across the lobby
+     * (and join any room with a free slot, including ones that filled
+     * earlier and have since freed a seat).
+     */
     sendGameList(player: Player): void {
         const fields: (string | number)[] = ["lobby", "gamelist", "full"];
         let count = 0;
         const flat: string[] = [];
         for (const g of this.games.values()) {
-            if (g.isPublic) {
-                // Each game contributes its 15 game-string fields, then a trailing tab
-                // (the Java code appends gameString + "\t" then runs that whole buffer
-                // through tabularize as a single arg, which preserves the embedded tabs).
-                flat.push(g.getGameString());
-            } else {
-                continue;
-            }
+            // Each game contributes its 15 game-string fields. The
+            // `inProgress` flag in field 5 lets the client decide whether
+            // to render a "(In progress)" badge / disable Join.
+            flat.push(g.getGameString());
             count++;
         }
         fields.push(count);
