@@ -30,6 +30,17 @@
         Käännä puhelin sivuttain
       </div>
     </div>
+    <!-- Touch-only landscape gate. Forces the user to tap once before play
+         so we can call requestFullscreen() inside the user-gesture window —
+         browsers reject the call otherwise. CSS shows it in landscape on
+         coarse-pointer devices when body lacks `.is-fullscreen`. -->
+    <div id="fullscreen-prompt" aria-hidden="true">
+      <button id="fullscreen-prompt__button" type="button">
+        <span class="fullscreen-prompt__icon" aria-hidden="true">⛶</span>
+        <span class="fullscreen-prompt__text">Pelaa koko ruudulla</span>
+        <span class="fullscreen-prompt__sub">Tap to play fullscreen</span>
+      </button>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
