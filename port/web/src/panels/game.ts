@@ -1179,6 +1179,11 @@ export class GamePanel implements Panel {
         !p.forfeitedThisTrack &&
         !p.ball.inHole &&
         (p.nick?.length ?? 0) > 0;
+      // Sink/drown shrink animation. Java GameCanvas.drawPlayer (line 540)
+      // passes the live onHoleTimer as shrinkAmount whenever the ball is on a
+      // hole/water/acid/swamp tile — physics.ts mirrors this in `liquidTimer`,
+      // ramping 0→2.166 over a hole sink and 0→6.0 over a liquid death.
+      const isSinking = p.ball.onHole || p.ball.onLiquidOrSwamp;
       sprites.push({
         x: p.ball.x,
         y: p.ball.y,
@@ -1193,6 +1198,7 @@ export class GamePanel implements Panel {
         nameDisplay: showName
           ? { mode: 3, name: p.nick, clan: p.clan }
           : undefined,
+        shrink: isSinking ? p.ball.liquidTimer : 0,
       });
       // Peer aim preview — only for non-self peers whose ball is at rest and
       // who have a fresh cursor sample. The cursor is cleared on track change
