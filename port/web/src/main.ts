@@ -50,7 +50,55 @@ function mountReplay(replay: DailyReplay): void {
 }
 
 /**
- * Update the `--mobile-scale` CSS variable so the landscape-touch media query
+ * Decide whether to switch the UI into mobile/touch mode. We previously
+ * gated everything on `(hover: none) and (pointer: coarse)`, but that media
+ * query proved unreliable on real phones — Chrome on Galaxy S23 (and likely
+ * other Android devices) reports `(hover: hover)` even on a touch-only
+ * device, hiding the rotate prompt + fullscreen gate + mobile settings even
+ * though the touch handlers worked fine. This combines multiple signals so
+ * a positive on any one is enough; the URL override `?touch=1` / `?touch=0`
+ * lets the user force the mode if detection is wrong on their device.
+ */
+function detectTouchMode(): boolean {
+  try {
+    const params = new URLSearchParams(location.search);
+    const override = params.get("touch");
+    if (override === "1") return true;
+    if (override === "0") return false;
+  } catch {
+    // location.search unavailable in odd contexts — fall through.
+  }
+  // Modern Client Hints — the most authoritative "this is a phone" signal.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const uaMobile = (navigator as any).userAgentData?.mobile;
+  if (uaMobile === true) return true;
+  // Standard pointer media query — fires on iOS Safari and most Androids.
+  if (window.matchMedia?.("(hover: none) and (pointer: coarse)").matches) return true;
+  // Fallback: any touch capability + a phone/tablet-sized viewport. Catches
+  // phones where the media query above lies (Galaxy S23 Chrome) without
+  // false-positiving on touch-screen laptops.
+  const hasTouch = "ontouchstart" in window || navigator.maxTouchPoints > 0;
+  const smallScreen = Math.min(window.innerWidth, window.innerHeight) < 1024;
+  return hasTouch && smallScreen;
+}
+
+function setupTouchMode(): void {
+  const enabled = detectTouchMode();
+  document.body.classList.toggle("is-touch-mode", enabled);
+  // Helpful for debugging on a real phone via chrome://inspect or
+  // safari://debug — the user pings this back so we know which branch fired.
+  console.info(`[boot] touch-mode=${enabled}`, {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    uaMobile: (navigator as any).userAgentData?.mobile,
+    hoverNone: window.matchMedia?.("(hover: none)").matches,
+    pointerCoarse: window.matchMedia?.("(pointer: coarse)").matches,
+    maxTouchPoints: navigator.maxTouchPoints,
+    minDim: Math.min(window.innerWidth, window.innerHeight),
+  });
+}
+
+/**
+ * Update the `--mobile-scale` CSS variable so the landscape-touch styling
  * can apply `transform: scale(var(--mobile-scale))` to #app. CSS `scale()`
  * requires a unitless number; `min(100vw/735, 100vh/525)` resolves to a
  * length and silently fails to parse, so the scale factor has to be computed
@@ -132,6 +180,7 @@ function setupFullscreenGate(): void {
 }
 
 async function boot(): Promise<void> {
+  setupTouchMode();
   setupMobileScale();
   setupFullscreenGate();
   // Load EN first so every panel that mounts can already resolve

@@ -972,50 +972,53 @@ input[type="range"].win98-slider::-moz-range-thumb {
   font-family: "Verdana", Tahoma, sans-serif;
 }
 
-/* Touch device adjustments. We scope these with both `(hover: none)` and
-   `(pointer: coarse)` so they apply to phones and tablets but not to
-   touch-enabled laptops, where mouse input is still primary. */
-@media (hover: none) and (pointer: coarse) {
-  .panel-game .shoot-mode-btn { display: block; }
+/* Touch device adjustments. Gated on `body.is-touch-mode`, applied by
+   `setupTouchMode()` in main.ts. We previously used
+   `@media (hover: none) and (pointer: coarse)` here but that query proved
+   unreliable on real phones — Chrome on Galaxy S23 reports `(hover: hover)`
+   despite being a touch-only device, so the rotate prompt + fullscreen gate
+   + mobile settings all stayed hidden. The JS detector combines client
+   hints, the media query, and a touch-capability + viewport-size fallback,
+   then writes the body class so all CSS rules below pick up the same
+   verdict as the in-game `isTouchPrimary` flag. */
+body.is-touch-mode .panel-game .shoot-mode-btn { display: block; }
 
-  /* Block default scroll/zoom gestures on the play canvas — touch input is
-     consumed by drag-to-shoot. Buttons and chat scrolling outside the
-     canvas remain unaffected. */
-  .panel-game canvas {
-    touch-action: none;
-    cursor: default;
-  }
+/* Block default scroll/zoom gestures on the play canvas — touch input is
+   consumed by drag-to-shoot. Buttons and chat scrolling outside the
+   canvas remain unaffected. */
+body.is-touch-mode .panel-game canvas {
+  touch-action: none;
+  cursor: default;
+}
 
-  /* Portrait — show prompt, hide everything else. */
-  @media (orientation: portrait) {
-    #app { display: none !important; }
-    #rotate-prompt { display: flex; }
-  }
+/* Portrait — show rotate prompt, hide everything else. */
+@media (orientation: portrait) {
+  body.is-touch-mode #app { display: none !important; }
+  body.is-touch-mode #rotate-prompt { display: flex; }
+}
 
-  /* Landscape — fit the fixed-size #app inside the viewport via a uniform
-     transform, preserving the 735×525 internal layout. We can't use
-     `width: 100vw` etc. because every child has hardcoded pixel sizes
-     keyed to that 735×525 design; CSS-scaling the whole thing keeps the
-     pixel art lined up exactly while filling the screen. The scale
-     factor is computed in JS (see `setupMobileScale` in main.ts) and
-     written to `--mobile-scale` because `scale()` requires a unitless
-     number — `min(100vw/735, 100vh/525)` resolves to a length and
-     fails to parse. */
-  @media (orientation: landscape) {
-    body {
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
-    }
-    #app {
-      transform: scale(var(--mobile-scale, 1));
-      transform-origin: center center;
-      flex: 0 0 auto;
-    }
-    /* Show the fullscreen gate until `.is-fullscreen` is set by the
-       fullscreenchange listener. The body class is the source of truth so
-       the gate can re-appear if the user exits fullscreen (Esc / system
-       back gesture) without us having to track state in JS. */
-    body:not(.is-fullscreen) #fullscreen-prompt { display: flex; }
+/* Landscape — fit the fixed-size #app inside the viewport via a uniform
+   transform, preserving the 735×525 internal layout. We can't use
+   `width: 100vw` etc. because every child has hardcoded pixel sizes keyed
+   to that 735×525 design; CSS-scaling the whole thing keeps the pixel art
+   lined up exactly while filling the screen. The scale factor is computed
+   in JS (see `setupMobileScale` in main.ts) and written to `--mobile-scale`
+   because `scale()` requires a unitless number — `min(100vw/735, 100vh/525)`
+   resolves to a length and fails to parse. */
+@media (orientation: landscape) {
+  body.is-touch-mode {
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
   }
+  body.is-touch-mode #app {
+    transform: scale(var(--mobile-scale, 1));
+    transform-origin: center center;
+    flex: 0 0 auto;
+  }
+  /* Show the fullscreen gate until `.is-fullscreen` is set by the
+     fullscreenchange listener. The body class is the source of truth so
+     the gate can re-appear if the user exits fullscreen (Esc / system
+     back gesture) without us having to track state in JS. */
+  body.is-touch-mode:not(.is-fullscreen) #fullscreen-prompt { display: flex; }
 }
