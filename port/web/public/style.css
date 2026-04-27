@@ -28,7 +28,12 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  /* `100dvh` follows the dynamic viewport so the layout shrinks when the
+     mobile address bar appears and grows when it collapses. `100vh` falls
+     back for browsers that don't support dvh — they get the static large
+     viewport which can be partially covered by the bar. */
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 #app {
@@ -909,6 +914,64 @@ input[type="range"].win98-slider::-moz-range-thumb {
   border-style: inset;
 }
 
+/* Fullscreen gate — covers the play area on touch-primary devices in
+   landscape until the user taps "Play fullscreen". Tapping triggers
+   `requestFullscreen()` (which only works inside a user-gesture handler),
+   and the body picks up `.is-fullscreen` from a fullscreenchange listener
+   in main.ts so the gate hides for the rest of the session. The button
+   uses the same green/pastel theme as the rotate prompt for visual
+   continuity between the two preflight screens. */
+#fullscreen-prompt {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: #99ff99;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+#fullscreen-prompt__button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 22px 32px;
+  background: #d9d9d9;
+  border: 2px outset #d9d9d9;
+  font-family: "Times New Roman", "Liberation Serif", serif;
+  cursor: pointer;
+  box-shadow: 0 4px 0 #2a2d33;
+  border-radius: 6px;
+  /* Big tap target — comfortably hittable with a thumb. */
+  min-width: 240px;
+}
+
+#fullscreen-prompt__button:active {
+  border-style: inset;
+  transform: translateY(2px);
+  box-shadow: 0 2px 0 #2a2d33;
+}
+
+.fullscreen-prompt__icon {
+  font-size: 56px;
+  line-height: 1;
+}
+
+.fullscreen-prompt__text {
+  font-size: 22px;
+  font-weight: bold;
+  color: #000;
+}
+
+.fullscreen-prompt__sub {
+  font-size: 13px;
+  color: #404040;
+  font-family: "Verdana", Tahoma, sans-serif;
+}
+
 /* Touch device adjustments. We scope these with both `(hover: none)` and
    `(pointer: coarse)` so they apply to phones and tablets but not to
    touch-enabled laptops, where mouse input is still primary. */
@@ -949,5 +1012,10 @@ input[type="range"].win98-slider::-moz-range-thumb {
       transform-origin: center center;
       flex: 0 0 auto;
     }
+    /* Show the fullscreen gate until `.is-fullscreen` is set by the
+       fullscreenchange listener. The body class is the source of truth so
+       the gate can re-appear if the user exits fullscreen (Esc / system
+       back gesture) without us having to track state in JS. */
+    body:not(.is-fullscreen) #fullscreen-prompt { display: flex; }
   }
 }
