@@ -496,3 +496,104 @@ button.btn-blue   { background: #9090e0; border-color: #9090e0; }
   color: #444;
   text-align: center;
 }
+
+/* Valikko button — visual pressed state mirrors a sunken Win98 toolbar
+ * toggle. `is-active` is added while the popover is open so the button
+ * shows it's the source of the current menu. */
+.panel-game .btn-yellow.is-active {
+  background: #c8a020;
+  box-shadow: inset 1px 1px 2px rgba(0, 0, 0, 0.4);
+  transform: translateY(1px);
+}
+
+/* -----------------------------------------------------------------------
+ * Win98/XP-style range input. Used by the in-game Valikko's volume slider.
+ * The track is a thin sunken groove; the thumb is a tall narrow gray
+ * rectangle with a 3D raised border and three horizontal grip lines on its
+ * face. Cross-browser styling needs separate -webkit and -moz pseudo-element
+ * blocks because each engine ships its own slider primitives.
+ * --------------------------------------------------------------------- */
+input[type="range"].win98-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  height: 18px;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+input[type="range"].win98-slider:focus {
+  outline: none;
+}
+
+/* WebKit / Blink */
+input[type="range"].win98-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  background: #c0c0c0;
+  /* Inset 3D groove: dark on top/left, light on bottom/right. */
+  border-top: 1px solid #808080;
+  border-left: 1px solid #808080;
+  border-right: 1px solid #ffffff;
+  border-bottom: 1px solid #ffffff;
+  box-shadow: inset 1px 1px 0 #404040;
+}
+
+input[type="range"].win98-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 18px;
+  margin-top: -8px; /* center thumb on the 4px track */
+  background-color: #c0c0c0;
+  /* Three horizontal grip lines (#808080) at y=6/8/10 within the 18px-tall
+   * thumb, rendered with stacked linear-gradients so we don't need a sprite. */
+  background-image:
+    linear-gradient(#808080, #808080),
+    linear-gradient(#808080, #808080),
+    linear-gradient(#808080, #808080);
+  background-size: 6px 1px, 6px 1px, 6px 1px;
+  background-position: 2px 6px, 2px 9px, 2px 12px;
+  background-repeat: no-repeat;
+  /* Raised 3D bevel: white top/left, dark gray bottom/right. */
+  border-top: 1px solid #ffffff;
+  border-left: 1px solid #ffffff;
+  border-right: 1px solid #404040;
+  border-bottom: 1px solid #404040;
+  box-shadow: inset -1px -1px 0 #808080;
+  border-radius: 0;
+}
+
+input[type="range"].win98-slider::-webkit-slider-thumb:active {
+  background-color: #b0b0b0;
+}
+
+/* Firefox */
+input[type="range"].win98-slider::-moz-range-track {
+  height: 4px;
+  background: #c0c0c0;
+  border-top: 1px solid #808080;
+  border-left: 1px solid #808080;
+  border-right: 1px solid #ffffff;
+  border-bottom: 1px solid #ffffff;
+  box-shadow: inset 1px 1px 0 #404040;
+}
+
+input[type="range"].win98-slider::-moz-range-thumb {
+  width: 10px;
+  height: 18px;
+  background-color: #c0c0c0;
+  background-image:
+    linear-gradient(#808080, #808080),
+    linear-gradient(#808080, #808080),
+    linear-gradient(#808080, #808080);
+  background-size: 6px 1px, 6px 1px, 6px 1px;
+  background-position: 2px 6px, 2px 9px, 2px 12px;
+  background-repeat: no-repeat;
+  border-top: 1px solid #ffffff;
+  border-left: 1px solid #ffffff;
+  border-right: 1px solid #404040;
+  border-bottom: 1px solid #404040;
+  box-shadow: inset -1px -1px 0 #808080;
+  border-radius: 0;
+}

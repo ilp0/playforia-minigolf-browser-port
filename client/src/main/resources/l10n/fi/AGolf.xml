@@ -1272,6 +1272,24 @@
 	<str key="Tournament_QuitGameButton">
 		<![CDATA[Poistu pelistä]]>
 	</str>
+	<str key="Port_Game_Menu">
+		<![CDATA[Valikko]]>
+	</str>
+	<str key="Port_Game_Menu_ShowNames">
+		<![CDATA[Näytä pelaajien nimet]]>
+	</str>
+	<str key="Port_Game_Menu_SendCursor">
+		<![CDATA[Näytä tähtäin muille pelaajille]]>
+	</str>
+	<str key="Port_Game_Menu_ShowPeerCursors">
+		<![CDATA[Näytä muiden tähtäimet]]>
+	</str>
+	<str key="Port_Game_Volume">
+		<![CDATA[Äänenvoimakkuus]]>
+	</str>
+	<str key="Port_Game_VolumeTitle">
+		<![CDATA[Pää-äänenvoimakkuus]]>
+	</str>
 	<str key="UserList_Ignore">
 		<![CDATA[Mykistä valittu käyttäjä]]>
 	</str>

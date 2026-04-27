@@ -62,6 +62,26 @@ const PEER_AIM_COLOURS = [
 ];
 
 /**
+ * Solid hex colour matched to the ball palette, used by the scoreboard nick
+ * span so each player's name visibly matches their ball+cursor on the canvas.
+ * Slot 0's "white" maps to a mid grey for readability against the panel
+ * background — pure white text would be invisible. Indexed by `playerIdx % 4`.
+ */
+const SLOT_NICK_COLOURS = [
+  "#5a5a5a", // 0 — neutral grey (white ball reads as a colourless circle)
+  "#b32020", // 1 — red
+  "#2050cc", // 2 — blue
+  "#a07000", // 3 — gold (yellow tones don't read well on the off-white scoreboard)
+];
+
+/** Public lookup for the scoreboard / chat / overlays. Cycles past slot 3 like
+ *  the ball atlas does, so daily-room high sparse ids still resolve. */
+export function slotNickColor(playerIdx: number): string {
+  const i = ((playerIdx % SLOT_NICK_COLOURS.length) + SLOT_NICK_COLOURS.length) % SLOT_NICK_COLOURS.length;
+  return SLOT_NICK_COLOURS[i];
+}
+
+/**
  * Power-scaled delta from ball to a point at length `power*200/6.5`. Mirrors
  * Java GameCanvas.update():
  *   x2 = ball + power[0] * 200 / 6.5
@@ -119,15 +139,17 @@ export interface BallSprite {
    *   2 = full name beside the ball, outlined, edge-aware horizontal alignment
    *   3 = name + "[clan]" stacked beside the ball; falls back to mode-2 layout
    *       when clan is empty
-   * Java draws self in white and others in black; the port deliberately omits
-   * self entirely (issue #26 spec) since the user already knows which ball is
-   * theirs, so the colour split is moot here and labels just render in a
-   * single readable colour.
+   * Java draws self in white and others in black, both with a green
+   * (rgb(19,167,19) — the panel background) 1px orthogonal outline; the port
+   * matches that exactly so labels look identical to the original.
    */
   nameDisplay?: {
     mode: 1 | 2 | 3;
     name: string;
     clan?: string;
+    /** True if this is the local player's ball — flips the fill colour from
+     *  black (other players, Java GameCanvas:116) to white (self, GameCanvas:125). */
+    isSelf: boolean;
   };
   /**
    * Death/sink animation. Mirrors Java GameCanvas.drawPlayer's `shrinkAmount`
@@ -445,12 +467,19 @@ export class TrackRenderer {
     });
     for (const b of balls) {
       if (b.hidden) continue;
-      // balls.gif: 8 sprites total, 4 per row → playerIdx*2 + (moving?1:0).
-      // Daily rooms can hold 100 players (vs the 4-player Java cap), so cycle
-      // colours past index 3 — without the modulo the sprite source falls
-      // outside the atlas and the ball renders as nothing.
+      // balls.gif layout (matches Java's `ballSprites[playerid + offset]` at
+      // GameCanvas.java:1753 / 1789):
+      //   row 0 (idx 0..3): players 0..3 frame A (idle)
+      //   row 1 (idx 4..7): players 0..3 frame B (Java's dithered alternate
+      //                      driven by `(x/5 + y/5) % 2 * 4`)
+      // The previous `colour * 2 + moving` formula assumed each player's two
+      // frames were horizontally adjacent (cols 2k, 2k+1) — they aren't, which
+      // made slot 1 render as P2's sprite, slot 2 as P0 frame B, and slot 3 as
+      // P2 frame B. End result: only two distinct ball colours visible across
+      // four players. Daily rooms can hold 100 players (vs Java's 4-cap), so
+      // cycle colours past index 3 to stay in-atlas.
       const colour = ((b.playerIdx % 4) + 4) % 4;
-      const idx = colour * 2 + (b.moving ? 1 : 0);
+      const idx = (b.moving ? 4 : 0) + colour;
       const { sx, sy } = spriteSrc13(idx, 4);
       const baseDx = Math.round(b.x - 6.5);
       const baseDy = Math.round(b.y - 6.5);
@@ -480,27 +509,38 @@ export class TrackRenderer {
         ctx.drawImage(this.atlases.balls, sx, sy, 13, 13, dx, dy, size, size);
         const nd = b.nameDisplay;
         if (nd) {
-          // Java GameCanvas.drawPlayer:1754. The Java client uses
-          // backgroundColour (rgb(19,167,19)) as the outline colour, but that
-          // bright green doesn't read well across all tiles when labels render
-          // continuously (Java only drew them during simulation). Use a dark
-          // semi-transparent outline instead — matches the daily-mode ghost
-          // label treatment a few lines up.
+          // Java GameCanvas.drawPlayer:1754. Outline = panel background green
+          // rgb(19,167,19) (Java's `backgroundColour`); fill = white for self,
+          // black for others (set in GameCanvas:116/125 before drawPlayer is
+          // called, then preserved by StringDraw.drawOutlinedString).
           ctx.save();
           ctx.font = '10px "Dialog", Verdana, sans-serif';
           ctx.textBaseline = "alphabetic";
+          const fillColour = nd.isSelf ? "#fff" : "#000";
           if (nd.mode === 1) {
-            // Initial: centered above ball, no outline (matches Java's
-            // drawString call which has no outline).
+            // Initial: centered above ball, NO outline (Java calls plain
+            // drawString here, not drawOutlinedString).
             const initial = nd.name.charAt(0);
             ctx.textAlign = "center";
-            ctx.fillStyle = "#000";
+            ctx.fillStyle = fillColour;
             ctx.fillText(initial, baseDx + 6, baseDy + 13 - 3);
           } else {
-            ctx.lineWidth = 2;
+            // Java draws the outline by 4 offset fillText copies of the same
+            // string (StringDraw.drawOutlinedString:53-63). Replicating that
+            // pixel-for-pixel in canvas leaves a green halo that's washed out
+            // against the canvas's anti-aliased glyph edges — so use canvas
+            // strokeText instead, which produces a single solid 1.5px outline
+            // that reads clearly while still using Java's exact colour choices
+            // (green outline, white-self / black-others fill).
+            ctx.lineWidth = 1.5;
             ctx.lineJoin = "round";
-            ctx.strokeStyle = "rgba(0,0,0,0.7)";
-            ctx.fillStyle = "#fff";
+            ctx.miterLimit = 2;
+            ctx.strokeStyle = "rgb(19,167,19)";
+            ctx.fillStyle = fillColour;
+            const drawOutlined = (text: string, tx: number, ty: number): void => {
+              ctx.strokeText(text, tx, ty);
+              ctx.fillText(text, tx, ty);
+            };
             const clan =
               nd.mode === 3 && nd.clan && nd.clan.length > 0
                 ? `[${nd.clan}]`
@@ -518,17 +558,13 @@ export class TrackRenderer {
                 // Java: alignment flips to RIGHT, textX = x - 2 (text ends at x-2).
                 ctx.textAlign = "right";
                 const tx = baseDx - 2;
-                ctx.strokeText(nd.name, tx, yName);
-                ctx.fillText(nd.name, tx, yName);
-                ctx.strokeText(clan, tx, yClan);
-                ctx.fillText(clan, tx, yClan);
+                drawOutlined(nd.name, tx, yName);
+                drawOutlined(clan, tx, yClan);
               } else {
                 ctx.textAlign = "left";
                 const tx = baseDx + 13 + 2;
-                ctx.strokeText(nd.name, tx, yName);
-                ctx.fillText(nd.name, tx, yName);
-                ctx.strokeText(clan, tx, yClan);
-                ctx.fillText(clan, tx, yClan);
+                drawOutlined(nd.name, tx, yName);
+                drawOutlined(clan, tx, yClan);
               }
             } else {
               // Mode 2 (or mode 3 with no clan): single name line beside ball.
@@ -539,8 +575,7 @@ export class TrackRenderer {
               const tx = overflow
                 ? baseDx - 2 - nameWidth
                 : baseDx + 13 + 2;
-              ctx.strokeText(nd.name, tx, yLine);
-              ctx.fillText(nd.name, tx, yLine);
+              drawOutlined(nd.name, tx, yLine);
             }
           }
           ctx.restore();

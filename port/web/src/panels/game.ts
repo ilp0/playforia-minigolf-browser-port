@@ -3,7 +3,7 @@ import type { App } from "../app.ts";
 import type { Panel } from "../panel.ts";
 import { loadAtlases, type Atlases } from "../game/sprites.ts";
 import { buildMap, type ParsedMap } from "../game/map.ts";
-import { TrackRenderer, type AimLine, type BallSprite, type PeerAim } from "../game/render.ts";
+import { TrackRenderer, slotNickColor, type AimLine, type BallSprite, type PeerAim } from "../game/render.ts";
 import {
   applyStrokeImpulse,
   newBall,
@@ -51,6 +51,64 @@ function extractField(fields: string[], prefix: string): string | null {
     if (f.startsWith(prefix)) return f.substring(prefix.length);
   }
   return null;
+}
+
+/**
+ * Wire convention: server sends `"-"` to mean "no clan" (Player.clan defaults
+ * to "-" on the Java side). Java's GamePanel.java:187,194 maps that sentinel
+ * to null before storing it; we collapse it to the empty string so the
+ * existing `clan && clan.length > 0` checks across render and scoreboard skip
+ * the `[clan]` row instead of rendering a literal `[-]`.
+ */
+function normalizeClan(raw: string | undefined): string {
+  if (!raw || raw === "-") return "";
+  return raw;
+}
+
+/**
+ * Per-user game-panel preferences, persisted across sessions in localStorage.
+ * Exposed through the in-game "Valikko" button so the player can toggle
+ * cosmetic + bandwidth knobs without leaving the match. Volume lives on the
+ * audio singleton (which has its own persistence key); the rest live here.
+ */
+interface GameSettings {
+  /** Render in-game name labels above other players' balls. */
+  showNames: boolean;
+  /** Broadcast my cursor at ~15 Hz so peers see my live aim line. */
+  sendCursor: boolean;
+  /** Render peers' aim lines from their broadcast cursor positions. */
+  showPeerCursors: boolean;
+}
+
+const SETTINGS_KEY = "minigolf.game.settings";
+const DEFAULT_SETTINGS: GameSettings = {
+  showNames: true,
+  sendCursor: true,
+  showPeerCursors: true,
+};
+
+function loadSettings(): GameSettings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return { ...DEFAULT_SETTINGS };
+    const parsed = JSON.parse(raw);
+    return {
+      showNames: typeof parsed.showNames === "boolean" ? parsed.showNames : DEFAULT_SETTINGS.showNames,
+      sendCursor: typeof parsed.sendCursor === "boolean" ? parsed.sendCursor : DEFAULT_SETTINGS.sendCursor,
+      showPeerCursors:
+        typeof parsed.showPeerCursors === "boolean" ? parsed.showPeerCursors : DEFAULT_SETTINGS.showPeerCursors,
+    };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+
+function saveSettings(s: GameSettings): void {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+  } catch {
+    // localStorage unavailable (private mode, quota) — accept the loss.
+  }
 }
 
 interface TrackInfoLine {
@@ -240,6 +298,11 @@ export class GamePanel implements Panel {
   private mouseMoveHandler: ((ev: MouseEvent) => void) | null = null;
   private clickHandler: ((ev: MouseEvent) => void) | null = null;
   private contextMenuHandler: ((ev: MouseEvent) => void) | null = null;
+  /** Toggleable user prefs (names, cursor send/recv) — persisted via localStorage. */
+  private settings: GameSettings = loadSettings();
+  private settingsMenuEl: HTMLElement | null = null;
+  private menuButtonEl: HTMLButtonElement | null = null;
+  private menuOutsideClickHandler: ((ev: MouseEvent) => void) | null = null;
 
   /**
    * Daily-mode state. Set when the server sends `game dailymode <dateKey>`.
@@ -370,32 +433,31 @@ export class GamePanel implements Panel {
     right.appendChild(avgPar);
     right.appendChild(bestPar);
 
-    // Master volume slider — drives audio.masterGain. Lives in the right
-    // column so it shares trackinfo's vertical budget rather than carving a
-    // new row out of the already-tight bottom band.
-    const volRow = document.createElement("div");
-    volRow.style.display = "flex";
-    volRow.style.alignItems = "center";
-    volRow.style.gap = "4px";
-    volRow.style.justifyContent = "flex-end";
-    volRow.style.marginTop = "2px";
-    const volLabel = document.createElement("span");
-    volLabel.textContent = t("Port_Game_Volume", "Volume");
-    volLabel.style.fontSize = "10px";
-    const volSlider = document.createElement("input");
-    volSlider.type = "range";
-    volSlider.min = "0";
-    volSlider.max = "100";
-    volSlider.step = "1";
-    volSlider.value = String(Math.round(audio.volume * 100));
-    volSlider.style.width = "90px";
-    volSlider.title = t("Port_Game_VolumeTitle", "Master volume");
-    volSlider.addEventListener("input", () => {
-      audio.setVolume(volSlider.valueAsNumber / 100);
+    // "Valikko" — opens a popover with name/cursor toggles, volume slider,
+    // and quit. Replaces the bottom-strip volume row from earlier so this
+    // tight band only carries one control. Also opened via ESC.
+    const menuRow = document.createElement("div");
+    menuRow.style.display = "flex";
+    menuRow.style.alignItems = "center";
+    menuRow.style.justifyContent = "flex-end";
+    menuRow.style.marginTop = "2px";
+    menuRow.style.position = "relative";
+    const menuBtn = document.createElement("button");
+    menuBtn.type = "button";
+    menuBtn.className = "btn-yellow";
+    menuBtn.textContent = t("Port_Game_Menu", "Menu");
+    menuBtn.style.padding = "1px 12px";
+    menuBtn.style.minHeight = "auto";
+    menuBtn.style.fontSize = "11px";
+    menuBtn.setAttribute("aria-haspopup", "true");
+    menuBtn.setAttribute("aria-pressed", "false");
+    menuBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      this.toggleSettingsMenu();
     });
-    volRow.appendChild(volLabel);
-    volRow.appendChild(volSlider);
-    right.appendChild(volRow);
+    menuRow.appendChild(menuBtn);
+    right.appendChild(menuRow);
+    this.menuButtonEl = menuBtn;
 
     trackinfo.appendChild(left);
     trackinfo.appendChild(center);
@@ -427,8 +489,12 @@ export class GamePanel implements Panel {
 
     const keyHandler = (ev: KeyboardEvent) => {
       if (ev.key === "Escape") {
+        // Avoid swallowing ESC while a chat input/textarea has focus — the
+        // user is probably trying to clear a draft, not pop the menu.
+        const focused = ev.target as HTMLElement | null;
+        if (focused && (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA")) return;
         ev.preventDefault();
-        this.quit();
+        this.toggleSettingsMenu();
       }
     };
     window.addEventListener("keydown", keyHandler);
@@ -508,6 +574,8 @@ export class GamePanel implements Panel {
   unmount(): void {
     if (this.rafHandle) cancelAnimationFrame(this.rafHandle);
     this.rafHandle = 0;
+    this.closeSettingsMenu();
+    this.menuButtonEl = null;
     if (this.keyHandler) window.removeEventListener("keydown", this.keyHandler);
     if (this.canvas) {
       if (this.mouseMoveHandler) this.canvas.removeEventListener("mousemove", this.mouseMoveHandler);
@@ -576,7 +644,7 @@ export class GamePanel implements Panel {
         this.myNick = f[3] ?? "You";
         this.ensurePlayerSlots(this.myPlayerId + 1);
         this.players[this.myPlayerId].nick = this.myNick;
-        this.players[this.myPlayerId].clan = f[4] ?? "";
+        this.players[this.myPlayerId].clan = normalizeClan(f[4]);
         this.scoreboardDirty = true;
         break;
       case "players":
@@ -584,7 +652,7 @@ export class GamePanel implements Panel {
           const id = parseInt(f[i] ?? "0", 10);
           this.ensurePlayerSlots(id + 1);
           this.players[id].nick = f[i + 1] ?? "";
-          this.players[id].clan = f[i + 2] ?? "";
+          this.players[id].clan = normalizeClan(f[i + 2]);
         }
         this.scoreboardDirty = true;
         break;
@@ -592,9 +660,31 @@ export class GamePanel implements Panel {
         {
           const id = (parseInt(f[2] ?? "1", 10) || 1) - 1;
           this.ensurePlayerSlots(id + 1);
-          this.players[id].nick = f[3] ?? "";
-          this.players[id].clan = f[4] ?? "";
-          this.appendChat("* " + t("Chat_Game_PlayerJoined", "%1 joined the game", this.players[id].nick), "system");
+          // Slot may have been left inactive by an earlier `part`. Reset
+          // every per-player field a previous occupant could have dirtied
+          // before populating the new identity — otherwise the joiner
+          // inherits stale `active=false`, prior strokes, holed/forfeit
+          // flags, ball position, hole-score history, etc. The spawn falls
+          // back to `slot.startX/Y` which is the panel default for fresh
+          // slots; this is correct because today MultiGame join is gated
+          // pre-start (game.ts:887-889 removes started games from the
+          // lobby gamelist), so `slot.startX/Y` hasn't been re-pointed at a
+          // previous occupant's per-track spawn yet.
+          const slot = this.players[id];
+          slot.nick = f[3] ?? "";
+          slot.clan = normalizeClan(f[4]);
+          slot.active = true;
+          slot.simulating = false;
+          slot.holedThisTrack = false;
+          slot.forfeitedThisTrack = false;
+          slot.strokesThisTrack = 0;
+          slot.holeScores = [];
+          slot.ball = newBall(slot.startX, slot.startY);
+          slot.ctx = null;
+          slot.cursorX = null;
+          slot.cursorY = null;
+          slot.cursorMode = 0;
+          this.appendChat("* " + t("Chat_Game_PlayerJoined", "%1 joined the game", slot.nick), "system");
           this.scoreboardDirty = true;
         }
         break;
@@ -1011,6 +1101,7 @@ export class GamePanel implements Panel {
    */
   private maybeSendCursor(nowMs: number): void {
     if (!this.app.connection.isOpen) return;
+    if (!this.settings.sendCursor) return;
     const me = this.players[this.myPlayerId];
     if (!me) return;
     if (me.simulating || me.ball.inHole || me.holedThisTrack || me.forfeitedThisTrack) return;
@@ -1174,6 +1265,9 @@ export class GamePanel implements Panel {
       num.textContent = `${i + 1}.`;
       const name = document.createElement("span");
       name.textContent = p.nick || t("Port_Game_PlayerFmt", "Player %1", i + 1);
+      // Match the ball+cursor palette — same `playerIdx` used by render.ts.
+      // The inline style overrides `.row.you` / `.row.them` colour rules.
+      name.style.color = slotNickColor(i);
       const tracksCol = document.createElement("span");
       const cells: string[] = [];
       let totalSoFar = 0;
@@ -1371,16 +1465,16 @@ export class GamePanel implements Panel {
       // Daily mode: render every other player as a translucent ghost with a
       // name label above. Self renders normally.
       const ghost = this.dailyMode && !isMine;
-      // Multiplayer name labels (issue #26). Mirrors Java GameCanvas
-      // playerNamesDisplayMode default (`playerCount <= 2 ? 0 : 3`): off in
-      // 1- and 2-player games, name+clan otherwise. Self is intentionally
-      // skipped — the user already knows which ball is theirs and Java's
-      // white-self / black-other colour split is moot in the port's continuous
-      // render model where every ball is potentially "current". Ghosts
-      // short-circuit since they already render their own centered label.
+      // Multiplayer name labels — match Java GameCanvas.drawPlayer:1754
+      // (white-self / black-others, green outline). Java's
+      // `playerNamesDisplayMode` defaults to `playerCount <= 2 ? 0 : 3`, so
+      // labels only appear in 3+ player games (the AI / 2-player matches
+      // showed nothing). The Valikko toggle still lets the user hide them
+      // in larger games. Ghosts short-circuit since they already render
+      // their own centered label.
       const showName =
         !ghost &&
-        !isMine &&
+        this.settings.showNames &&
         this.numPlayers >= 3 &&
         p.active &&
         !p.holedThisTrack &&
@@ -1404,7 +1498,7 @@ export class GamePanel implements Panel {
         ghost,
         label: ghost ? (p.nick || `Player ${i + 1}`) : undefined,
         nameDisplay: showName
-          ? { mode: 3, name: p.nick, clan: p.clan }
+          ? { mode: 3, name: p.nick, clan: p.clan, isSelf: isMine }
           : undefined,
         shrink: isSinking ? p.ball.liquidTimer : 0,
       });
@@ -1414,6 +1508,7 @@ export class GamePanel implements Panel {
       // daily mode: the ghost rendering treats other players as non-interactive
       // shadows of past plays; live aim lines would clash with that framing.
       if (
+        this.settings.showPeerCursors &&
         !isMine &&
         !ghost &&
         !p.ball.inHole &&
@@ -1729,6 +1824,170 @@ export class GamePanel implements Panel {
 
   private quit(): void {
     this.app.connection.sendData("game", "back");
+  }
+
+  /** Toggle the in-game settings menu. Closes if already open. */
+  private toggleSettingsMenu(): void {
+    if (this.settingsMenuEl) {
+      this.closeSettingsMenu();
+    } else {
+      this.openSettingsMenu();
+    }
+  }
+
+  private closeSettingsMenu(): void {
+    if (this.settingsMenuEl) {
+      this.settingsMenuEl.remove();
+      this.settingsMenuEl = null;
+    }
+    if (this.menuOutsideClickHandler) {
+      document.removeEventListener("click", this.menuOutsideClickHandler, true);
+      this.menuOutsideClickHandler = null;
+    }
+    if (this.menuButtonEl) {
+      this.menuButtonEl.classList.remove("is-active");
+      this.menuButtonEl.setAttribute("aria-pressed", "false");
+    }
+  }
+
+  private openSettingsMenu(): void {
+    const anchor = this.menuButtonEl;
+    if (!anchor) return;
+    const parent = anchor.parentElement;
+    if (!parent) return;
+
+    const menu = document.createElement("div");
+    menu.className = "game-settings-menu";
+    // Anchor above the button: parent is `position: relative`, so absolute
+    // bottom positioning floats the popover up from the bottom strip.
+    menu.style.position = "absolute";
+    menu.style.right = "0";
+    menu.style.bottom = `${anchor.offsetHeight + 4}px`;
+    menu.style.minWidth = "210px";
+    menu.style.padding = "6px 8px";
+    menu.style.background = "#fff";
+    menu.style.border = "1px solid #555";
+    menu.style.borderRadius = "3px";
+    menu.style.boxShadow = "0 2px 6px rgba(0,0,0,0.25)";
+    menu.style.fontSize = "11px";
+    menu.style.fontFamily = '"Dialog", Verdana, sans-serif';
+    menu.style.color = "#000";
+    menu.style.zIndex = "20";
+    // Block clicks inside the menu from bubbling to the outside-click handler.
+    menu.addEventListener("click", (ev) => ev.stopPropagation());
+
+    const addCheckbox = (
+      label: string,
+      checked: boolean,
+      onChange: (next: boolean) => void,
+    ): void => {
+      const row = document.createElement("label");
+      row.style.display = "flex";
+      row.style.alignItems = "center";
+      row.style.gap = "6px";
+      row.style.padding = "2px 0";
+      row.style.cursor = "pointer";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = checked;
+      cb.style.margin = "0";
+      cb.addEventListener("change", () => onChange(cb.checked));
+      const text = document.createElement("span");
+      text.textContent = label;
+      row.appendChild(cb);
+      row.appendChild(text);
+      menu.appendChild(row);
+    };
+
+    addCheckbox(
+      t("Port_Game_Menu_ShowNames", "Show player names"),
+      this.settings.showNames,
+      (v) => {
+        this.settings.showNames = v;
+        saveSettings(this.settings);
+      },
+    );
+    addCheckbox(
+      t("Port_Game_Menu_SendCursor", "Share my aim with others"),
+      this.settings.sendCursor,
+      (v) => {
+        this.settings.sendCursor = v;
+        saveSettings(this.settings);
+      },
+    );
+    addCheckbox(
+      t("Port_Game_Menu_ShowPeerCursors", "Show others' aim lines"),
+      this.settings.showPeerCursors,
+      (v) => {
+        this.settings.showPeerCursors = v;
+        saveSettings(this.settings);
+      },
+    );
+
+    // Volume slider — moved here from the bottom strip.
+    const volRow = document.createElement("div");
+    volRow.style.display = "flex";
+    volRow.style.alignItems = "center";
+    volRow.style.gap = "6px";
+    volRow.style.padding = "4px 0 2px";
+    volRow.style.borderTop = "1px solid #ddd";
+    volRow.style.marginTop = "4px";
+    const volLabel = document.createElement("span");
+    volLabel.textContent = t("Port_Game_Volume", "Volume");
+    const volSlider = document.createElement("input");
+    volSlider.type = "range";
+    volSlider.className = "win98-slider";
+    volSlider.min = "0";
+    volSlider.max = "100";
+    volSlider.step = "1";
+    volSlider.value = String(Math.round(audio.volume * 100));
+    volSlider.style.flex = "1";
+    volSlider.title = t("Port_Game_VolumeTitle", "Master volume");
+    volSlider.addEventListener("input", () => {
+      audio.setVolume(volSlider.valueAsNumber / 100);
+    });
+    volRow.appendChild(volLabel);
+    volRow.appendChild(volSlider);
+    menu.appendChild(volRow);
+
+    // Quit button — pull-up of the bottom-strip ESC behaviour.
+    const quitBtn = document.createElement("button");
+    quitBtn.type = "button";
+    quitBtn.className = "btn-red";
+    quitBtn.textContent = t("Tournament_QuitGameButton", "Quit game");
+    quitBtn.style.marginTop = "6px";
+    quitBtn.style.width = "100%";
+    quitBtn.style.padding = "2px 8px";
+    quitBtn.style.minHeight = "auto";
+    quitBtn.style.fontSize = "11px";
+    quitBtn.addEventListener("click", () => {
+      this.closeSettingsMenu();
+      this.quit();
+    });
+    menu.appendChild(quitBtn);
+
+    parent.appendChild(menu);
+    this.settingsMenuEl = menu;
+    anchor.classList.add("is-active");
+    anchor.setAttribute("aria-pressed", "true");
+
+    // Close on click anywhere outside the popover. Capture phase so we see
+    // it before any panel handler can swallow the event.
+    const onOutside = (ev: MouseEvent): void => {
+      const target = ev.target as Node | null;
+      if (!target) return;
+      if (menu.contains(target)) return;
+      if (anchor.contains(target)) return;
+      this.closeSettingsMenu();
+    };
+    this.menuOutsideClickHandler = onOutside;
+    // Defer registration so the click that opened the menu doesn't immediately
+    // close it.
+    setTimeout(() => {
+      if (this.menuOutsideClickHandler === onOutside) {
+        document.addEventListener("click", onOutside, true);
+      }
+    }, 0);
   }
 
   /** Give up on the current hole — server caps strokes & marks DNF. */

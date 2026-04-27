@@ -877,11 +877,7 @@ export class MultiGame extends GolfGame {
             }
             return false;
         }
-        // Broadcast `game join` to existing players BEFORE adding the new one.
-        // Ordinal is 1-based (client subtracts 1) — must include the joiner,
-        // so playerCount() + 1. See Game.sendJoinMessages for the matching note.
-        this.broadcast(tabularize("game", "join", this.playerCount() + 1, player.nick, player.clan));
-        this.addPlayer(player);
+        if (!this.addPlayer(player)) return false;
 
         if (lobby && this.players.length > 1) {
             // Update game-list entry (player count changed).
@@ -895,6 +891,71 @@ export class MultiGame extends GolfGame {
             }
             this.startGame();
         }
+        return true;
+    }
+
+    /**
+     * MultiGame join — reuses the lowest unoccupied slot id (0..numPlayers-1)
+     * so a leaver's slot is reclaimed by the next joiner, and broadcasts
+     * `game join` exactly once with that id.
+     *
+     * The base `Game.addPlayer` always assigns the new player `numberIndex`,
+     * which only ever grows — so after any prior leave a fresh joiner takes a
+     * sparse high id while the old slot stays vacant. That breaks two things
+     * for MultiGame:
+     *   1. The per-slot stroke arrays (`playerStrokesThisTrack/Total`) are
+     *      sized to `numPlayers` in the constructor — sparse ids past that
+     *      cap fall off the end.
+     *   2. The base also calls `sendJoinMessages` which broadcasts `game join`
+     *      with `numberIndex + 1`. When the original `MultiGame` layer ALSO
+     *      broadcast a join with `playerCount() + 1`, the two ordinals diverged
+     *      after a leave and existing clients ended up with the joiner appearing
+     *      at TWO scoreboard rows — sometimes overwriting an unrelated active
+     *      player. (See #39 root cause.)
+     *
+     * The override below picks a single dense id and uses it consistently for
+     * the broadcast, the owninfo, and the `playersNumber` push.
+     */
+    override addPlayer(player: Player): boolean {
+        if (this.players.includes(player)) return false;
+
+        // Lowest free slot id within the room's hard cap.
+        let slotId = 0;
+        while (slotId < this.numPlayers && this.playersNumber.includes(slotId)) {
+            slotId++;
+        }
+        if (slotId >= this.numPlayers) return false;
+
+        // Detach from the lobby with the right MULTI-flavoured reason. The
+        // base Game.addPlayer would use STARTED_SP here, which surfaces a
+        // misleading "joined single-player" event in `lobby_leave` analytics.
+        if (player.lobby !== null) {
+            const reason = this.players.length === 0 ? PartReason.CREATED_MP : PartReason.JOINED_MP;
+            player.lobby.removePlayer(player, reason, this.name);
+        }
+
+        // Send join messages BEFORE adding the player so writeAll loops below
+        // don't include the joiner.
+        this.sendGameInfo(player);
+        this.sendPlayerNames(player);
+        const joinBody = tabularize("game", "join", slotId + 1, player.nick, player.clan);
+        for (const p of this.players) {
+            p.connection.sendDataRaw(joinBody);
+        }
+        player.connection.sendData("game", "owninfo", slotId, player.nick, player.clan);
+
+        this.players.push(player);
+        this.playersNumber.push(slotId);
+        if (slotId >= this.numberIndex) this.numberIndex = slotId + 1;
+        player.game = this;
+
+        logEvent("game_join", {
+            game_id: this.gameId,
+            lobby: this.lobbyType,
+            id: player.id,
+            nick: player.nick,
+            players: this.players.length,
+        });
         return true;
     }
 
