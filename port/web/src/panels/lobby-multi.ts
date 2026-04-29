@@ -170,7 +170,10 @@ export class LobbyMultiPanel implements Panel {
     // 354px is enough for the longest Finnish dropdown option
     // ("Takaisin lyöntipaikkaan") given the form's label-auto / select-fill
     // grid layout below.
-    main.style.gridTemplateColumns = "1fr 354px";
+    // `minmax(0, 1fr)` on the games column overrides the default
+    // `auto` (min-content) implicit minimum so the games list scrolls
+    // instead of pushing the right column out of view when many rooms exist.
+    main.style.gridTemplateColumns = "minmax(0, 1fr) 354px";
     main.style.gap = "8px";
 
     // Game list
@@ -178,6 +181,10 @@ export class LobbyMultiPanel implements Panel {
     const gamesScroll = document.createElement("div");
     gamesScroll.style.overflowY = "auto";
     gamesScroll.style.flex = "1";
+    // `min-height: 0` lets this flex child shrink below its content height
+    // so the inner `overflow-y: auto` actually paginates rather than
+    // expanding the whole box.
+    gamesScroll.style.minHeight = "0";
     gamesScroll.style.background = "rgba(255,255,255,0.85)";
     gamesScroll.style.border = "1px solid #000";
     gamesScroll.style.fontSize = "12px";
@@ -185,16 +192,25 @@ export class LobbyMultiPanel implements Panel {
     main.appendChild(gamesBox);
     this.gameListEl = gamesScroll;
 
-    // Right column: players + create form (stacked)
+    // Right column: players + create form (stacked).
+    // `minmax(0, 1fr) auto` on the rows lets the players list shrink to a
+    // scrollable area regardless of how many players are in the lobby —
+    // a plain `1fr` track defaults to a min-content minimum, which would
+    // push the create-game form down behind the chat strip when the
+    // player list grew long.
     const rightCol = document.createElement("div");
     rightCol.style.display = "grid";
-    rightCol.style.gridTemplateRows = "1fr auto";
+    rightCol.style.gridTemplateRows = "minmax(0, 1fr) auto";
     rightCol.style.gap = "8px";
+    rightCol.style.minHeight = "0";
 
     const playersBox = this.makeBox(t("LobbyReal_ListTitlePlayers", "Players"));
     const playersScroll = document.createElement("div");
     playersScroll.style.overflowY = "auto";
     playersScroll.style.flex = "1";
+    // See gamesScroll above — `min-height: 0` is what makes the flex child
+    // honour its parent's height instead of expanding to fit every row.
+    playersScroll.style.minHeight = "0";
     playersScroll.style.background = "rgba(255,255,255,0.85)";
     playersScroll.style.border = "1px solid #000";
     playersScroll.style.fontSize = "12px";
