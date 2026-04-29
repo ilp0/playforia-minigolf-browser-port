@@ -1200,12 +1200,23 @@ export class GamePanel implements Panel {
       this.startX = defaultStart[0];
       this.startY = defaultStart[1];
 
-      // Per-player spawn — Java resetPosition() rules: per-color (48..51) wins,
-      // common start is the fallback, finally the centre default.
+      // Per-player spawn. Java resetPosition() does per-color (48..51) → common
+      // start → leave-uninitialized (which lands at (0,0)). Port matches the
+      // first two steps but, when neither exists for slot `i`, distributes
+      // across whatever colour spawns ARE present instead of dumping the player
+      // at the map centre. Triggered when a track has e.g. 2 colour spawns and
+      // no shape-24 with 4 players: slots 2/3 used to land at (367.5, 187.5).
+      // Determinism-safe: every client computes the same `i % pool.length`.
+      const spawnPool = parsed.resetPositions.filter(
+        (r): r is [number, number] => r !== null,
+      );
       for (let i = 0; i < this.players.length; i++) {
         const p = this.players[i];
         const colour = i < parsed.resetPositions.length ? parsed.resetPositions[i] : null;
-        const spawn = colour ?? commonStart ?? [367.5, 187.5];
+        let spawn: [number, number] | null = colour ?? commonStart;
+        if (!spawn) {
+          spawn = spawnPool.length > 0 ? spawnPool[i % spawnPool.length] : [367.5, 187.5];
+        }
         p.startX = spawn[0];
         p.startY = spawn[1];
         p.ball = newBall(spawn[0], spawn[1]);
