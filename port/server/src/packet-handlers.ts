@@ -388,6 +388,8 @@ register({
         // attempt, so they don't think the connection is broken when nobody
         // sees their message. `command` is a no-op anyway, so don't bother.
         if (!server.chatEnabled && (verb === "say" || verb === "sayp")) {
+            const dropped = verb === "sayp" ? `-> ${arg3}: ${arg4 ?? ""}` : arg3;
+            console.log(`[chat] dropped (disabled) ${scope} ${verb} from ${player.nick}: ${dropped}`);
             conn.sendData(scope, "sayp", "server", "Chat is disabled on this server.");
             return;
         }
@@ -404,6 +406,7 @@ register({
         }
 
         if (verb === "say") {
+            console.log(`[chat] ${scope} ${player.nick}: ${arg3}`);
             for (const other of targets) {
                 if (other === player) continue;
                 if (scope === "game" && player.game) {
@@ -419,6 +422,9 @@ register({
             }
         } else if (verb === "sayp") {
             const recipient = targets.find((p) => p.nick === arg3);
+            console.log(
+                `[chat] ${scope} whisper ${player.nick} -> ${arg3}${recipient ? "" : " (offline)"}: ${arg4 ?? ""}`,
+            );
             if (recipient) {
                 recipient.connection.sendData(scope, "sayp", player.nick, arg4 ?? "");
             }
