@@ -1,7 +1,7 @@
-// Smoke check for issue #27 - confirms `S <settings>` rides along in the
-// `game starttrack` payload so the client renderer can apply mine/magnet/
-// teleport visibility + illusion-shadow flags. Reuses the test-fullflow
-// handshake up to starttrack and asserts on the new field.
+// Smoke check for issue #27 - confirms the `game starttrack` payload carries
+// either no S field (track had no S line; client defaults to all visible) or
+// an S field with a parseable body. Reuses the test-fullflow handshake up to
+// starttrack and asserts shape, not presence (since most stock tracks omit S).
 //
 // Usage: WS_URL=ws://localhost:4274/ws node --experimental-strip-types
 //        --no-warnings src/test-s-line.ts
@@ -74,17 +74,22 @@ if (!tField) {
     console.error("FAIL: no T line");
     process.exit(1);
 }
-if (!sField) {
-    console.error("FAIL: no S line in starttrack frame - issue #27 fix incomplete");
-    process.exit(1);
+// S line is optional now: the server only ships it when the track file
+// actually declares one. ~92% of stock tracks have no S line, in which case
+// the client falls back to all-visible flags. When the field IS present, the
+// body is "<flags>" or "<flags><minPlayers><maxPlayers>" (e.g. "tttt14") -
+// `parseTrack` / `parseSettingsFlags` cover the value side in unit tests.
+if (sField) {
+    const sBody = sField.substring(2);
+    if (sBody.length < 4) {
+        console.error(`FAIL: S body too short to carry 4 flags: ${JSON.stringify(sBody)}`);
+        process.exit(1);
+    }
+    console.log("starttrack:", { hasT: true, hasC: !!cField, hasS: true, sBody, sBodyLen: sBody.length });
+    console.log(`OK: S line shipped (body=${JSON.stringify(sBody)}, len=${sBody.length})`);
+} else {
+    console.log("starttrack:", { hasT: true, hasC: !!cField, hasS: false });
+    console.log("OK: no S line (track had none; client defaults to all visible)");
 }
-const sBody = sField.substring(2);
-// The body itself is "ffff" for the ~93% of stock tracks without an explicit
-// S declaration and "<flags><minPlayers><maxPlayers>" (e.g. "tttt14") for the
-// ones that do. We just assert the line IS shipped - `parseTrack` /
-// `parseSettingsFlags` are unit-tested against real track files in
-// shared/src/track.test.ts so the value side is covered there.
-console.log("starttrack:", { hasT: true, hasC: !!cField, hasS: true, sBody, sBodyLen: sBody.length });
-console.log(`OK: S line shipped (body=${JSON.stringify(sBody)}, len=${sBody.length})`);
 ws.close();
 process.exit(0);

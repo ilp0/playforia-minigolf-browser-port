@@ -99,11 +99,13 @@ A few non-obvious pitfalls when modifying things:
   watch out.
 - **`networkSerialize` has a port-specific addition.** It now includes a
   `C <categories>` line that Java's `FileSystemTrackStats.networkSerialize`
-  doesn't emit, plus an `S <settings>` line that the Java server also
-  omitted (the Java client never honored these flags because of a parser
-  typo on the receiving side - see `parseSettingsFlags` in
+  doesn't emit, plus an optional `S <settings>` line that the Java server
+  also omitted (the Java client never honored these flags because of a
+  parser typo on the receiving side - see `parseSettingsFlags` in
   `shared/src/track.ts`). Clients use C for the in-game tag chips and S
-  for tile-visibility / illusion-shadow rendering. If you ever cross-test
+  for tile-visibility / illusion-shadow rendering. The S line is only
+  shipped when the source track file actually has one; absent S means
+  "all visible" on the client (the editor's view). If you ever cross-test
   against a real Java client, expect it to ignore both lines (it scans
   for known prefixes only).
 - **The shooter waits for the server broadcast.** Don't optimize the
