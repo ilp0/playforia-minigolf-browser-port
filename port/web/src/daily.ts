@@ -47,19 +47,6 @@ export function saveDailyResult(r: DailyResult): void {
 }
 
 /**
- * Score formula. Above 100 = beat the track average; 100 = on average; below
- * 100 = worse. Hand-tuned for "average ≈ 5 strokes" tracks: each stroke
- * relative to the average moves the score by ~10 points. Forfeits get a fixed
- * floor so the share is still postable.
- */
-export function dailyScore(strokes: number, average: number, forfeited: boolean): number {
-    if (forfeited) return 0;
-    if (!Number.isFinite(average) || average <= 0) return 100;
-    const delta = average - strokes; // positive = better than average
-    return Math.max(0, Math.round(100 + delta * 10));
-}
-
-/**
  * Best-effort copy. Resolves to true if the modern Clipboard API succeeded.
  * Returns false if the browser refused (no permission, insecure context,
  * etc.) so the caller can show a manual-copy fallback.
@@ -89,15 +76,23 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     }
 }
 
-export function shareText(r: DailyResult): string {
-    const score = dailyScore(r.strokes, r.average, r.forfeited);
+/** YYYY-MM-DD → DD.MM.YYYY for the human-facing share line. */
+function formatShareDate(isoDate: string): string {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
+    if (!m) return isoDate;
+    return `${m[3]}.${m[2]}.${m[1]}`;
+}
+
+export function shareText(r: DailyResult, replayUrl?: string): string {
     const avgStr = r.average > 0 ? r.average.toFixed(1) : "?";
-    const lines = [
-        `Playforia Minigolf - Daily Cup ${r.date}`,
+    const lines: string[] = [];
+    if (replayUrl) lines.push(replayUrl);
+    lines.push(`Daily Cup ${formatShareDate(r.date)}`);
+    lines.push(
         r.forfeited
             ? `Forfeited "${r.trackName}" (avg ${avgStr})`
-            : `${r.strokes} stroke${r.strokes === 1 ? "" : "s"} on "${r.trackName}" (avg ${avgStr}) - score ${score}`,
-    ];
+            : `${r.strokes} stroke${r.strokes === 1 ? "" : "s"} on "${r.trackName}" (avg ${avgStr})`,
+    );
     return lines.join("\n");
 }
 

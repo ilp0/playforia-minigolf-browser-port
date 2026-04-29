@@ -14,7 +14,6 @@ import {
 } from "../game/physics.ts";
 import {
   copyToClipboard,
-  dailyScore,
   replayLink,
   saveDailyResult,
   shareText,
@@ -2151,7 +2150,6 @@ export class GamePanel implements Panel {
     lines.style.textAlign = "center";
     lines.style.padding = "8px 0";
 
-    const score = dailyScore(result.strokes, result.average, result.forfeited);
     const verdict = result.forfeited
       ? t("Port_Daily_VerdictForfeited", "Forfeited")
       : result.average > 0 && result.strokes < result.average
@@ -2179,11 +2177,11 @@ export class GamePanel implements Panel {
       row2.textContent = t("Port_Daily_RowAverage", "Track average: %1 strokes", result.average.toFixed(1));
       lines.appendChild(row2);
     }
-    const row3 = document.createElement("div");
-    row3.style.fontWeight = "bold";
-    row3.style.marginTop = "4px";
-    row3.textContent = t("Port_Daily_RowScore", "Score: %1  -  %2", score, verdict);
-    lines.appendChild(row3);
+    const verdictRow = document.createElement("div");
+    verdictRow.style.fontWeight = "bold";
+    verdictRow.style.marginTop = "4px";
+    verdictRow.textContent = verdict;
+    lines.appendChild(verdictRow);
     ov.appendChild(lines);
 
     const btnRow = document.createElement("div");
@@ -2191,12 +2189,52 @@ export class GamePanel implements Panel {
     btnRow.style.gap = "6px";
     btnRow.style.justifyContent = "center";
 
+    // Replay availability: if we have track tile data (T-line) and at least
+    // one recorded stroke, the share text gets the replay URL prepended.
+    // Forfeit-without-shooting runs share stats only.
+    const hasReplay = !!this.dailyTLine && this.dailyReplayStrokes.length > 0;
+
     const copyBtn = document.createElement("button");
     copyBtn.type = "button";
     copyBtn.className = "btn-green";
-    copyBtn.textContent = t("Port_Daily_CopyShareText", "Copy share text");
+
+    const idleLabel = t("Port_Daily_CopyShareText", "Copy share text");
+    const savingLabel = t("Port_Daily_SavingReplay", "Saving replay…");
+
+    let cachedUrl: string | null = null;
+    copyBtn.textContent = hasReplay ? savingLabel : idleLabel;
+    copyBtn.disabled = hasReplay;
+
+    if (hasReplay) {
+      const replay: DailyReplay = {
+        v: 1,
+        d: dateKey,
+        n: this.trackName,
+        a: this.trackAuthor,
+        avg: this.trackAverage > 0 ? this.trackAverage : undefined,
+        t: this.dailyTLine!,
+        s: this.dailyReplayStrokes,
+        holed: !!me?.holedThisTrack,
+      };
+      // Auto-upload as soon as the overlay opens so the click is instant.
+      // Falls back to `replayLink(replay)` (long URL with the run packed into
+      // the URL fragment) on network/server failure so the user always gets
+      // *something* shareable.
+      void (async () => {
+        let url: string;
+        try {
+          url = await shortReplayLink(replay);
+        } catch {
+          url = replayLink(replay);
+        }
+        cachedUrl = url;
+        copyBtn.disabled = false;
+        copyBtn.textContent = idleLabel;
+      })();
+    }
+
     copyBtn.addEventListener("click", () => {
-      const text = shareText(result);
+      const text = shareText(result, cachedUrl ?? undefined);
       void copyToClipboard(text).then((ok) => {
         copyBtn.textContent = ok
           ? t("Port_Daily_Copied", "Copied!")
@@ -2206,7 +2244,7 @@ export class GamePanel implements Panel {
           // hand-copy when the Clipboard API is gated (older browsers / iframes).
           const ta = document.createElement("textarea");
           ta.value = text;
-          ta.rows = 3;
+          ta.rows = 4;
           ta.style.width = "320px";
           ta.style.fontFamily = '"Lucida Console", monospace';
           ta.style.fontSize = "11px";
@@ -2215,80 +2253,11 @@ export class GamePanel implements Panel {
           ta.select();
         }
         window.setTimeout(() => {
-          copyBtn.textContent = t("Port_Daily_CopyShareText", "Copy share text");
+          copyBtn.textContent = idleLabel;
         }, 2000);
       });
     });
     btnRow.appendChild(copyBtn);
-
-    // "Copy replay link" - only present when we have both the track tile data
-    // (T-line) and at least one recorded stroke. Forfeit-without-shooting runs
-    // give an empty replay, which we hide rather than offering a no-op link.
-    if (this.dailyTLine && this.dailyReplayStrokes.length > 0) {
-      const replay: DailyReplay = {
-        v: 1,
-        d: dateKey,
-        n: this.trackName,
-        a: this.trackAuthor,
-        avg: this.trackAverage > 0 ? this.trackAverage : undefined,
-        t: this.dailyTLine,
-        s: this.dailyReplayStrokes,
-        holed: !!me?.holedThisTrack,
-      };
-      const linkBtn = document.createElement("button");
-      linkBtn.type = "button";
-      linkBtn.className = "btn-blue";
-      linkBtn.disabled = true;
-      linkBtn.textContent = t("Port_Daily_SavingReplay", "Saving replay…");
-
-      // Auto-upload as soon as the overlay opens. The previous behaviour was
-      // to defer the POST until the user clicked, which meant a fresh upload
-      // (and possible failure) on every share. Doing it eagerly:
-      //   - Makes the "Copy replay link" click instant once it lands.
-      //   - Surfaces upload failures immediately so the user sees the
-      //     fallback fragment-embedded link without waiting.
-      // Falls back to `replayLink(replay)` (long URL with the run packed into
-      // the URL fragment) on network/server failure so the user always gets
-      // *something* shareable.
-      let cachedUrl: string | null = null;
-      void (async () => {
-        let url: string;
-        try {
-          url = await shortReplayLink(replay);
-        } catch {
-          url = replayLink(replay);
-        }
-        cachedUrl = url;
-        linkBtn.disabled = false;
-        linkBtn.textContent = t("Port_Daily_CopyReplayLink", "Copy replay link");
-      })();
-
-      linkBtn.addEventListener("click", () => {
-        if (!cachedUrl) return;
-        const url = cachedUrl;
-        void (async () => {
-          const ok = await copyToClipboard(url);
-          linkBtn.textContent = ok
-            ? t("Port_Daily_LinkCopied", "Link copied!")
-            : t("Port_Daily_CopyFailedShort", "Copy failed");
-          if (!ok) {
-            const ta = document.createElement("textarea");
-            ta.value = url;
-            ta.rows = 3;
-            ta.style.width = "320px";
-            ta.style.fontFamily = '"Lucida Console", monospace';
-            ta.style.fontSize = "11px";
-            ta.style.marginTop = "6px";
-            ov.appendChild(ta);
-            ta.select();
-          }
-          window.setTimeout(() => {
-            linkBtn.textContent = t("Port_Daily_CopyReplayLink", "Copy replay link");
-          }, 2000);
-        })();
-      });
-      btnRow.appendChild(linkBtn);
-    }
 
     const backBtn = document.createElement("button");
     backBtn.type = "button";
