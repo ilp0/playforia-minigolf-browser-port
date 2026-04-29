@@ -46,15 +46,15 @@ export interface ParsedMap {
    * its cached background canvas.
    */
   dirtyTiles: Array<[number, number]>;
-  /** Atlases the map was built against — held for in-place re-rasterization. */
+  /** Atlases the map was built against - held for in-place re-rasterization. */
   atlases: Atlases;
 }
 
 /**
  * Rasterize one tile's 15×15 pixels into the collision map. Shared by
  * `buildMap` (whole-map build) and `mutateTile` (in-place updates) so the
- * substitution rules — shape 24/26/33/35/37/39 fall through to background,
- * bricks 40-43 keep their shape ID, magnets 44/45 have water-aware fallback —
+ * substitution rules - shape 24/26/33/35/37/39 fall through to background,
+ * bricks 40-43 keep their shape ID, magnets 44/45 have water-aware fallback -
  * can never drift between build and mutate paths.
  */
 function rasterizeCollisionTile(
@@ -116,7 +116,7 @@ function rasterizeCollisionTile(
  * In-place tile update used by movable/breakable blocks during physics.
  * Mutates `tiles[tx][ty]`, re-rasterizes the 15×15 collision pixels, and
  * appends the tile to `dirtyTiles` so the renderer can refresh its cached
- * background. Safe to call multiple times per frame for the same tile —
+ * background. Safe to call multiple times per frame for the same tile -
  * the renderer dedupes naturally because the final state is what gets blitted.
  */
 export function mutateTile(map: ParsedMap, tx: number, ty: number, code: number): void {

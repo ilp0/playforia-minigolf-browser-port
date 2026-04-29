@@ -14,7 +14,7 @@ const trackPath = (rel: string) =>
         rel,
     );
 
-describe("parseTrack — 100degrees.track", () => {
+describe("parseTrack - 100degrees.track", () => {
     it("extracts author / name / categories / plays from a real V2 file", () => {
         const text = fs.readFileSync(trackPath("tracks/100degrees.track"), "utf8");
         const track = parseTrack(text);
@@ -36,7 +36,7 @@ describe("parseTrack — 100degrees.track", () => {
     });
 });
 
-describe("parseTrack — defaults for missing optional lines", () => {
+describe("parseTrack - defaults for missing optional lines", () => {
     it("returns defaults when only required lines are present", () => {
         const text = ["V 2", "A x", "N y", "T BAQQ"].join("\n");
         const track = parseTrack(text);
@@ -59,7 +59,7 @@ describe("parseSettingsFlags", () => {
 
     it("ignores the trailing 2-digit min/max-player suffix on real S lines", () => {
         // VersionedTrackFileParser has a `length() != 6` typo that drops these
-        // entirely; we deliberately diverge — the first four chars are the
+        // entirely; we deliberately diverge - the first four chars are the
         // flag bits regardless of how many trailing chars follow.
         assert.deepEqual(parseSettingsFlags("tttt14"), [true, true, true, true]);
         assert.deepEqual(parseSettingsFlags("ftft14"), [false, true, false, true]);
@@ -90,7 +90,7 @@ describe("applySettingsToTileCode", () => {
     });
 
     it("returns the input unchanged when all flags are on", () => {
-        // Mine, magnet, every teleport variant — flags=tttt means "show all".
+        // Mine, magnet, every teleport variant - flags=tttt means "show all".
         for (const shape of [4, 6, 20, 21, 10, 11, 12, 13, 14, 15]) {
             const code = tile(2, shape, 1, 0);
             assert.equal(applySettingsToTileCode(code, allOn), code, `shape=${shape}`);
@@ -127,7 +127,7 @@ describe("applySettingsToTileCode", () => {
         for (const raw of [11, 13, 15]) {
             assert.equal(applySettingsToTileCode(tile(2, raw, bg, 0), allOff), 34144256 + bg * 256);
         }
-        // Blue itself (raw 8 source, raw 9 exit) is already generic — no change.
+        // Blue itself (raw 8 source, raw 9 exit) is already generic - no change.
         const blueStart = tile(2, 8, bg, 0);
         const blueExit = tile(2, 9, bg, 0);
         assert.equal(applySettingsToTileCode(blueStart, allOff), blueStart);
@@ -147,7 +147,7 @@ describe("applySettingsToTileCode", () => {
     });
 });
 
-describe("parseTrackset — birchwood.trackset", () => {
+describe("parseTrackset - birchwood.trackset", () => {
     it("parses name, difficulty and 9 track names", () => {
         const text = fs.readFileSync(trackPath("sets/birchwood.trackset"), "utf8");
         const set = parseTrackset(text);

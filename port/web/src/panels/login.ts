@@ -13,7 +13,7 @@ const CLIENT_ID_STORAGE_KEY = "mg.clientId";
  * compact random string for execution contexts that don't expose it
  * (very old test runners, mostly).
  *
- * The server only consumes this for analytics — it's logged in
+ * The server only consumes this for analytics - it's logged in
  * player_login / player_disconnect / player_reconnect, never used for
  * authentication or session takeover, so a forged or shared id only
  * confuses our own dashboards.
@@ -24,7 +24,7 @@ function getOrCreateClientId(): string {
     if (existing && existing.length > 0) return existing;
   } catch {
     // localStorage unavailable (private mode quota, sandbox). Fall through
-    // and mint a transient id — it'll change on every refresh, which makes
+    // and mint a transient id - it'll change on every refresh, which makes
     // the analytics weaker but still better than nothing.
   }
   const fresh = mintClientId();
@@ -40,7 +40,7 @@ function mintClientId(): string {
   const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
   if (c && typeof c.randomUUID === "function") return c.randomUUID();
   // Fallback: 16 bytes of Math.random in hex. Not cryptographically secure,
-  // but the cid only labels analytics rows — collision risk is what matters,
+  // but the cid only labels analytics rows - collision risk is what matters,
   // and 128 bits is plenty for that.
   let s = "";
   for (let i = 0; i < 32; i++) s += Math.floor(Math.random() * 16).toString(16);
@@ -122,7 +122,7 @@ export class LoginPanel implements Panel {
     const langRow = document.createElement("div");
     langRow.className = "form-row";
     const langLabel = document.createElement("label");
-    // No matching key in AGolf.xml — Java surfaces languages via Language_<code>
+    // No matching key in AGolf.xml - Java surfaces languages via Language_<code>
     // values but never had a "Language:" label key. Use the port-specific
     // Port_Login_Language so a translator can add it later if desired.
     langLabel.textContent = t("Port_Login_Language", "Language");
@@ -253,7 +253,7 @@ export class LoginPanel implements Panel {
 
     const lang = (this.langSelect?.value ?? "en") as Lang;
     // Make sure the chosen locale's XML is loaded before any post-login panel
-    // mounts. Awaited fire-and-forget — the panel transition is server-driven
+    // mounts. Awaited fire-and-forget - the panel transition is server-driven
     // (waits for `status lobbyselect`), so the round-trip gives `setLanguage`
     // ample time to finish.
     saveLang(lang);
@@ -268,7 +268,7 @@ export class LoginPanel implements Panel {
 
     // Full guest-login handshake. The server processes these in order; the
     // final `login` is what triggers basicinfo + status\tlobbyselect.
-    // `nick` is the port's extension to the original handshake — the server
+    // `nick` is the port's extension to the original handshake - the server
     // uses it as the player's display name instead of the random `~anonym-`
     // placeholder, so other players (and ghost labels in daily mode) see the
     // name the user chose at the login screen.

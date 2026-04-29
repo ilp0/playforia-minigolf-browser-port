@@ -95,7 +95,7 @@ export abstract class Game {
      * the rest. `reason` follows the Java codes consumed by GamePanel:
      *   4 = USERLEFT (voluntary back / `back` packet)
      *   5 = CONN_PROBLEM (grace expired after disconnect)
-     *   6 = SWITCHEDLOBBY (silent — client just nulls the name)
+     *   6 = SWITCHEDLOBBY (silent - client just nulls the name)
      * Defaults to USERLEFT so the back-button path keeps its existing wire.
      */
     removePlayer(player: Player, reason: number = PartReason.USERLEFT): boolean {
@@ -127,7 +127,7 @@ export abstract class Game {
                 p.connection.sendData("game", "join", this.numberIndex + 1, player.nick, player.clan);
             }
         }
-        // Self owninfo — Java sends `numberIndex` BEFORE incrementing, so first player sees 0.
+        // Self owninfo - Java sends `numberIndex` BEFORE incrementing, so first player sees 0.
         player.connection.sendData("game", "owninfo", this.numberIndex, player.nick, player.clan);
     }
 
@@ -319,7 +319,7 @@ export class GolfGame extends Game {
                 if (player.lobby) {
                     player.lobby.addPlayer(player, JoinType.FROMGAME);
                 } else {
-                    // Lobby was nulled when the game was created — fall back via server next turn.
+                    // Lobby was nulled when the game was created - fall back via server next turn.
                 }
                 player.game = null;
                 return true;
@@ -343,7 +343,7 @@ export class GolfGame extends Game {
         // play or already in the hole.
         if (this.playStatus.charAt(playerId) !== "f") return;
         this.strokeSeedCounter++;
-        // 32-bit composite — distinct per (game, stroke) so all clients pick
+        // 32-bit composite - distinct per (game, stroke) so all clients pick
         // up a fresh independent random stream.
         const seed = ((this.gameId & 0xffff) << 16) | (this.strokeSeedCounter & 0xffff);
         this.writeAll(tabularize("game", "beginstroke", playerId, ballCoords, mouseCoords, seed));
@@ -397,7 +397,7 @@ export class GolfGame extends Game {
         );
 
         // If this stroke just finished the player, the set of unfinished
-        // players shrank — clear any pending skip votes so the survivors can
+        // players shrank - clear any pending skip votes so the survivors can
         // re-vote (or use the skip button as a solo-forfeit when only one
         // player is left mid-track). Skipped on `nextTrack` paths because that
         // already broadcasts its own `resetvoteskip`.
@@ -416,7 +416,7 @@ export class GolfGame extends Game {
     protected forfeit(player: Player): void {
         const id = this.getPlayerId(player);
         if (!this.players[id]) return;
-        // Already done — ignore.
+        // Already done - ignore.
         const cur = this.playStatus.charAt(id);
         if (cur === "t" || cur === "p") return;
 
@@ -473,7 +473,7 @@ export class GolfGame extends Game {
         for (const player of this.players) {
             if (!player.hasSkipped && this.playStatus.charAt(this.getPlayerId(player)) === "f") return;
         }
-        // Vote passed — cap any player still mid-track at the stroke limit
+        // Vote passed - cap any player still mid-track at the stroke limit
         // (mirroring `forfeit`). Players already holed ('t') or forfeited ('p')
         // keep their actual score; only those still in 'f' get the max.
         const psArr = this.playStatus.split("");
@@ -560,7 +560,7 @@ export class GolfGame extends Game {
 }
 
 /**
- * Daily-challenge game — singleton room held by the server. Plays a single
+ * Daily-challenge game - singleton room held by the server. Plays a single
  * deterministic track for the day; everyone in the room sees each other's
  * balls (existing async-MP broadcast already gives "ghost" semantics, since
  * other players' beginstroke packets are relayed to all and each client sims
@@ -599,14 +599,14 @@ export class DailyGame extends GolfGame {
             false,
             1,                             // numberOfTracks
             PERM_EVERYONE,
-            0,                             // tracksType (ALL — daily picks deterministically)
+            0,                             // tracksType (ALL - daily picks deterministically)
             0,                             // maxStrokes (unlimited; forfeit always available)
             STROKETIMEOUT_INFINITE,
             0,                             // waterEvent
             COLLISION_NO,
             SCORING_STROKE,
             SCORING_WEIGHT_END_NONE,
-            100,                           // numPlayers — effectively unbounded room cap
+            100,                           // numPlayers - effectively unbounded room cap
             trackManager,
         );
         this.dateKey = dateKey;
@@ -699,7 +699,7 @@ export class DailyGame extends GolfGame {
         );
     }
 
-    /** Single track only — no auto-advance. */
+    /** Single track only - no auto-advance. */
     protected override nextTrack(): void {
         // No-op.
     }
@@ -758,7 +758,7 @@ export class DailyGame extends GolfGame {
     override handlePacket(player: Player, fields: string[]): boolean {
         if (fields.length >= 2 && fields[1] === "back") {
             this.removePlayer(player);
-            // No daily lobby panel — bounce straight to lobbyselect.
+            // No daily lobby panel - bounce straight to lobbyselect.
             player.connection.sendData("status", "lobbyselect", "300");
             player.game = null;
             return true;
@@ -769,7 +769,7 @@ export class DailyGame extends GolfGame {
     /**
      * The configured `numPlayers` is a soft cap (100); reporting that to a
      * newcomer would make their client allocate 100 empty scoreboard rows.
-     * Report `players.length + 1` instead — the realistic room size right
+     * Report `players.length + 1` instead - the realistic room size right
      * after this player joins. The subsequent `starttrack` (whose `playStatus`
      * length is authoritative) corrects this further.
      */
@@ -841,7 +841,7 @@ export class TrainingGame extends GolfGame {
 }
 
 /**
- * Multi-player golf — port of org.moparforia.server.game.gametypes.golf.MultiGame.
+ * Multi-player golf - port of org.moparforia.server.game.gametypes.golf.MultiGame.
  *
  * Lifecycle:
  *   1. Constructor: creator joins; lobby broadcasts `lobby gamelist add <gameString>`.
@@ -855,7 +855,7 @@ export class TrainingGame extends GolfGame {
  * for players to fill, anyone in the room can press the Practice button to
  * start a shared run of random tracks that auto-cycle on each hole-in. Late
  * joiners drop into the current practice track. When the last player joins,
- * practice ends and the configured tracks list is played from track 1 — the
+ * practice ends and the configured tracks list is played from track 1 - the
  * existing `startGame()` flow runs untouched.
  */
 export class MultiGame extends GolfGame {
@@ -929,7 +929,7 @@ export class MultiGame extends GolfGame {
     addPlayerWithPassword(player: Player, password: string): boolean {
         const lobby = player.lobby;
         if (this.passworded && password !== this.password) {
-            // Wrong password — back to the lobby.
+            // Wrong password - back to the lobby.
             if (lobby) {
                 lobby.addPlayer(player, JoinType.FROMGAME);
                 player.connection.sendData("error", "wrongpassword");
@@ -944,11 +944,11 @@ export class MultiGame extends GolfGame {
         }
 
         if (this.isPublic && this.players.length === this.numPlayers) {
-            // Room just filled for the first time — kick the real game off.
+            // Room just filled for the first time - kick the real game off.
             // `startGame()` clears any active practice state so the configured
             // track list is what plays. Re-broadcast `gamelist change` so the
             // inProgress flag flips for everyone in the lobby (the room stays
-            // visible — we no longer drop it from the list on fill so vacated
+            // visible - we no longer drop it from the list on fill so vacated
             // slots can be refilled later).
             this.isPublic = false;
             if (lobby) {
@@ -956,12 +956,12 @@ export class MultiGame extends GolfGame {
             }
             this.startGame();
         } else if (!this.isPublic) {
-            // Game already running — catch the late joiner up to the current
+            // Game already running - catch the late joiner up to the current
             // track. `addPlayer` already broadcast `game join` to the rest;
             // they keep playing untouched.
             this.sendCurrentTrackTo(player);
         } else if (this.practiceActive) {
-            // Late joiner during practice — drop them into the current track.
+            // Late joiner during practice - drop them into the current track.
             this.sendPracticeTrackTo(player);
         }
         return true;
@@ -975,10 +975,10 @@ export class MultiGame extends GolfGame {
      * and replays per-slot `endstroke` packets so peers who already finished
      * the current track render correctly on the joiner's scoreboard.
      *
-     * Per-track stroke counts for prior tracks aren't recoverable — the
+     * Per-track stroke counts for prior tracks aren't recoverable - the
      * server doesn't keep per-track history per slot, only the rolling
      * `playerStrokesTotal`. The joiner's scoreboard renders prior columns
-     * as "—" via the client's `holeScores[t] === undefined` branch.
+     * as "-" via the client's `holeScores[t] === undefined` branch.
      */
     private sendCurrentTrackTo(player: Player): void {
         const slotId = this.getPlayerId(player);
@@ -1024,7 +1024,7 @@ export class MultiGame extends GolfGame {
      * `game start`/`starttrack` pair to everyone currently in the room. New
      * joiners get a personal version of the same broadcast via
      * `sendPracticeTrackTo`. The configured `this.tracks` list is left
-     * untouched — `sendGameInfo`'s `numTracks` and the eventual real-game
+     * untouched - `sendGameInfo`'s `numTracks` and the eventual real-game
      * track sequence both keep working.
      *
      * No-op if the real game has already started (`!this.isPublic`).
@@ -1152,7 +1152,7 @@ export class MultiGame extends GolfGame {
 
     /** Inject the `practice` verb before falling through to the standard
      *  GolfGame handler. Practice can only start while the room is still
-     *  open (`isPublic`) — the request is ignored otherwise. */
+     *  open (`isPublic`) - the request is ignored otherwise. */
     override handlePacket(player: Player, fields: string[]): boolean {
         if (fields.length >= 2 && fields[1] === "practice") {
             this.startPractice();
@@ -1162,22 +1162,22 @@ export class MultiGame extends GolfGame {
     }
 
     /**
-     * MultiGame join — reuses the lowest unoccupied slot id (0..numPlayers-1)
+     * MultiGame join - reuses the lowest unoccupied slot id (0..numPlayers-1)
      * so a leaver's slot is reclaimed by the next joiner, and broadcasts
      * `game join` exactly once with that id.
      *
      * The base `Game.addPlayer` always assigns the new player `numberIndex`,
-     * which only ever grows — so after any prior leave a fresh joiner takes a
+     * which only ever grows - so after any prior leave a fresh joiner takes a
      * sparse high id while the old slot stays vacant. That breaks two things
      * for MultiGame:
      *   1. The per-slot stroke arrays (`playerStrokesThisTrack/Total`) are
-     *      sized to `numPlayers` in the constructor — sparse ids past that
+     *      sized to `numPlayers` in the constructor - sparse ids past that
      *      cap fall off the end.
      *   2. The base also calls `sendJoinMessages` which broadcasts `game join`
      *      with `numberIndex + 1`. When the original `MultiGame` layer ALSO
      *      broadcast a join with `playerCount() + 1`, the two ordinals diverged
      *      after a leave and existing clients ended up with the joiner appearing
-     *      at TWO scoreboard rows — sometimes overwriting an unrelated active
+     *      at TWO scoreboard rows - sometimes overwriting an unrelated active
      *      player. (See #39 root cause.)
      *
      * The override below picks a single dense id and uses it consistently for
@@ -1238,7 +1238,7 @@ export class MultiGame extends GolfGame {
             // ball that's never going to roll. Stamp the slot 'p' (passed)
             // so `allDoneOnCurrentTrack` sees only still-present players
             // as needing to finish; advance the track if they all did.
-            // Applies to both practice and real games — a vacated slot
+            // Applies to both practice and real games - a vacated slot
             // should never block progression for whoever's still here.
             const cur = this.playStatus.charAt(playerNum);
             if (cur === "f") {
@@ -1256,7 +1256,7 @@ export class MultiGame extends GolfGame {
         }
 
         if (wasPracticing && this.players.length === 0) {
-            // Room emptied mid-practice — drop the practice ref so a future
+            // Room emptied mid-practice - drop the practice ref so a future
             // re-use of this object (none today, defensive) doesn't leak.
             this.practiceActive = false;
             this.practiceTrack = null;
@@ -1265,13 +1265,13 @@ export class MultiGame extends GolfGame {
         const lobby = player.lobby;
         if (this.players.length > 0) {
             if (!wasPublic) {
-                // Game was in progress — pick the first remaining player to shoot.
+                // Game was in progress - pick the first remaining player to shoot.
                 this.broadcast(tabularize("game", "startturn", this.playersNumber[0] ?? 0));
             }
             if (lobby) {
                 // Always update the gamelist row so the freed slot is visible
                 // to lobby-side joiners (covers both waiting and in-progress
-                // games — full rooms now stay in the list and shrink back to
+                // games - full rooms now stay in the list and shrink back to
                 // joinable when someone leaves).
                 lobby.writeAll(tabularize("lobby", "gamelist", "change", this.getGameString()));
             }

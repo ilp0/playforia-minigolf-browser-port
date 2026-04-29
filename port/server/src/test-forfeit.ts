@@ -5,7 +5,7 @@
 //   - Player A holes-in immediately on hole 1.
 //   - Player B forfeits hole 1 (caps strokes at 3).
 //   - Track must advance because both are "done" (one t, one p).
-//   - On hole 2, A takes 3 strokes without holing — server must auto-cap them
+//   - On hole 2, A takes 3 strokes without holing - server must auto-cap them
 //     at maxStrokes (the third endstroke flips status to "p").
 //
 // Usage: node --experimental-strip-types --no-warnings src/test-forfeit.ts
@@ -128,7 +128,7 @@ async function main(): Promise<void> {
         await b.waitFor((s) => /^d \d+ game\tstarttrack/.test(s), "B starttrack 2");
         console.log("[OK] track advanced after forfeit (one in hole + one DNF)");
 
-        // Hole 2: A takes 3 strokes without holing — server must auto-cap.
+        // Hole 2: A takes 3 strokes without holing - server must auto-cap.
         for (let stroke = 1; stroke <= 3; stroke++) {
             a.sendData("game", "beginstroke", ENC, MOUSE);
             await a.waitFor((s) => /^d \d+ game\tbeginstroke\t0\t/.test(s), `A stroke ${stroke}`);

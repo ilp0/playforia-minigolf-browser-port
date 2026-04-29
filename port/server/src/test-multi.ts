@@ -161,7 +161,7 @@ async function main(): Promise<void> {
         const seedBonB = bGotB.split("\t").pop();
         if (seedAonA !== seedAonB) throw new Error(`A's stroke seed differs across clients: ${seedAonA} vs ${seedAonB}`);
         if (seedBonA !== seedBonB) throw new Error(`B's stroke seed differs across clients: ${seedBonA} vs ${seedBonB}`);
-        if (seedAonA === seedBonA) throw new Error(`A's stroke seed matches B's — should be unique per stroke`);
+        if (seedAonA === seedBonA) throw new Error(`A's stroke seed matches B's - should be unique per stroke`);
         console.log(`[OK] determinism: both clients agree A.seed=${seedAonA}, B.seed=${seedBonA}, and they differ`);
 
         // Each player reports their own ball stopped (not in hole).
@@ -198,7 +198,7 @@ async function main(): Promise<void> {
         await b.waitFor((s) => /^d \d+ game\tend/.test(s), "B game end");
         console.log("[OK] game ended after both holed (no turn-arbiter required)");
 
-        // Chat (lobby — return first).
+        // Chat (lobby - return first).
         a.sendData("game", "back");
         b.sendData("game", "back");
         await a.waitFor((s) => /^d \d+ status\tlobby\tx/.test(s), "A back to lobby");
@@ -207,7 +207,7 @@ async function main(): Promise<void> {
         await b.waitFor((s) => /lobby\tsay\thi from A/.test(s), "B sees A's chat");
         console.log("[OK] lobby chat works");
 
-        // Lobby `back` button — `lobbyselect leave` must remove from current
+        // Lobby `back` button - `lobbyselect leave` must remove from current
         // lobby and bounce back to lobbyselect. The historical bug was that
         // the single-player Back sent `lobbyselect select 1` which re-entered
         // the same lobby, so the panel snapped right back. We send `leave`

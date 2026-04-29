@@ -127,7 +127,7 @@ async function main(): Promise<void> {
         const gameId = parseInt(addLine.split("\t")[3] ?? "0", 10);
         console.log("[OK] game created with id", gameId, "(4 players, 3 tracks)");
 
-        // B joins (now 2/4). No `game start` should fire — room not full.
+        // B joins (now 2/4). No `game start` should fire - room not full.
         b.sendData("lobby", "jmpt", String(gameId));
         await b.waitFor((s) => /^d \d+ status\tgame/.test(s), "B status game");
         await a.waitFor((s) => /^d \d+ game\tjoin\t2\t/.test(s), "A sees B join");
@@ -171,11 +171,11 @@ async function main(): Promise<void> {
         // Now both are 't' → nextTrack picks a fresh random track.
         await a.waitFor((s) => /^d \d+ game\tstarttrack\tff\t/.test(s), "A practice next track");
         await b.waitFor((s) => /^d \d+ game\tstarttrack\tff\t/.test(s), "B practice next track");
-        // No `game start` between practice tracks — only on the very first start.
+        // No `game start` between practice tracks - only on the very first start.
         // (Existing handler only sends `start` from `startGame`/`startPractice`.)
         console.log("[OK] practice cycles: both holed → fresh random track");
 
-        // C joins mid-practice — gets a personal start/starttrack/practicemode t.
+        // C joins mid-practice - gets a personal start/starttrack/practicemode t.
         a.drain(); b.drain();
         c.sendData("lobby", "jmpt", String(gameId));
         await c.waitFor((s) => /^d \d+ status\tgame/.test(s), "C status game");

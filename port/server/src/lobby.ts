@@ -1,4 +1,4 @@
-// Lobby — port of org.moparforia.server.game.Lobby.
+// Lobby - port of org.moparforia.server.game.Lobby.
 import { tabularize } from "@minigolf/shared";
 import type { Player } from "./player.ts";
 import type { Game } from "./game.ts";
@@ -22,7 +22,7 @@ export const PartReason = Object.freeze({
     SWITCHEDLOBBY: 6,
 } as const);
 
-/** Human-readable names for `PartReason` codes — used by the analytics
+/** Human-readable names for `PartReason` codes - used by the analytics
  *  `lobby_leave` event so consumers don't have to remember the numbers. */
 const PART_REASON_NAME: Record<number, string> = {
     1: "started_sp",
@@ -81,7 +81,7 @@ export class Lobby {
             p.connection.sendData("lobby", verb, player.toString());
             others.push(p.toString());
         }
-        // lobby\tusers[\t<userN>...] — include "lobby\tusers" with no extra tab when empty.
+        // lobby\tusers[\t<userN>...] - include "lobby\tusers" with no extra tab when empty.
         if (others.length > 0) {
             player.connection.sendDataRaw(tabularize("lobby", "users", ...others));
         } else {
@@ -111,7 +111,7 @@ export class Lobby {
         }
         // Send tag-count metadata to populate the lobby form's track-type
         // dropdown labels. Wire form: lobby tagcounts <all> <c1>..<c6>
-        // (port extension — Java didn't have this).
+        // (port extension - Java didn't have this).
         if (this.tagCountsBody !== null) {
             player.connection.sendDataRaw(this.tagCountsBody);
         }
@@ -135,7 +135,7 @@ export class Lobby {
     /**
      * Send the multiplayer game list to one player. Mirrors Java
      * Lobby.sendGameList. Today this is only called for `LobbyType.MULTI`,
-     * which contains exclusively MultiGame rooms — full and ongoing rooms
+     * which contains exclusively MultiGame rooms - full and ongoing rooms
      * are included so the player can see what's happening across the lobby
      * (and join any room with a free slot, including ones that filled
      * earlier and have since freed a seat).
@@ -153,7 +153,7 @@ export class Lobby {
         }
         fields.push(count);
         if (flat.length > 0) {
-            // Java emits the games concatenated with trailing "\t" — duplicate that exactly.
+            // Java emits the games concatenated with trailing "\t" - duplicate that exactly.
             fields.push(flat.join("\t") + "\t");
         }
         player.connection.sendDataRaw(tabularize(...fields));

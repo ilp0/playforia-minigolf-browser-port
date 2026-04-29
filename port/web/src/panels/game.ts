@@ -14,7 +14,6 @@ import {
 } from "../game/physics.ts";
 import {
   copyToClipboard,
-  dailyScore,
   replayLink,
   saveDailyResult,
   shareText,
@@ -130,7 +129,7 @@ function saveSettings(s: GameSettings): void {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
   } catch {
-    // localStorage unavailable (private mode, quota) — accept the loss.
+    // localStorage unavailable (private mode, quota) - accept the loss.
   }
 }
 
@@ -163,7 +162,7 @@ interface PlayerSlot {
   clan: string;
   strokesThisTrack: number;
   ball: BallState;
-  /** Per-stroke physics context — replaced on each `beginstroke` broadcast. */
+  /** Per-stroke physics context - replaced on each `beginstroke` broadcast. */
   ctx: PhysicsContext | null;
   /** True until this player holes-in for the current track. */
   active: boolean;
@@ -175,14 +174,14 @@ interface PlayerSlot {
   forfeitedThisTrack: boolean;
   /**
    * Java `playerVotedToSkip[player]`. Set when we receive `game voteskip <id>`
-   * from the server (or locally when *we* press skip — the server doesn't
+   * from the server (or locally when *we* press skip - the server doesn't
    * echo back the sender). Cleared on every `resetvoteskip` and on starttrack.
    * Drives the "(Vote: skip track)" badge in the scoreboard row.
    */
   votedToSkip: boolean;
   /**
    * Java `playerReadyForNewGame[player]`. Set when we receive `game rfng <id>`
-   * (or locally when *we* press the play-again button — server doesn't echo).
+   * (or locally when *we* press the play-again button - server doesn't echo).
    * Drives the "(Wants a new game!)" badge after the game ends.
    */
   wantsNewGame: boolean;
@@ -191,7 +190,7 @@ interface PlayerSlot {
    * byte from `game part <id> <reason>`:
    *   4 = USERLEFT (voluntary back)
    *   5 = CONN_PROBLEM (network blip / closed tab)
-   *   6 = SWITCHEDLOBBY (silent — name nulled, no badge)
+   *   6 = SWITCHEDLOBBY (silent - name nulled, no badge)
    * Drives the trailing badge in the scoreboard row for parted players.
    */
   partReason: number;
@@ -205,7 +204,7 @@ interface PlayerSlot {
   startY: number;
   /**
    * Final stroke counts per finished hole, indexed by hole-1. Filled in on
-   * every `endstroke` broadcast for the current hole — the last write before
+   * every `endstroke` broadcast for the current hole - the last write before
    * the track advances becomes the recorded final.
    */
   holeScores: number[];
@@ -218,7 +217,7 @@ interface PlayerSlot {
   cursorY: number | null;
   /**
    * Right-click shooting mode this peer is currently in (0..3). Driven by the
-   * 4th field of the `game cursor` broadcast — peers send the mode alongside
+   * 4th field of the `game cursor` broadcast - peers send the mode alongside
    * the cursor position so the watcher's aim preview matches what the peer
    * actually sees on their own screen.
    */
@@ -226,18 +225,18 @@ interface PlayerSlot {
 }
 
 /**
- * Multi-player game panel — async play with **server-assigned per-stroke seeds**.
+ * Multi-player game panel - async play with **server-assigned per-stroke seeds**.
  *
  * Determinism contract:
  *   1. Server picks a unique 32-bit seed for each beginstroke and broadcasts it
  *      to ALL clients (including the shooter).
  *   2. The shooter does NOT apply the impulse on click. They wait for the
- *      server's broadcast and apply it then — so the shooter and every watcher
+ *      server's broadcast and apply it then - so the shooter and every watcher
  *      run identical physics from identical initial conditions with the same
  *      Seed instance.
  *   3. Each ball gets its own Seed instance (per stroke); parallel strokes from
  *      different players never share random state.
- *   4. Server is the single source of truth for stroke counts and hole-ins —
+ *   4. Server is the single source of truth for stroke counts and hole-ins -
  *      its `endstroke` broadcasts overwrite the local scoreboard.
  */
 export class GamePanel implements Panel {
@@ -300,7 +299,7 @@ export class GamePanel implements Panel {
   private skipButtonHost: HTMLElement | null = null;
   private playAgainButton: HTMLButtonElement | null = null;
   /**
-   * Practice-mode button — shown only while a multiplayer room is still
+   * Practice-mode button - shown only while a multiplayer room is still
    * waiting for fillers. Click sends `game practice`; the server answers
    * with the usual start/starttrack/practicemode trio. Mutually exclusive
    * with `skipButton` (you only see one or the other depending on whether
@@ -336,7 +335,7 @@ export class GamePanel implements Panel {
   private gameId: string = "0";
   private numPlayers = 1;
   /**
-   * Configured room capacity from `gameinfo` — does NOT shrink when a
+   * Configured room capacity from `gameinfo` - does NOT shrink when a
    * starttrack arrives with a shorter `playStatus` (which can happen during
    * practice in a partially-filled room: 1/4 players makes playStatus = "f",
    * length 1, but the room is still a 4-player room). Drives the
@@ -370,32 +369,32 @@ export class GamePanel implements Panel {
    */
   private activeTouchId: number | null = null;
   private aimingByTouch = false;
-  /** Magnifier loupe — circular canvas floating above the finger during a
+  /** Magnifier loupe - circular canvas floating above the finger during a
    *  drag-to-shoot. Painted from the main canvas inside `draw()` so the
    *  zoomed-in view always reflects the current aim line. */
   private loupeEl: HTMLCanvasElement | null = null;
   /** Mobile-only shoot-mode cycle button. Floats over the canvas (visible
    *  only on touch-primary devices), shows the current `shootingMode` glyph,
-   *  and cycles 0..3 on tap — replacing the desktop right-click that's
+   *  and cycles 0..3 on tap - replacing the desktop right-click that's
    *  unavailable on mobile. Created in `mount`, re-synced on every cycle. */
   private shootModeBtnEl: HTMLButtonElement | null = null;
-  /** Last touch position in viewport coords — used to position the loupe. */
+  /** Last touch position in viewport coords - used to position the loupe. */
   private touchClientX = 0;
   private touchClientY = 0;
   /**
    * Cached "is this a phone/tablet" check. Reads the `is-touch-mode` body
    * class set by `setupTouchMode()` in main.ts, so the in-game flag uses
-   * the same verdict as the CSS gates — single source of truth for both
+   * the same verdict as the CSS gates - single source of truth for both
    * the touch-only menu rows + shoot-mode button and the aim/cursor
    * suppression while no finger is down. On `true`, the aim line and
-   * cursor broadcasts are gated on an active touch — otherwise mouseX/Y
+   * cursor broadcasts are gated on an active touch - otherwise mouseX/Y
    * starts at (0,0) and the aim line would point to the top-left corner
    * before the user has even tapped.
    */
   private isTouchPrimary =
     typeof document !== "undefined" &&
     document.body?.classList?.contains("is-touch-mode") === true;
-  /** Toggleable user prefs (names, cursor send/recv) — persisted via localStorage. */
+  /** Toggleable user prefs (names, cursor send/recv) - persisted via localStorage. */
   private settings: GameSettings = loadSettings();
   private settingsMenuEl: HTMLElement | null = null;
   private menuButtonEl: HTMLButtonElement | null = null;
@@ -408,9 +407,9 @@ export class GamePanel implements Panel {
    */
   private dailyMode = false;
   private dailyDateKey: string | null = null;
-  /** Track average from the latest starttrack — used in the share text. */
+  /** Track average from the latest starttrack - used in the share text. */
   private trackAverage = 0;
-  /** Track display name from the latest starttrack — used in the share text. */
+  /** Track display name from the latest starttrack - used in the share text. */
   private trackName = "";
   /** Set once we have shown the daily share screen, to avoid double-saving. */
   private dailyResultRecorded = false;
@@ -420,9 +419,9 @@ export class GamePanel implements Panel {
    * so the run can be replayed bit-exactly without server cooperation.
    */
   private dailyReplayStrokes: Array<[string, string, number]> = [];
-  /** Raw `T <map>` line from the most recent starttrack — embedded in replay links. */
+  /** Raw `T <map>` line from the most recent starttrack - embedded in replay links. */
   private dailyTLine: string | null = null;
-  /** Track author from starttrack — surfaced in playback HUD. */
+  /** Track author from starttrack - surfaced in playback HUD. */
   private trackAuthor = "";
 
   constructor(app: App) {
@@ -536,7 +535,7 @@ export class GamePanel implements Panel {
     const actions = document.createElement("div");
     actions.className = "actions";
 
-    // Skip-track — Java GameControlPanel `buttonSkip`. Lives in `.actions`
+    // Skip-track - Java GameControlPanel `buttonSkip`. Lives in `.actions`
     // so in multiplayer it sits next to the Menu button on the far right
     // (matching the original "Radan väliinjättö" position). Hidden by
     // `updateSkipButtonVisibility` in 1-player and daily rooms.
@@ -553,7 +552,7 @@ export class GamePanel implements Panel {
     this.skipButton = skip;
     this.skipButtonHost = actions;
 
-    // Practice — port-original "Harjoittele" button. Occupies the same slot
+    // Practice - port-original "Harjoittele" button. Occupies the same slot
     // as the skip button while the multiplayer room is still filling up;
     // `updateSkipButtonVisibility` keeps the two mutually exclusive (Skip
     // is meaningless before a track has started; Practice is meaningless
@@ -570,13 +569,13 @@ export class GamePanel implements Panel {
     practice.style.display = "none";
     practice.title = t(
       "Port_Game_PracticeHint",
-      "Play random maps while waiting — multiplayer enabled",
+      "Play random maps while waiting - multiplayer enabled",
     );
     practice.addEventListener("click", () => this.startPractice());
     actions.appendChild(practice);
     this.practiceButton = practice;
 
-    // "Valikko" — opens the ESC popover (settings + quit). Replaces the
+    // "Valikko" - opens the ESC popover (settings + quit). Replaces the
     // original "<- Valikkoon" button position.
     const menuBtn = document.createElement("button");
     menuBtn.type = "button";
@@ -600,7 +599,7 @@ export class GamePanel implements Panel {
     trackinfo.appendChild(center);
     trackinfo.appendChild(right);
 
-    // Chat first in DOM order — single-player CSS hides it, multi-player CSS
+    // Chat first in DOM order - single-player CSS hides it, multi-player CSS
     // gives it `flex: 1` so it takes the left half of the bottom band.
     const chatStrip = this.makeChatStrip();
     bottomBand.appendChild(chatStrip);
@@ -628,7 +627,7 @@ export class GamePanel implements Panel {
 
     const keyHandler = (ev: KeyboardEvent) => {
       if (ev.key === "Escape") {
-        // Avoid swallowing ESC while a chat input/textarea has focus — the
+        // Avoid swallowing ESC while a chat input/textarea has focus - the
         // user is probably trying to clear a draft, not pop the menu.
         const focused = ev.target as HTMLElement | null;
         if (focused && (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA")) return;
@@ -669,7 +668,7 @@ export class GamePanel implements Panel {
       const dx = me.ball.x - mx;
       const dy = me.ball.y - my;
       if (Math.sqrt(dx * dx + dy * dy) < 6.5) return;
-      // Don't apply impulse here — wait for server broadcast (which includes
+      // Don't apply impulse here - wait for server broadcast (which includes
       // the seed) so we run identical physics with everyone else.
       const ix = (me.ball.x | 0);
       const iy = (me.ball.y | 0);
@@ -682,7 +681,7 @@ export class GamePanel implements Panel {
     canvas.addEventListener("mousedown", clickHandler);
     this.clickHandler = clickHandler;
 
-    // Suppress the browser's right-click context menu on the canvas — the
+    // Suppress the browser's right-click context menu on the canvas - the
     // right button is reserved for cycling shootingMode (Java parity).
     const contextMenuHandler = (ev: MouseEvent) => {
       ev.preventDefault();
@@ -704,13 +703,13 @@ export class GamePanel implements Panel {
     };
 
     // Larger no-shot deadzone for touch than for the 6.5 px mouse threshold:
-    // touch precision is ~10–30 screen px which lands as ~14–42 canvas px
+    // touch precision is ~10-30 screen px which lands as ~14-42 canvas px
     // after the landscape-fit downscale. Anything below this counts as a
     // tap-on-ball cancel rather than a tiny accidental nudge.
     const TOUCH_SHOT_DEADZONE = 14;
 
     const touchStartHandler = (ev: TouchEvent) => {
-      // Only track if there is no active touch — multi-finger doesn't aim.
+      // Only track if there is no active touch - multi-finger doesn't aim.
       if (this.activeTouchId !== null) return;
       if (ev.changedTouches.length === 0) return;
       ev.preventDefault();
@@ -774,7 +773,7 @@ export class GamePanel implements Panel {
     this.touchEndHandler = touchEndHandler;
 
     const touchCancelHandler = (ev: TouchEvent) => {
-      // OS interruption (notification, system gesture) — abort the aim.
+      // OS interruption (notification, system gesture) - abort the aim.
       const t = findActiveTouch(ev.changedTouches);
       if (!t) return;
       this.activeTouchId = null;
@@ -887,7 +886,7 @@ export class GamePanel implements Panel {
         this.roomCapacity = this.numPlayers;
         this.numTracks = parseInt(f[6] ?? "1", 10) || 1;
         this.waterEvent = parseInt(f[10] ?? "0", 10) || 0;
-        // Fresh gameinfo arrives on every join — reset the "started" gate so
+        // Fresh gameinfo arrives on every join - reset the "started" gate so
         // the Practice button reappears for any new room (including a
         // re-join). The trailing `f` flag in the packet always says
         // "isStarted=false" today; we don't trust it and just track via the
@@ -922,7 +921,7 @@ export class GamePanel implements Panel {
           this.ensurePlayerSlots(id + 1);
           // Slot may have been left inactive by an earlier `part`. Reset
           // every per-player field a previous occupant could have dirtied
-          // before populating the new identity — otherwise the joiner
+          // before populating the new identity - otherwise the joiner
           // inherits stale `active=false`, prior strokes, holed/forfeit
           // flags, ball position, hole-score history, etc. The spawn falls
           // back to `slot.startX/Y` which is the panel default for fresh
@@ -961,7 +960,7 @@ export class GamePanel implements Panel {
           const slot = this.players[id];
           if (slot) {
             if (reason === 6) {
-              // SWITCHEDLOBBY — silent removal, just clear the slot's name
+              // SWITCHEDLOBBY - silent removal, just clear the slot's name
               // so the scoreboard row no longer references them.
               slot.nick = "";
               slot.active = false;
@@ -1046,7 +1045,7 @@ export class GamePanel implements Panel {
         // unhandled-packet log; the comparison panel is a deferred follow-up.
         break;
       case "start":
-        // Server's "round begins" broadcast — fires both at first game start
+        // Server's "round begins" broadcast - fires both at first game start
         // AND on "uusi peli" (new game) restart after the end overlay. Reset
         // per-game scoreboard state so a fresh round doesn't carry forward
         // the prior game's hole scores or track index.
@@ -1084,7 +1083,7 @@ export class GamePanel implements Panel {
       case "starttrack":
         // A late joiner to a started game gets a personal `starttrack`
         // (no `start` precedes it on their wire), so flip the
-        // game-started gate here too — otherwise the Practice button
+        // game-started gate here too - otherwise the Practice button
         // would still be available to a player who's already mid-room.
         this.gameStartedReceived = true;
         this.handleStartTrack(f);
@@ -1094,7 +1093,7 @@ export class GamePanel implements Panel {
         // index this is so the HUD reads "Track N/M" matching the room
         // rather than the default "Track 1/M" the client would compute
         // from the single starttrack it just received. No-op for normal
-        // joiners — `handleStartTrack` already incremented to the right
+        // joiners - `handleStartTrack` already incremented to the right
         // value before this packet arrives, and the server simply doesn't
         // emit `gametrack` for them.
         {
@@ -1150,7 +1149,7 @@ export class GamePanel implements Panel {
         // Server tagging this room as the daily challenge. f[2] is the UTC
         // date key the server picked the track for. The packet arrives AFTER
         // `starttrack` (server.joinDaily ordering), so refresh the skip
-        // button — the prior starttrack would have shown it for a daily
+        // button - the prior starttrack would have shown it for a daily
         // room with two or more occupants because dailyMode was still false.
         this.dailyMode = true;
         this.dailyDateKey = f[2] ?? null;
@@ -1226,14 +1225,14 @@ export class GamePanel implements Panel {
         p.ctx = null;
         p.holedThisTrack = false;
         p.forfeitedThisTrack = false;
-        // Drop stale aim previews — last hole's cursor would point off-map.
+        // Drop stale aim previews - last hole's cursor would point off-map.
         p.cursorX = null;
         p.cursorY = null;
         p.cursorMode = 0;
       }
       this.currentTrackIdx++;
       this.updateStrokeCount();
-      // Java parity: shootingMode resets at startTurn — for our async port
+      // Java parity: shootingMode resets at startTurn - for our async port
       // there's no per-turn boundary, so reset on every track change so a
       // mode picked on the previous hole doesn't leak into the new one.
       this.shootingMode = 0;
@@ -1250,7 +1249,7 @@ export class GamePanel implements Panel {
       // sends `starttrack` BEFORE `dailymode` in the daily-join sequence
       // (server.ts joinDaily: start → resetvoteskip → starttrack → dailymode),
       // so a `dailyMode` guard here always missed the first track and left
-      // `dailyTLine` null — hiding the "Copy replay link" button in the share
+      // `dailyTLine` null - hiding the "Copy replay link" button in the share
       // overlay. The fields are harmless to populate for non-daily rooms; the
       // button-render check requires both daily mode and recorded strokes.
       this.dailyTLine = tLine;
@@ -1303,7 +1302,7 @@ export class GamePanel implements Panel {
     const slot = this.players[id];
     if (!slot) return;
 
-    // Take the ball position the server believed at stroke begin — this keeps
+    // Take the ball position the server believed at stroke begin - this keeps
     // every client's physics agreement bit-exact even if our local ball drifted.
     const ballCoords = decodeCoords(ballRaw);
     slot.ball.x = ballCoords.x;
@@ -1312,7 +1311,7 @@ export class GamePanel implements Panel {
     const mouse = decodeCoords(mouseRaw);
     // Snapshot all OTHER players' resting positions for the movable-block
     // obstruction check. Skip the shooter (their ball is the one moving) and
-    // any peer currently mid-stroke (we'd diverge across clients otherwise —
+    // any peer currently mid-stroke (we'd diverge across clients otherwise -
     // local positions for in-flight balls aren't authoritative).
     const otherPlayers: Array<{ x: number; y: number } | null> = [];
     for (let pi = 0; pi < this.players.length; pi++) {
@@ -1342,7 +1341,7 @@ export class GamePanel implements Panel {
     slot.ctx = ctx;
     applyStrokeImpulse(slot.ball, ctx, mouse.x, mouse.y, mouse.mode);
     slot.simulating = true;
-    // Mirror Java GamePanel.java:388 / :448 — playGameMove() on every stroke,
+    // Mirror Java GamePanel.java:388 / :448 - playGameMove() on every stroke,
     // including the local player's (server echoes their own click back).
     audio.playGameMove();
     // Clear the firing peer's aim preview so we don't draw a stale line from
@@ -1361,7 +1360,7 @@ export class GamePanel implements Panel {
     }
     // Record OUR strokes when in daily mode for the share-link replay. Stored
     // raw (4-char base36 coords + uint32 seed) so encoding the link is just a
-    // straight JSON pack — no further processing needed.
+    // straight JSON pack - no further processing needed.
     if (this.dailyMode && id === this.myPlayerId) {
       this.dailyReplayStrokes.push([ballRaw, mouseRaw, seedNum]);
     }
@@ -1388,7 +1387,7 @@ export class GamePanel implements Panel {
     } else if (status === "p") {
       slot.simulating = false;
       slot.forfeitedThisTrack = true;
-      // Hide the ball — they're done with this hole.
+      // Hide the ball - they're done with this hole.
       slot.ball.inHole = true; // reuse the "hidden" sprite path
     }
     if (id === this.myPlayerId) this.updateStrokeCount();
@@ -1488,7 +1487,7 @@ export class GamePanel implements Panel {
     // Daily rooms have sparse player ids (a finisher who later leaves still
     // owns a slot in the server's playStatus, so a fresh joiner's myPlayerId
     // can exceed the broadcast playStatus length / numPlayers). Iterate up to
-    // myPlayerId+1 so the produced string always includes our own char —
+    // myPlayerId+1 so the produced string always includes our own char -
     // otherwise the server reads `charAt(myPlayerId) === ""`, resolves it to
     // "f", and never marks us as holed.
     const len = Math.max(this.numPlayers, this.myPlayerId + 1);
@@ -1498,7 +1497,7 @@ export class GamePanel implements Panel {
         s += this.players[i]?.ball.inHole ? "t" : "f";
       } else {
         // Other players' status: the server overwrites it anyway, so just
-        // say "still playing" — the server only trusts our own char.
+        // say "still playing" - the server only trusts our own char.
         s += this.players[i]?.ball.inHole ? "t" : "f";
       }
     }
@@ -1586,7 +1585,7 @@ export class GamePanel implements Panel {
     for (let i = 0; i < this.players.length; i++) {
       const p = this.players[i];
       if (!p) continue;
-      // Daily mode: only the local player's score is shown — other ghosts in
+      // Daily mode: only the local player's score is shown - other ghosts in
       // the room represent concurrent runs, not a shared scoreboard.
       if (this.dailyMode && i !== this.myPlayerId) continue;
       const row = document.createElement("div");
@@ -1595,7 +1594,7 @@ export class GamePanel implements Panel {
       num.textContent = `${i + 1}.`;
       const name = document.createElement("span");
       name.textContent = p.nick || t("Port_Game_PlayerFmt", "Player %1", i + 1);
-      // Match the ball+cursor palette — same `playerIdx` used by render.ts.
+      // Match the ball+cursor palette - same `playerIdx` used by render.ts.
       // The inline style overrides `.row.you` / `.row.them` colour rules.
       name.style.color = slotNickColor(i);
       // Per-hole stroke counts. Each cell renders into its own fixed-width
@@ -1622,13 +1621,13 @@ export class GamePanel implements Panel {
           if (t + 1 < this.currentTrackIdx) {
             // `holeScores[t]` is undefined when this player joined the
             // room AFTER track `t+1` ended (the server can't replay
-            // historical per-track stroke counts — the client only
+            // historical per-track stroke counts - the client only
             // accumulates them from live `endstroke` broadcasts during
-            // the run). Render "—" instead of "0" so a late joiner's
+            // the run). Render "-" instead of "0" so a late joiner's
             // scoreboard distinguishes "didn't play" from "scored 0".
             const score = p.holeScores[t];
             if (score === undefined) {
-              cell.textContent = "—";
+              cell.textContent = "-";
             } else {
               cell.textContent = String(score);
               totalSoFar += score;
@@ -1637,14 +1636,14 @@ export class GamePanel implements Panel {
             cell.textContent = String(p.strokesThisTrack);
             totalSoFar += p.strokesThisTrack;
           } else {
-            cell.textContent = "—";
+            cell.textContent = "-";
           }
           tracksCol.appendChild(cell);
         }
       }
       const total = document.createElement("span");
       // In practice mode the "= N" total would just duplicate the single
-      // strokes cell — drop it for a cleaner read.
+      // strokes cell - drop it for a cleaner read.
       total.textContent = this.practiceMode ? "" : "= " + totalSoFar;
       const note = document.createElement("span");
       // Mirrors Java PlayerInfoPanel's `extraMessage` priority chain:
@@ -1785,7 +1784,7 @@ export class GamePanel implements Panel {
     // Drain any tile mutations (movable blocks, breakable bricks) into the
     // renderer's cached background. The shading pass (applyShading) casts
     // shadows across tile boundaries, so we rebuild the full bgCanvas rather
-    // than re-blitting individual tiles — otherwise a moved block leaves a
+    // than re-blitting individual tiles - otherwise a moved block leaves a
     // phantom shadow at its old position and shows no bevel/shadow at its new
     // one. Coalesces any number of mutations into one rebuild per frame.
     if (this.parsedMap && this.parsedMap.dirtyTiles.length > 0) {
@@ -1795,7 +1794,7 @@ export class GamePanel implements Panel {
     let aim: AimLine | null = null;
     const me = this.players[this.myPlayerId];
     // On touch-primary devices the aim line only shows while a finger is
-    // actively dragging — without this gate, mouseX/Y stays at the last
+    // actively dragging - without this gate, mouseX/Y stays at the last
     // touch point (or the initial 0,0) and we'd render a stale/origin aim.
     const aimSuppressedByTouch = this.isTouchPrimary && !this.aimingByTouch;
     if (me && !me.ball.inHole && !me.simulating && !aimSuppressedByTouch) {
@@ -1819,7 +1818,7 @@ export class GamePanel implements Panel {
       const p = this.players[i];
       if (!p) continue;
       const isMine = i === this.myPlayerId;
-      // Skip empty placeholder slots from sparse-id gaps in daily rooms — a
+      // Skip empty placeholder slots from sparse-id gaps in daily rooms - a
       // joiner with a high sparse id leaves untouched lower indices that
       // never received `players` or `join`. Without this they would render
       // as ghosts at spawn labelled "Player N".
@@ -1827,7 +1826,7 @@ export class GamePanel implements Panel {
       // Daily mode: render every other player as a translucent ghost with a
       // name label above. Self renders normally.
       const ghost = this.dailyMode && !isMine;
-      // Multiplayer name labels — Java's `playerNamesDisplayMode` defaults
+      // Multiplayer name labels - Java's `playerNamesDisplayMode` defaults
       // to `playerCount <= 2 ? 0 : 3`, so labels only appear in 3+ player
       // games. Self is intentionally suppressed: the user knows which ball
       // is theirs, and Java's white-self / black-others colour split was
@@ -1846,14 +1845,14 @@ export class GamePanel implements Panel {
         (p.nick?.length ?? 0) > 0;
       // Sink/drown shrink animation. Java GameCanvas.drawPlayer (line 540)
       // passes the live onHoleTimer as shrinkAmount whenever the ball is on a
-      // hole/water/acid/swamp tile — physics.ts mirrors this in `liquidTimer`,
+      // hole/water/acid/swamp tile - physics.ts mirrors this in `liquidTimer`,
       // ramping 0→2.166 over a hole sink and 0→6.0 over a liquid death.
       const isSinking = p.ball.onHole || p.ball.onLiquidOrSwamp;
       sprites.push({
         x: p.ball.x,
         y: p.ball.y,
         playerIdx: i,
-        // Always idle frame — the "moving" frame in balls.gif is a different
+        // Always idle frame - the "moving" frame in balls.gif is a different
         // colour for the next player slot, which made the ball appear to swap
         // colours mid-shot.
         moving: false,
@@ -1865,7 +1864,7 @@ export class GamePanel implements Panel {
           : undefined,
         shrink: isSinking ? p.ball.liquidTimer : 0,
       });
-      // Peer aim preview — only for non-self peers whose ball is at rest and
+      // Peer aim preview - only for non-self peers whose ball is at rest and
       // who have a fresh cursor sample. The cursor is cleared on track change
       // and on each beginstroke so we never show a stale aim. Suppressed in
       // daily mode: the ghost rendering treats other players as non-interactive
@@ -1903,7 +1902,7 @@ export class GamePanel implements Panel {
   /**
    * Mount the loupe canvas on first use and tag it visible. The element lives
    * directly under <body> (position: fixed) so the landscape transform on
-   * #app doesn't affect its size — we want a constant 120 px circle floating
+   * #app doesn't affect its size - we want a constant 120 px circle floating
    * over the finger regardless of the global scale factor.
    */
   private showLoupe(): void {
@@ -1997,7 +1996,7 @@ export class GamePanel implements Panel {
       sx, sy, sampleSize, sampleSize,
       0, 0, 120, 120,
     );
-    // Crosshair at the loupe centre — marks the exact aim point under the
+    // Crosshair at the loupe centre - marks the exact aim point under the
     // finger. Two short red strokes with a 6 px gap so the actual pixel of
     // interest stays visible.
     lctx.strokeStyle = "rgba(255, 30, 30, 0.95)";
@@ -2017,7 +2016,7 @@ export class GamePanel implements Panel {
    * and force the next peer-cursor packet through the throttle so watchers
    * see the new orientation immediately even if the cursor is stationary.
    * Called from the desktop right-click path AND the mobile in-canvas
-   * shoot-mode button — both go through here so the button glyph and the
+   * shoot-mode button - both go through here so the button glyph and the
    * cursor broadcast stay in lockstep.
    */
   private cycleShootingMode(): void {
@@ -2074,13 +2073,13 @@ export class GamePanel implements Panel {
         const word =
           result === 1 ? t("GamePlayerInfo_Winner", "Winner!").replace(/!$/, "") :
           result === 0 ? t("GamePlayerInfo_Draw", "Draw") :
-          "—";
+          "-";
         const row = document.createElement("div");
         row.textContent = `${nick}: ${word}`;
         lines.appendChild(row);
       }
       ov.appendChild(lines);
-      // Mirror Java PlayerInfoPanel.java:457-461 — pick the local player's
+      // Mirror Java PlayerInfoPanel.java:457-461 - pick the local player's
       // outcome and play the matching applause/loss/draw clip once.
       const myResult = parseInt(f[2 + this.myPlayerId] ?? "0", 10);
       if (myResult === 1) audio.playGameWinner();
@@ -2093,10 +2092,10 @@ export class GamePanel implements Panel {
     btnRow.style.gap = "6px";
     btnRow.style.justifyContent = "center";
 
-    // Play-again — only meaningful in multiplayer (Java's `buttonNewGame`
+    // Play-again - only meaningful in multiplayer (Java's `buttonNewGame`
     // lives in GameControlPanel and is shown for state==2 game-over). In
     // single-player there's no peer to vote with us, so the server would
-    // just immediately restart on a single click — surface it the same way.
+    // just immediately restart on a single click - surface it the same way.
     if (this.numPlayers > 1) {
       const playAgain = document.createElement("button");
       playAgain.type = "button";
@@ -2152,7 +2151,7 @@ export class GamePanel implements Panel {
     ov.className = "game-end-overlay";
 
     const title = document.createElement("div");
-    title.textContent = t("Port_Daily_OverlayTitle", "Daily Cup — %1", dateKey);
+    title.textContent = t("Port_Daily_OverlayTitle", "Daily Cup - %1", dateKey);
     ov.appendChild(title);
 
     const lines = document.createElement("div");
@@ -2162,11 +2161,10 @@ export class GamePanel implements Panel {
     lines.style.textAlign = "center";
     lines.style.padding = "8px 0";
 
-    const score = dailyScore(result.strokes, result.average, result.forfeited);
     const verdict = result.forfeited
       ? t("Port_Daily_VerdictForfeited", "Forfeited")
       : result.average > 0 && result.strokes < result.average
-        ? t("Port_Daily_VerdictBelow", "Below average — nice!")
+        ? t("Port_Daily_VerdictBelow", "Below average - nice!")
         : result.average > 0 && result.strokes === Math.round(result.average)
           ? t("Port_Daily_VerdictOn", "Right on average.")
           : result.average > 0
@@ -2190,11 +2188,11 @@ export class GamePanel implements Panel {
       row2.textContent = t("Port_Daily_RowAverage", "Track average: %1 strokes", result.average.toFixed(1));
       lines.appendChild(row2);
     }
-    const row3 = document.createElement("div");
-    row3.style.fontWeight = "bold";
-    row3.style.marginTop = "4px";
-    row3.textContent = t("Port_Daily_RowScore", "Score: %1  —  %2", score, verdict);
-    lines.appendChild(row3);
+    const verdictRow = document.createElement("div");
+    verdictRow.style.fontWeight = "bold";
+    verdictRow.style.marginTop = "4px";
+    verdictRow.textContent = verdict;
+    lines.appendChild(verdictRow);
     ov.appendChild(lines);
 
     const btnRow = document.createElement("div");
@@ -2202,66 +2200,37 @@ export class GamePanel implements Panel {
     btnRow.style.gap = "6px";
     btnRow.style.justifyContent = "center";
 
+    // Replay availability: if we have track tile data (T-line) and at least
+    // one recorded stroke, the share text gets the replay URL prepended.
+    // Forfeit-without-shooting runs share stats only.
+    const hasReplay = !!this.dailyTLine && this.dailyReplayStrokes.length > 0;
+
     const copyBtn = document.createElement("button");
     copyBtn.type = "button";
     copyBtn.className = "btn-green";
-    copyBtn.textContent = t("Port_Daily_CopyShareText", "Copy share text");
-    copyBtn.addEventListener("click", () => {
-      const text = shareText(result);
-      void copyToClipboard(text).then((ok) => {
-        copyBtn.textContent = ok
-          ? t("Port_Daily_Copied", "Copied!")
-          : t("Port_Daily_CopyFailed", "Copy failed — select & copy manually");
-        if (!ok) {
-          // Fallback: drop the text into a visible textarea so the user can
-          // hand-copy when the Clipboard API is gated (older browsers / iframes).
-          const ta = document.createElement("textarea");
-          ta.value = text;
-          ta.rows = 3;
-          ta.style.width = "320px";
-          ta.style.fontFamily = '"Lucida Console", monospace';
-          ta.style.fontSize = "11px";
-          ta.style.marginTop = "6px";
-          ov.appendChild(ta);
-          ta.select();
-        }
-        window.setTimeout(() => {
-          copyBtn.textContent = t("Port_Daily_CopyShareText", "Copy share text");
-        }, 2000);
-      });
-    });
-    btnRow.appendChild(copyBtn);
 
-    // "Copy replay link" — only present when we have both the track tile data
-    // (T-line) and at least one recorded stroke. Forfeit-without-shooting runs
-    // give an empty replay, which we hide rather than offering a no-op link.
-    if (this.dailyTLine && this.dailyReplayStrokes.length > 0) {
+    const idleLabel = t("Port_Daily_CopyShareText", "Copy share text");
+    const savingLabel = t("Port_Daily_SavingReplay", "Saving replay…");
+
+    let cachedUrl: string | null = null;
+    copyBtn.textContent = hasReplay ? savingLabel : idleLabel;
+    copyBtn.disabled = hasReplay;
+
+    if (hasReplay) {
       const replay: DailyReplay = {
         v: 1,
         d: dateKey,
         n: this.trackName,
         a: this.trackAuthor,
         avg: this.trackAverage > 0 ? this.trackAverage : undefined,
-        t: this.dailyTLine,
+        t: this.dailyTLine!,
         s: this.dailyReplayStrokes,
         holed: !!me?.holedThisTrack,
       };
-      const linkBtn = document.createElement("button");
-      linkBtn.type = "button";
-      linkBtn.className = "btn-blue";
-      linkBtn.disabled = true;
-      linkBtn.textContent = t("Port_Daily_SavingReplay", "Saving replay…");
-
-      // Auto-upload as soon as the overlay opens. The previous behaviour was
-      // to defer the POST until the user clicked, which meant a fresh upload
-      // (and possible failure) on every share. Doing it eagerly:
-      //   - Makes the "Copy replay link" click instant once it lands.
-      //   - Surfaces upload failures immediately so the user sees the
-      //     fallback fragment-embedded link without waiting.
+      // Auto-upload as soon as the overlay opens so the click is instant.
       // Falls back to `replayLink(replay)` (long URL with the run packed into
       // the URL fragment) on network/server failure so the user always gets
       // *something* shareable.
-      let cachedUrl: string | null = null;
       void (async () => {
         let url: string;
         try {
@@ -2270,36 +2239,36 @@ export class GamePanel implements Panel {
           url = replayLink(replay);
         }
         cachedUrl = url;
-        linkBtn.disabled = false;
-        linkBtn.textContent = t("Port_Daily_CopyReplayLink", "Copy replay link");
+        copyBtn.disabled = false;
+        copyBtn.textContent = idleLabel;
       })();
-
-      linkBtn.addEventListener("click", () => {
-        if (!cachedUrl) return;
-        const url = cachedUrl;
-        void (async () => {
-          const ok = await copyToClipboard(url);
-          linkBtn.textContent = ok
-            ? t("Port_Daily_LinkCopied", "Link copied!")
-            : t("Port_Daily_CopyFailedShort", "Copy failed");
-          if (!ok) {
-            const ta = document.createElement("textarea");
-            ta.value = url;
-            ta.rows = 3;
-            ta.style.width = "320px";
-            ta.style.fontFamily = '"Lucida Console", monospace';
-            ta.style.fontSize = "11px";
-            ta.style.marginTop = "6px";
-            ov.appendChild(ta);
-            ta.select();
-          }
-          window.setTimeout(() => {
-            linkBtn.textContent = t("Port_Daily_CopyReplayLink", "Copy replay link");
-          }, 2000);
-        })();
-      });
-      btnRow.appendChild(linkBtn);
     }
+
+    copyBtn.addEventListener("click", () => {
+      const text = shareText(result, cachedUrl ?? undefined);
+      void copyToClipboard(text).then((ok) => {
+        copyBtn.textContent = ok
+          ? t("Port_Daily_Copied", "Copied!")
+          : t("Port_Daily_CopyFailed", "Copy failed - select & copy manually");
+        if (!ok) {
+          // Fallback: drop the text into a visible textarea so the user can
+          // hand-copy when the Clipboard API is gated (older browsers / iframes).
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          ta.rows = 4;
+          ta.style.width = "320px";
+          ta.style.fontFamily = '"Lucida Console", monospace';
+          ta.style.fontSize = "11px";
+          ta.style.marginTop = "6px";
+          ov.appendChild(ta);
+          ta.select();
+        }
+        window.setTimeout(() => {
+          copyBtn.textContent = idleLabel;
+        }, 2000);
+      });
+    });
+    btnRow.appendChild(copyBtn);
 
     const backBtn = document.createElement("button");
     backBtn.type = "button";
@@ -2454,7 +2423,7 @@ export class GamePanel implements Panel {
       heading.style.padding = "2px 0";
       menu.appendChild(heading);
 
-      // Loupe placement — radio-style segmented row. Picking a value
+      // Loupe placement - radio-style segmented row. Picking a value
       // immediately persists; the next touch-drag uses the new placement.
       const placeRow = document.createElement("div");
       placeRow.style.display = "flex";
@@ -2490,7 +2459,7 @@ export class GamePanel implements Panel {
       placeRow.appendChild(placeSelect);
       menu.appendChild(placeRow);
 
-      // Loupe zoom — range slider. Steps of 0.25 cover 1.5×–3× cleanly.
+      // Loupe zoom - range slider. Steps of 0.25 cover 1.5×-3× cleanly.
       const zoomRow = document.createElement("div");
       zoomRow.style.display = "flex";
       zoomRow.style.alignItems = "center";
@@ -2523,7 +2492,7 @@ export class GamePanel implements Panel {
       menu.appendChild(zoomRow);
     }
 
-    // Volume slider — moved here from the bottom strip.
+    // Volume slider - moved here from the bottom strip.
     const volRow = document.createElement("div");
     volRow.style.display = "flex";
     volRow.style.alignItems = "center";
@@ -2549,7 +2518,7 @@ export class GamePanel implements Panel {
     volRow.appendChild(volSlider);
     menu.appendChild(volRow);
 
-    // Quit button — pull-up of the bottom-strip ESC behaviour.
+    // Quit button - pull-up of the bottom-strip ESC behaviour.
     const quitBtn = document.createElement("button");
     quitBtn.type = "button";
     quitBtn.className = "btn-red";
@@ -2589,7 +2558,7 @@ export class GamePanel implements Panel {
     }, 0);
   }
 
-  /** Give up on the current hole — server caps strokes & marks DNF. */
+  /** Give up on the current hole - server caps strokes & marks DNF. */
   private forfeitHole(): void {
     const me = this.players[this.myPlayerId];
     if (!me) return;
@@ -2600,7 +2569,7 @@ export class GamePanel implements Panel {
 
   /**
    * Vote-skip click. Server uses writeExcluding so the local player never
-   * sees their own broadcast — we have to mark our own slot here. Hides the
+   * sees their own broadcast - we have to mark our own slot here. Hides the
    * button so the user can't double-vote; re-shown on `resetvoteskip` (fired
    * by the server on every starttrack).
    */
@@ -2672,7 +2641,7 @@ export class GamePanel implements Panel {
     btn.style.visibility = me && !me.votedToSkip ? "visible" : "hidden";
   }
 
-  /** "Harjoittele" click — kick off (or no-op join) shared practice. The
+  /** "Harjoittele" click - kick off (or no-op join) shared practice. The
    *  server filters out repeat presses while practice is already running
    *  and after the real game has started. */
   private startPractice(): void {

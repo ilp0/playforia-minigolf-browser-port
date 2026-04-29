@@ -1,4 +1,4 @@
-# Playforia Minigolf — Browser/Node Port
+# Playforia Minigolf - Browser/Node Port
 
 A TypeScript port of the Java Playforia Minigolf client and server.
 The original Java sources live in `../client`, `../server`, `../shared`, and `../editor`.
@@ -13,7 +13,7 @@ This port replaces:
 - The Java applet client → a browser app (HTML / Canvas).
 - The Netty TCP server → a Node.js + WebSocket server.
 
-The wire protocol (line-delimited text, `c/d/s/h` prefixes, tab-separated fields, per-direction sequence numbers) is identical to the Java protocol — the only change is that one packet now equals one WebSocket text frame instead of one `\n`-terminated TCP line.
+The wire protocol (line-delimited text, `c/d/s/h` prefixes, tab-separated fields, per-direction sequence numbers) is identical to the Java protocol - the only change is that one packet now equals one WebSocket text frame instead of one `\n`-terminated TCP line.
 
 ## Layout
 
@@ -43,7 +43,7 @@ npm run assets        # transcodes .au sounds, copies images, l10n, tracks
 npm run build         # builds shared + web (server runs from source)
 ```
 
-`npm run assets` is idempotent — it deletes and recreates each
+`npm run assets` is idempotent - it deletes and recreates each
 destination subtree. It must be run at least once before starting the
 client because Vite serves images and sounds from `web/public/`.
 
@@ -52,17 +52,17 @@ client because Vite serves images and sounds from `web/public/`.
 In two separate shells:
 
 ```sh
-# shell 1 — backend
+# shell 1 - backend
 cd port
 npm run dev:server
 
-# shell 2 — frontend
+# shell 2 - frontend
 cd port
 npm run dev:web
 ```
 
 Open <http://localhost:5173>. The Vite dev server proxies `/ws` to
-`ws://localhost:4242/ws`, so both panels of the app — login and game —
+`ws://localhost:4242/ws`, so both panels of the app - login and game -
 connect through the same origin.
 
 ### Production (single-process)
@@ -99,7 +99,7 @@ and tears it down at the end, so they can run in any order or in
 parallel.
 
 The `Seed` PRNG test uses 100 reference values captured from the
-actual Java `agolf.Seed` class running under JDK 17 — every shot's
+actual Java `agolf.Seed` class running under JDK 17 - every shot's
 randomness is bit-for-bit identical to the original game.
 
 `test-multi.ts` is the load-bearing one for the **determinism
@@ -118,7 +118,7 @@ that the live cursor relay is wired through the right handler order.
   flows through to scoreboards and daily-mode ghost labels (server
   sanitises and falls back to a `~anonym-` placeholder if absent).
 - **Async multi-player**: every player can shoot whenever their own
-  ball is at rest — no turn arbiter. Server picks a unique 32-bit seed
+  ball is at rest - no turn arbiter. Server picks a unique 32-bit seed
   per stroke and broadcasts it to all clients (incl. shooter) so every
   client computes byte-identical trajectories.
 - **Daily challenge room**: singleton `DailyGame` with a deterministic
@@ -126,7 +126,7 @@ that the live cursor relay is wired through the right handler order.
   ghosts with name labels. Daily result is saved to localStorage; the
   end overlay offers a copy-to-clipboard share text and a shareable
   replay link (the run is reconstructed from the recorded
-  `(ballCoords, mouseCoords, seed)` tuples — no server lookup needed).
+  `(ballCoords, mouseCoords, seed)` tuples - no server lookup needed).
   The room resets cleanly when it empties, so re-entrants and
   late joiners aren't rejected at the `beginstroke` gate.
 
@@ -134,28 +134,28 @@ that the live cursor relay is wired through the right handler order.
 - Velocity integration (10 substeps × 0.1).
 - Friction per surface, wall reflection (cardinal + diagonal),
   inside-corner suppression, restitution table.
-- One-way walls (20–23) with directional pass-through.
-- Slopes (4–11) with 8-direction acceleration.
+- One-way walls (20-23) with directional pass-through.
+- Slopes (4-11) with 8-direction acceleration.
 - Water (12, 14) with both `waterEvent` modes (back to last hit /
   back to shore).
-- Acid (13, 15) — always reset to track start.
+- Acid (13, 15) - always reset to track start.
 - Hole pull (25) + 7+-neighbour lock.
-- Teleports (32–38 / 33–39) with random exit selection.
+- Teleports (32-38 / 33-39) with random exit selection.
 - Mines (28, 30) ejecting at random velocity.
 - Magnets (44 attract, 45 repel) with pre-computed 147×75 force field.
 - Super-bouncy block (18) with the dynamic
   `bounciness * 6.5 / speed` restitution, decaying per hit.
-- Movable & sunkable blocks (27, 46) — block slides along the impact
+- Movable & sunkable blocks (27, 46) - block slides along the impact
   axis when the ball hits a free face and sinks into adjacent water/
   acid. Fully client-deterministic via the shared per-stroke seed; an
   `otherPlayers` snapshot taken at `beginstroke` keeps the obstruction
   check in agreement across clients during async play.
-- Per-player spawn resolution matching Java `resetPosition()` —
+- Per-player spawn resolution matching Java `resetPosition()` -
   per-color reset markers (48..51) win, common shape-24 start is the
   fallback, centre is the last resort.
 
 **UX**
-- Live peer aim preview — cursor stream at 15 Hz lets every player see
+- Live peer aim preview - cursor stream at 15 Hz lets every player see
   every other player's aim line as they line up.
 - Per-hole final scores in the scoreboard, with the running total
   derived from the same array.
@@ -174,7 +174,7 @@ that the live cursor relay is wired through the right handler order.
 - 49×25 RLE map decoding, byte-for-byte match with Java `Map.parse()`
   (A/B/C inline + D-I copy-references).
 - Sprite-accurate tile compositing from `shapes.gif` / `elements.gif`
-  / `special.gif` masks — slope arrows, mine markings, magnet field
+  / `special.gif` masks - slope arrows, mine markings, magnet field
   patterns, hole shading, etc.
 - Original `GameBackgroundCanvas` edge-light pass: corner highlight,
   bevel edges, 7-px drop shadow on solids, ±16 on teleport markers,
@@ -188,8 +188,8 @@ See `docs/KNOWN_ISSUES.md` "Gaps from a faithful 1:1 port" for the
 running list. Highlights:
 
 - Player-player ball collision (gated on `collision: 1`; not ported).
-- Breakable-block (40–43) visual decay (bounce works; the wall doesn't
-  visually crack — the mutate-tile plumbing added for movable blocks
+- Breakable-block (40-43) visual decay (bounce works; the wall doesn't
+  visually crack - the mutate-tile plumbing added for movable blocks
   is reusable here).
 - Sound playback (.wav files bundled in `web/public/sound/shared/`
   but not yet hooked up to Web Audio).
@@ -204,7 +204,7 @@ running list. Highlights:
 - The **shared** package is the single source of truth for the wire
   protocol and map format. Both server and client import from it via
   TypeScript path mapping (`@minigolf/shared`).
-- The server is single-threaded and event-driven — every Netty event
+- The server is single-threaded and event-driven - every Netty event
   in the Java source maps to an `await` or a callback here.
 - The browser client follows the Java applet's panel-stack pattern:
   one `Panel` interface, an `App` that swaps panels on the same
@@ -213,7 +213,7 @@ running list. Highlights:
 - Game rendering uses an offscreen canvas for the static background
   (drawn once when the track loads) and `requestAnimationFrame` for
   the ball, aim line, and peer aim previews on top.
-- Server state is **all in-memory** — track ringbuffer, lobbies,
+- Server state is **all in-memory** - track ringbuffer, lobbies,
   games, daily-room state. A restart wipes everything; only the
   daily result history survives because it's stored client-side in
   the user's browser localStorage.

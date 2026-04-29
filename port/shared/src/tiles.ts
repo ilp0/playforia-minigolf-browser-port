@@ -11,7 +11,7 @@ export const MAP_PIXEL_WIDTH = TILE_WIDTH * PIXEL_PER_TILE; // 735
 export const MAP_PIXEL_HEIGHT = TILE_HEIGHT * PIXEL_PER_TILE; // 375
 
 /**
- * Named collision values (a subset — the rest are referenced numerically below).
+ * Named collision values (a subset - the rest are referenced numerically below).
  * Comments come from Map.collisionMap() and Tile.getYPixelsFromSpecialId.
  */
 export const TILE = Object.freeze({
@@ -19,12 +19,12 @@ export const TILE = Object.freeze({
     WALL_NORMAL: 1,
     WALL_BOUNCY: 2,
     WALL_STICKY: 3,
-    // 4..11 — slope tiles (8 directions; "fast" surfaces, friction 0.9935)
+    // 4..11 - slope tiles (8 directions; "fast" surfaces, friction 0.9935)
     WATER: 12,
     ACID: 13,
     WATER_SWAMP: 14,
     ACID_SWAMP: 15,
-    // 16..23 — wall variants (19 = illusion); 20..23 = one-way walls
+    // 16..23 - wall variants (19 = illusion); 20..23 = one-way walls
     ILLUSION_WALL: 19,
     START_COMMON: 24,
     HOLE: 25,
@@ -57,11 +57,11 @@ export const TILE = Object.freeze({
 });
 
 /**
- * Friction lookup. Direct port of Tile.getFriction(int) — preserves the original
+ * Friction lookup. Direct port of Tile.getFriction(int) - preserves the original
  * nested-ternary decision tree exactly.
  *
  *   default                                     -> 0.9935
- *   v == 0 (empty / hole 47 also returns 0.9935 by the outer condition) — see code below
+ *   v == 0 (empty / hole 47 also returns 0.9935 by the outer condition) - see code below
  *   v == 1 (normal wall)                        -> 0.92
  *   v == 2 (bouncy wall)                        -> 0.8
  *   v == 3 / 32 / 34 / 36 / 38 (sticky / tele)  -> 0.9975
@@ -108,7 +108,7 @@ export function calculateFriction(value: number, speed: number): number {
 }
 
 /**
- * Y-pixel constants returned for special tile shapes — port of Tile.getYPixelsFromSpecialId().
+ * Y-pixel constants returned for special tile shapes - port of Tile.getYPixelsFromSpecialId().
  * (Note: the Java method name is misleading; the values are ARGB-ish ints used as a sentinel.)
  */
 export function getYPixelsFromSpecialId(shape: number): number {

@@ -86,12 +86,12 @@ export function networkSerialize(stats: TrackStats): string {
     const t = stats.track;
     const iLine = "I " + commaize(stats.numCompletions, stats.totalStrokes, stats.bestPar, stats.numberOfBestPar);
     const rLine = "R " + ratingsToString(stats.ratings);
-    // Tag/category line — clients render these as chips next to the track name.
+    // Tag/category line - clients render these as chips next to the track name.
     // Java's networkSerialize doesn't include this; we add it as a port extension
     // because the client UI surfaces tags now.
     const cLine = "C " + (t.categories.length > 0 ? t.categories.join(",") : "");
     // Special-settings flags (mines/magnets/teleports visibility + illusion-wall
-    // shadow). Java's networkSerialize omits this — combined with the buggy
+    // shadow). Java's networkSerialize omits this - combined with the buggy
     // `length() != 6` skip in VersionedTrackFileParser the original client
     // never honored S at all. The port forwards the raw S body so the renderer
     // can apply it. Empty string when the track file has no S line; the client
@@ -178,7 +178,7 @@ export class TrackManager {
             category === TrackCategory.ALL
                 ? this.tracks
                 : this.tracks.filter((t) => t.categories.includes(category as number));
-        // Empty category — fall back to ALL so a player isn't stranded.
+        // Empty category - fall back to ALL so a player isn't stranded.
         const pool = filtered.length === 0 ? this.tracks : filtered;
         const picked = this.pickAvoidingRecent(pool, limit);
         for (const t of picked) this.markRecent(t.name);

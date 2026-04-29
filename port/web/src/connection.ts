@@ -10,7 +10,7 @@ import {
 const DEV = Boolean(import.meta.env?.DEV);
 
 /** Auto-reconnect tunables. The server's grace window (`c crt 250`) is far
- *  longer than what we attempt here — the asymmetry is intentional: we'd
+ *  longer than what we attempt here - the asymmetry is intentional: we'd
  *  rather declare the session dead and surface a clear error than thrash
  *  for four minutes against a dead network. */
 const RECONNECT_INTERVAL_MS = 3_000;
@@ -24,7 +24,7 @@ export type ConnectionEventMap = {
   /** Emitted when the connection is dead but we're trying to recover.
    *  Detail.attempt is 1-indexed (first try is 1). */
   reconnecting: CustomEvent<{ attempt: number; maxAttempts: number }>;
-  /** Emitted on successful `c rcok` — caller should hide any reconnect UI
+  /** Emitted on successful `c rcok` - caller should hide any reconnect UI
    *  and continue. Seqs have been reset; in-flight panel state is preserved. */
   reconnected: Event;
   /** Emitted when the server replied `c rcf`, or we exhausted retries.
@@ -40,7 +40,7 @@ export type ConnectionEventMap = {
  *
  * On abnormal close (network blip / 1006), if a server-assigned id was
  * captured during login, the wrapper transparently swaps in a fresh inner
- * WebSocket and walks the `c old <id>` reconnect handshake — see
+ * WebSocket and walks the `c old <id>` reconnect handshake - see
  * `port/docs/PROTOCOL.md` "Reconnect" section.
  */
 export class Connection extends EventTarget {
@@ -51,7 +51,7 @@ export class Connection extends EventTarget {
   /** True once `close()` has been called by the user (panel teardown, full
    *  reload). Suppresses auto-reconnect even on abnormal close. */
   private userClosed = false;
-  /** Proactive keepalive timer — sends `c ping` to the server on a fixed
+  /** Proactive keepalive timer - sends `c ping` to the server on a fixed
    *  interval so background-tab throttling can't hit the server's 60s idle cap. */
   private keepaliveTimer: number | null = null;
 
@@ -84,7 +84,7 @@ export class Connection extends EventTarget {
 
     ws.addEventListener("open", (ev) => {
       if (DEV) console.debug("[conn] open", this.url);
-      // The 'open' event is suppressed during reconnect — the panel doesn't
+      // The 'open' event is suppressed during reconnect - the panel doesn't
       // need to redo handshake-bound bookkeeping (it already mounted on the
       // first open). It'll get a 'reconnected' event once `c rcok` lands.
       if (!this.reconnecting) this.dispatchEvent(new Event("open"));
@@ -131,7 +131,7 @@ export class Connection extends EventTarget {
         );
       }
       // Skip the generic close-event dispatch once a terminal
-      // `reconnect-failed` has already explained the failure — otherwise the
+      // `reconnect-failed` has already explained the failure - otherwise the
       // App's error banner would flicker from "Reconnect refused" to
       // "Connection closed" on the trailing socket close.
       if (!this.finalEventEmitted) {
@@ -147,7 +147,7 @@ export class Connection extends EventTarget {
 
     ws.addEventListener("error", () => {
       if (DEV) console.debug("[conn] socket error");
-      // Don't surface the error during reconnect — the failed attempt is
+      // Don't surface the error during reconnect - the failed attempt is
       // about to fire its own close, which scheduleReconnect handles.
       if (!this.reconnecting) this.emitError("websocket error");
     });
@@ -160,7 +160,7 @@ export class Connection extends EventTarget {
   }
 
   private startKeepalive(): void {
-    // Start proactive keepalive — every 15s, push a `c ping` so the server
+    // Start proactive keepalive - every 15s, push a `c ping` so the server
     // sees inbound activity and won't time us out (server cap is 60s).
     // setInterval still fires in background tabs, just throttled to ~1Hz
     // minimum, which is plenty for our 15s cadence.
@@ -203,7 +203,7 @@ export class Connection extends EventTarget {
     // While in reconnect mode, intercept the handshake control packets so
     // panels don't see a second hello/ctr cycle. Seq counters on the server
     // side are also fresh on the new socket, so DATA flows between this
-    // burst and `c rcok` shouldn't happen — only the four-frame banner
+    // burst and `c rcok` shouldn't happen - only the four-frame banner
     // (h 1 / c crt / c ctr) and the `c rcok`/`c rcf` reply.
     if (this.reconnecting) {
       if (pkt.type === PacketType.HEADER) return;
@@ -229,7 +229,7 @@ export class Connection extends EventTarget {
               detail: { reason: "rcf" },
             }),
           );
-          // Tear down the WS — App will surface the error and we don't want
+          // Tear down the WS - App will surface the error and we don't want
           // a half-alive socket lingering. The follow-up close event won't
           // re-dispatch, gated by `finalEventEmitted`.
           try { this.ws?.close(); } catch { /* */ }
@@ -255,7 +255,7 @@ export class Connection extends EventTarget {
       this.send(buildCommand("pong"));
     }
 
-    // Capture the server-assigned id once per session — used as the
+    // Capture the server-assigned id once per session - used as the
     // reconnect token in `c old <id>` on subsequent abnormal closes.
     if (
       this.savedId === null &&
@@ -272,7 +272,7 @@ export class Connection extends EventTarget {
   }
 
   private finishReconnect(): void {
-    if (DEV) console.debug("[conn] reconnect ok — resuming");
+    if (DEV) console.debug("[conn] reconnect ok - resuming");
     // Server reset its seq counters on the new socket; mirror that locally.
     // Without this, the next inbound DATA packet (seq=0) would trip the
     // mismatch check against our stale inSeq.

@@ -10,12 +10,12 @@ if (!root) {
 
 /**
  * Boot routing:
- *   ?r=<id>             — short link backed by server-side storage. Async fetch.
- *   #replay=<base64url> — legacy/fallback self-contained link.
- *   (neither)           — normal app boot.
+ *   ?r=<id>             - short link backed by server-side storage. Async fetch.
+ *   #replay=<base64url> - legacy/fallback self-contained link.
+ *   (neither)           - normal app boot.
  *
- * The replay viewer is fully self-contained — no WebSocket, no App
- * scaffolding — so we mount it directly into root.
+ * The replay viewer is fully self-contained - no WebSocket, no App
+ * scaffolding - so we mount it directly into root.
  */
 function showLoadingShim(message: string): void {
   if (!root) return;
@@ -41,7 +41,7 @@ function showError(message: string): void {
 
 function mountReplay(replay: DailyReplay): void {
   if (!root) return;
-  // Drop the loading shim before mounting — its `.panel-loading` div is
+  // Drop the loading shim before mounting - its `.panel-loading` div is
   // 100% width/height with a green background, so without this the replay
   // canvas is rendered underneath an opaque "Loading replay…" cover and
   // the user sees the loading message forever.
@@ -52,7 +52,7 @@ function mountReplay(replay: DailyReplay): void {
 /**
  * Decide whether to switch the UI into mobile/touch mode. We previously
  * gated everything on `(hover: none) and (pointer: coarse)`, but that media
- * query proved unreliable on real phones — Chrome on Galaxy S23 (and likely
+ * query proved unreliable on real phones - Chrome on Galaxy S23 (and likely
  * other Android devices) reports `(hover: hover)` even on a touch-only
  * device, hiding the rotate prompt + fullscreen gate + mobile settings even
  * though the touch handlers worked fine. This combines multiple signals so
@@ -66,13 +66,13 @@ function detectTouchMode(): boolean {
     if (override === "1") return true;
     if (override === "0") return false;
   } catch {
-    // location.search unavailable in odd contexts — fall through.
+    // location.search unavailable in odd contexts - fall through.
   }
-  // Modern Client Hints — the most authoritative "this is a phone" signal.
+  // Modern Client Hints - the most authoritative "this is a phone" signal.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const uaMobile = (navigator as any).userAgentData?.mobile;
   if (uaMobile === true) return true;
-  // Standard pointer media query — fires on iOS Safari and most Androids.
+  // Standard pointer media query - fires on iOS Safari and most Androids.
   if (window.matchMedia?.("(hover: none) and (pointer: coarse)").matches) return true;
   // Fallback: any touch capability + a phone/tablet-sized viewport. Catches
   // phones where the media query above lies (Galaxy S23 Chrome) without
@@ -86,7 +86,7 @@ function setupTouchMode(): void {
   const enabled = detectTouchMode();
   document.body.classList.toggle("is-touch-mode", enabled);
   // Helpful for debugging on a real phone via chrome://inspect or
-  // safari://debug — the user pings this back so we know which branch fired.
+  // safari://debug - the user pings this back so we know which branch fired.
   console.info(`[boot] touch-mode=${enabled}`, {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     uaMobile: (navigator as any).userAgentData?.mobile,
@@ -105,7 +105,7 @@ function setupTouchMode(): void {
  * in JS. Idempotent and cheap; safe to run on resize/orientation change.
  *
  * Uses `visualViewport.height` when available so the scale tracks the
- * shrinking viewport when iOS Safari's address bar is shown — otherwise the
+ * shrinking viewport when iOS Safari's address bar is shown - otherwise the
  * game would be sized for the full viewport and the bottom UI would sit
  * underneath the bar.
  */
@@ -122,7 +122,7 @@ function setupMobileScale(): void {
   window.addEventListener("resize", update);
   window.addEventListener("orientationchange", update);
   // visualViewport fires on bar show/hide and on virtual-keyboard open
-  // events — without this, scale stays sized for the *initial* viewport.
+  // events - without this, scale stays sized for the *initial* viewport.
   window.visualViewport?.addEventListener("resize", update);
 }
 
@@ -134,7 +134,7 @@ function setupMobileScale(): void {
  * is toggled from a `fullscreenchange` listener so the gate auto-reappears
  * when the user exits (Esc, system gesture). Browsers without the API
  * (older iOS Safari) just dismiss the gate on tap so the user isn't locked
- * out — the game still plays, with the address bar covering the bottom.
+ * out - the game still plays, with the address bar covering the bottom.
  */
 function setupFullscreenGate(): void {
   const button = document.getElementById("fullscreen-prompt__button");
@@ -142,7 +142,7 @@ function setupFullscreenGate(): void {
 
   const supportsFullscreen =
     typeof document.documentElement.requestFullscreen === "function" ||
-    // Safari prefix — kept for compatibility with iOS < 16.4 where the
+    // Safari prefix - kept for compatibility with iOS < 16.4 where the
     // standard API was missing entirely. Nothing else uses this name.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     typeof (document.documentElement as any).webkitRequestFullscreen === "function";
@@ -159,7 +159,7 @@ function setupFullscreenGate(): void {
 
   button.addEventListener("click", async () => {
     if (!supportsFullscreen) {
-      // Graceful degradation — flag the body so the gate hides for the rest
+      // Graceful degradation - flag the body so the gate hides for the rest
       // of the session. Address-bar handling falls back to dvh-driven
       // resizing, which is good enough on devices without the API.
       document.body.classList.add("is-fullscreen");
@@ -172,7 +172,7 @@ function setupFullscreenGate(): void {
       await req.call(el);
     } catch (err) {
       console.warn("[fullscreen] requestFullscreen failed:", err);
-      // Still hide the gate so the user isn't stuck — they can play, just
+      // Still hide the gate so the user isn't stuck - they can play, just
       // not in true fullscreen.
       document.body.classList.add("is-fullscreen");
     }
@@ -185,7 +185,7 @@ async function boot(): Promise<void> {
   setupFullscreenGate();
   // Load EN first so every panel that mounts can already resolve
   // `t("Key", "default")`. If EN fails to load (e.g. assets weren't prepared),
-  // panels still fall back to the inline English defaults — they just don't
+  // panels still fall back to the inline English defaults - they just don't
   // get the prettier wording from the XML.
   try {
     await i18n.init();

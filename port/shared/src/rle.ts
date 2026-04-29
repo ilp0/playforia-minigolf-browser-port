@@ -11,7 +11,7 @@ const MAP_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
  * Empty digit prefix → count = 1.
  *
  * E.g. "5A11A22" → "AAAAA" + "AAAAAAAAAAA" + "AA" -> "AAAAAAAAAAAAAAAAAAAA" (5 + 11 + 2 = 18 A's)
- *      ...wait: that's three runs, "5A" "11A" "22" then "..." — be careful with the actual rule.
+ *      ...wait: that's three runs, "5A" "11A" "22" then "..." - be careful with the actual rule.
  *
  * Actual Java: at each position, read a possibly-empty number, advance past digits, then read one
  * char and append it count times.
@@ -33,7 +33,7 @@ export function expandRle(input: string): string {
             count = parseInt(digits, 10);
         }
         if (i >= len) {
-            // Java would NPE here — treat as malformed.
+            // Java would NPE here - treat as malformed.
             throw new Error("RLE input ends with digits but no character to repeat");
         }
         const c = input.charAt(i);
@@ -106,22 +106,22 @@ export function decodeMap(tLineRaw: string): number[][] {
             } else {
                 let neighbour: number;
                 switch (idx) {
-                    case 3: // D — west
+                    case 3: // D - west
                         neighbour = tiles[tileX - 1][tileY];
                         break;
-                    case 4: // E — north
+                    case 4: // E - north
                         neighbour = tiles[tileX][tileY - 1];
                         break;
-                    case 5: // F — northwest
+                    case 5: // F - northwest
                         neighbour = tiles[tileX - 1][tileY - 1];
                         break;
-                    case 6: // G — 2-west
+                    case 6: // G - 2-west
                         neighbour = tiles[tileX - 2][tileY];
                         break;
-                    case 7: // H — 2-north
+                    case 7: // H - 2-north
                         neighbour = tiles[tileX][tileY - 2];
                         break;
-                    case 8: // I — 2-northwest
+                    case 8: // I - 2-northwest
                         neighbour = tiles[tileX - 2][tileY - 2];
                         break;
                     default:
@@ -137,14 +137,14 @@ export function decodeMap(tLineRaw: string): number[][] {
 }
 
 export interface UnpackedTile {
-    /** "special" byte — top 8 bits. 0 = empty, 1 = normal, 2 = special. */
+    /** "special" byte - top 8 bits. 0 = empty, 1 = normal, 2 = special. */
     isNoSpecial: number;
-    /** "shape" byte — bits 16..23. (Java adds 24 to this for the rendered shape; we keep raw.) */
+    /** "shape" byte - bits 16..23. (Java adds 24 to this for the rendered shape; we keep raw.) */
     shape: number;
-    /** Background element index — bits 8..15. Confusingly named "fore" by the spec but
+    /** Background element index - bits 8..15. Confusingly named "fore" by the spec but
      *  in Tile.java this is `background = (code >> 8) % 256`. */
     fore: number;
-    /** Foreground element index — bits 0..7. In Tile.java this is `foreground = code % 256`. */
+    /** Foreground element index - bits 0..7. In Tile.java this is `foreground = code % 256`. */
     back: number;
 }
 

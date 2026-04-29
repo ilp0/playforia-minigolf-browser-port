@@ -1,4 +1,4 @@
-// Smoke test for issue #30 — confirms the server's wire output for voteskip,
+// Smoke test for issue #30 - confirms the server's wire output for voteskip,
 // rfng, scoringmulti (placeholder), and the part-reason byte on disconnect.
 //
 // Boots a fresh GolfServer on port 4246, drives two clients through a 2-player
@@ -8,7 +8,7 @@
 //   - On the next track the server broadcasts `game resetvoteskip` (so the
 //     client can clear its per-player skip flags).
 //   - newgame from A after game-over reaches B as `game rfng <playerId>` (also
-//     writeExcluding — A doesn't see its own).
+//     writeExcluding - A doesn't see its own).
 //   - When A's WebSocket drops mid-game, B receives `game part 0 5` (the
 //     CONN_PROBLEM reason). Pre-fix this was always 4 regardless of cause.
 //
@@ -201,7 +201,7 @@ async function main(): Promise<void> {
             "B sees A's part",
             6000,
         );
-        // Format: `d <seq> game\tpart\t<id>\t<reason>` — split on tabs, take
+        // Format: `d <seq> game\tpart\t<id>\t<reason>` - split on tabs, take
         // the last field. The reason MUST be "5" (CONN_PROBLEM) post-fix; the
         // pre-fix server hardcoded "4" for every disconnect path.
         const parts = bGotPart.split("\t");

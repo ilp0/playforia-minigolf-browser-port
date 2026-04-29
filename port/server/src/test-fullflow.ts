@@ -125,6 +125,6 @@ sendData("game", "endstroke", 0, "t");
 await awaitFrame((s) => /^d \d+ game\tend/.test(s), "game end", 4000);
 console.log("[OK] training game ended after hole-in");
 
-console.log("\nALL PHASES PASSED — full protocol path is live end-to-end");
+console.log("\nALL PHASES PASSED - full protocol path is live end-to-end");
 ws.close();
 process.exit(0);

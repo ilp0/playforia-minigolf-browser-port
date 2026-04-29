@@ -10,7 +10,7 @@ import {
     encode,
 } from "./protocol.ts";
 
-describe("protocol — bool helpers", () => {
+describe("protocol - bool helpers", () => {
     it("encodes boolean values as t/f", () => {
         assert.equal(bool(true), "t");
         assert.equal(bool(false), "f");
@@ -24,7 +24,7 @@ describe("protocol — bool helpers", () => {
     });
 });
 
-describe("protocol — buildCommand", () => {
+describe("protocol - buildCommand", () => {
     it("joins verb and args with single spaces", () => {
         assert.equal(buildCommand("ping"), "c ping");
         assert.equal(buildCommand("id", "42"), "c id 42");
@@ -32,7 +32,7 @@ describe("protocol — buildCommand", () => {
     });
 });
 
-describe("protocol — buildData", () => {
+describe("protocol - buildData", () => {
     it("encodes mixed types and tab-joins fields", () => {
         assert.equal(
             buildData(5, "logintype", "nr", true, 42),
@@ -45,7 +45,7 @@ describe("protocol — buildData", () => {
     });
 });
 
-describe("protocol — encode/decode roundtrip", () => {
+describe("protocol - encode/decode roundtrip", () => {
     it("COMMAND with multiple args", () => {
         const wire = "c id 42";
         const p = decode(wire);
@@ -95,7 +95,7 @@ describe("protocol — encode/decode roundtrip", () => {
     });
 });
 
-describe("protocol — decode error cases", () => {
+describe("protocol - decode error cases", () => {
     it("throws on empty input", () => {
         assert.throws(() => decode(""));
     });

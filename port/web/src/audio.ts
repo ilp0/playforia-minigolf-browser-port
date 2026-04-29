@@ -1,5 +1,5 @@
 /**
- * Sound effects manager — port of `com.aapeli.client.SoundManager`.
+ * Sound effects manager - port of `com.aapeli.client.SoundManager`.
  *
  * The original Java client ships eight `.au` clips under
  * `client/src/main/resources/sound/shared/`. `port/scripts/prepare-assets.mjs`
@@ -8,7 +8,7 @@
  *
  * Triggers (mirrors original):
  *   - playNotify    : game session begins (on `gameinfo`)
- *   - playGameMove  : every stroke (on `beginstroke` broadcast — local & remote)
+ *   - playGameMove  : every stroke (on `beginstroke` broadcast - local & remote)
  *   - playGameWinner/Loser/Draw : end-of-game outcome for the local player
  *
  * The On/Off preference is wired to the existing "Audio: On/Off" dropdown on
@@ -16,7 +16,7 @@
  *
  * Implementation: WebAudio with a single AudioContext + decoded AudioBuffers.
  * Each play creates a fresh BufferSource, so overlapping shots layer correctly
- * (HTMLAudio can't replay while already playing). Lazy decode on first play —
+ * (HTMLAudio can't replay while already playing). Lazy decode on first play -
  * we don't pay the network/decode cost until something actually fires, and we
  * never trigger the autoplay-policy gate before a user gesture (the very first
  * sound is a click-driven shot).
@@ -106,7 +106,7 @@ class AudioManager {
       return;
     }
     void this.ensureBuffer(key, ctx).then((buf) => {
-      // Re-check enabled — the user may have toggled off during the fetch.
+      // Re-check enabled - the user may have toggled off during the fetch.
       if (!buf || !this._enabled) return;
       this.fire(ctx, buf);
     });
@@ -114,7 +114,7 @@ class AudioManager {
 
   private fire(ctx: AudioContext, buf: AudioBuffer): void {
     if (ctx.state === "suspended") {
-      // Autoplay-policy guard. resume() returns a promise — fire-and-forget;
+      // Autoplay-policy guard. resume() returns a promise - fire-and-forget;
       // the very first user click on canvas (which triggers the first shot
       // sound) is itself the gesture that authorises this resume.
       void ctx.resume();

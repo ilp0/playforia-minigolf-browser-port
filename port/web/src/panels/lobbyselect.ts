@@ -6,7 +6,7 @@ import { t } from "../i18n.ts";
 import { audio } from "../audio.ts";
 
 /**
- * Lobby-select panel — visual port of agolf.LobbySelectPanel, repurposed:
+ * Lobby-select panel - visual port of agolf.LobbySelectPanel, repurposed:
  * the original "Dual player" column has been replaced by "Daily Cup"
  * (since DUAL was never implemented in the port and the daily room is the
  * port's headline new feature).
@@ -16,7 +16,7 @@ import { audio } from "../audio.ts";
  *     1/6, 3/6, 5/6 horizontal positions.
  *   - "(N players)" line below each title (refreshed via lobbyselect/rnop).
  *     Daily count comes from the new 5th field in the rnop reply.
- *   - 3 columns of buttons. The daily column has one button — disabled (with
+ *   - 3 columns of buttons. The daily column has one button - disabled (with
  *     a "done today" label) once the local player has finished today's run.
  *   - Footer row: graphics-quality dropdown, audio dropdown, quit button.
  */
@@ -176,7 +176,7 @@ export class LobbySelectPanel implements Panel {
       return;
     }
     if (f[0] === "status" && f[1] === "lobby") {
-      // f[2] is the lobby tag: "1", "1h", "x", "xh", "d" (daily — no panel).
+      // f[2] is the lobby tag: "1", "1h", "x", "xh", "d" (daily - no panel).
       const tag = (f[2] ?? "1").charAt(0);
       if (tag === "d") {
         // Daily lobby is invisible; the server follows up with `status game`
@@ -251,7 +251,7 @@ export class LobbySelectPanel implements Panel {
   }
 
   /**
-   * Daily-Challenge column. One button — disabled if today's run is already
+   * Daily-Challenge column. One button - disabled if today's run is already
    * recorded in localStorage. Tooltip surfaces the previous result so the
    * "you already played" message has substance.
    */
@@ -280,7 +280,7 @@ export class LobbySelectPanel implements Panel {
       btn.textContent = t("Port_LobbySelect_DailyCup", "Daily Cup");
       btn.title = t(
         "Port_Daily_ButtonTitle",
-        "%1 — same track for everyone today.",
+        "%1 - same track for everyone today.",
         todayKey(),
       );
       const handler = (): void => this.selectDaily();

@@ -31,7 +31,7 @@ register({
         const player = new Player(conn, id);
         conn.player = player;
         server.addPlayer(player);
-        // Java sends "c id <id>\n" — the trailing \n is the TCP framing terminator we don't need.
+        // Java sends "c id <id>\n" - the trailing \n is the TCP framing terminator we don't need.
         conn.sendCommand("id", String(id));
     },
 });
@@ -49,7 +49,7 @@ register({
 // <savedId>`. If the server still holds the player record (within the
 // RECONNECT_GRACE_MS window), it swaps the new socket onto the existing
 // player and replies `c rcok`; otherwise it replies `c rcf` and the client
-// falls back to fresh-login. Pre-login command — guard against double-adopt.
+// falls back to fresh-login. Pre-login command - guard against double-adopt.
 register({
     type: PacketType.COMMAND,
     pattern: /^old (-?\d+)$/,
@@ -127,7 +127,7 @@ register({
 /**
  * Browser-port extension: persistent per-browser client id. The web client
  * keeps a UUID in `localStorage["mg.clientId"]` and forwards it during the
- * login handshake. Server-side it's only used for analytics — every
+ * login handshake. Server-side it's only used for analytics - every
  * `player_login` / `player_disconnect` / `player_reconnect` event carries
  * the cid so an offline log scan can distinguish "same browser refreshing"
  * from "two unrelated guests on shared NAT". Length-capped and
@@ -159,7 +159,7 @@ register({
         const player = conn.player;
         if (!player) return;
         // Strip both wire-framing chars (\r\n\t) and the structured-field
-        // separators (^, :) that Player.toString triangelizes — a nick with `^`
+        // separators (^, :) that Player.toString triangelizes - a nick with `^`
         // or `:` would corrupt the lobby/owninfo lines for everyone.
         const cleaned = match[1].replace(/[\r\n\t^:]+/g, " ").trim().slice(0, 20);
         if (cleaned) player.nick = cleaned;
@@ -177,7 +177,7 @@ register({
         }
         // Honour the nick the client sent during the handshake; only fall back
         // to the random placeholder if they didn't send one (or it sanitised
-        // away to nothing — `nick` handler leaves `player.nick` at the "-"
+        // away to nothing - `nick` handler leaves `player.nick` at the "-"
         // default in that case).
         if (player.nick === "-" || player.nick === "") {
             player.nick = `~anonym-${Math.floor(Math.random() * 10000)}`;
@@ -236,7 +236,7 @@ register({
             const multi = server.getLobby(LobbyType.MULTI).totalPlayerCount();
             const daily = server.getLobby(LobbyType.DAILY).totalPlayerCount();
             // Existing 4-field reply (single/dual/multi); daily appended as a
-            // 5th, optional field — older clients ignore it.
+            // 5th, optional field - older clients ignore it.
             conn.sendData("lobbyselect", "nop", single, dual, multi, daily);
         } else if (sub === "select") {
             const tag = match[2];
@@ -316,7 +316,7 @@ register({
             const playerCountRaw = parseInt(rest[2] ?? "2", 10) || 2;
             const playerCount = Math.max(2, Math.min(playerCountRaw, 4));
             // numberOfTracks isn't an array size today, but the lobby form
-            // only emits 1/3/5/9/18 — clamp for defence in depth.
+            // only emits 1/3/5/9/18 - clamp for defence in depth.
             const numberOfTracksRaw = parseInt(rest[3] ?? "9", 10) || 9;
             const numberOfTracks = Math.max(1, Math.min(numberOfTracksRaw, 18));
             const trackType = parseInt(rest[4] ?? "1", 10) || 0;
@@ -429,7 +429,7 @@ register({
                 recipient.connection.sendData(scope, "sayp", player.nick, arg4 ?? "");
             }
         } else {
-            // 'command' — admin commands; not implemented in MVP.
+            // 'command' - admin commands; not implemented in MVP.
             console.log(`[chat] unhandled command from ${player.nick}: ${arg3} ${arg4 ?? ""}`);
         }
     },
@@ -437,7 +437,7 @@ register({
 
 // Live aim-preview cursor stream. Pure pass-through: the client throttles to
 // ~15 Hz while its ball is at rest, the server stamps the sender's playerId
-// and forwards to every other player in the game. Loss-tolerant by design —
+// and forwards to every other player in the game. Loss-tolerant by design -
 // the next tick just overwrites the previous one. Must come BEFORE the generic
 // `game .+` handler so the routing isn't swallowed.
 //   client → game \t cursor \t <x> \t <y> [\t <shootingMode>]
@@ -480,7 +480,7 @@ register({
 
 export function dispatchPacket(server: GolfServer, conn: Connection, packet: Packet): void {
     if (packet.type !== PacketType.COMMAND && packet.type !== PacketType.DATA) {
-        // STRING / HEADER / NONE — not used inbound for the MVP exchange.
+        // STRING / HEADER / NONE - not used inbound for the MVP exchange.
         return;
     }
     for (const h of handlers) {

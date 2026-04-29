@@ -1,4 +1,4 @@
-// Direct port of org.moparforia.shared.Tools — string-joining helpers.
+// Direct port of org.moparforia.shared.Tools - string-joining helpers.
 // Booleans encode as "t"/"f"; numbers via String.valueOf(); arrays are flattened one level.
 
 export type ToolsArg = string | number | boolean | ToolsArg[];
@@ -19,7 +19,7 @@ export function izer(splitter: string, ...args: ToolsArg[]): string {
         if (Array.isArray(arg)) {
             for (const inner of arg) {
                 if (Array.isArray(inner)) {
-                    // Java's branch only handles a single level — coerce to its toString().
+                    // Java's branch only handles a single level - coerce to its toString().
                     parts.push(String(inner));
                 } else {
                     parts.push(toString(inner));

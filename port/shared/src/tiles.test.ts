@@ -10,7 +10,7 @@ import {
     getYPixelsFromSpecialId,
 } from "./tiles.ts";
 
-describe("tiles — dimensions", () => {
+describe("tiles - dimensions", () => {
     it("matches the 49x25 grid at 15px tiles", () => {
         assert.equal(PIXEL_PER_TILE, 15);
         assert.equal(MAP_PIXEL_WIDTH, 735);
@@ -18,7 +18,7 @@ describe("tiles — dimensions", () => {
     });
 });
 
-describe("tiles — getFriction", () => {
+describe("tiles - getFriction", () => {
     // Hand-checked against Tile.java's nested ternary.
     it("returns 0.9935 for the 'fast surface' band (0, 4..11, 19, 47)", () => {
         for (const v of [0, 4, 5, 6, 7, 8, 9, 10, 11, 19, 47]) {
@@ -67,7 +67,7 @@ describe("tiles — getFriction", () => {
     });
 });
 
-describe("tiles — calculateFriction", () => {
+describe("tiles - calculateFriction", () => {
     it("matches Tile.calculateFriction formula", () => {
         // calculateFriction(12, 6.5) = 0 + (1 - 0) * (0.75 * 6.5 / 6.5) = 0.75
         assert.equal(calculateFriction(12, 6.5), 0.75);
@@ -76,7 +76,7 @@ describe("tiles — calculateFriction", () => {
     });
 });
 
-describe("tiles — getYPixelsFromSpecialId", () => {
+describe("tiles - getYPixelsFromSpecialId", () => {
     it("matches the Java switch table", () => {
         assert.equal(getYPixelsFromSpecialId(24), 16777215);
         assert.equal(getYPixelsFromSpecialId(48), 11579647);
@@ -87,7 +87,7 @@ describe("tiles — getYPixelsFromSpecialId", () => {
     });
 });
 
-describe("tiles — TILE name table", () => {
+describe("tiles - TILE name table", () => {
     it("has stable named ids matching Java tile semantics", () => {
         assert.equal(TILE.EMPTY, 0);
         assert.equal(TILE.WALL_NORMAL, 1);
