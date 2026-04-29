@@ -13,7 +13,7 @@ import {
   PIXEL_PER_TILE,
   MAP_PIXEL_WIDTH,
   MAP_PIXEL_HEIGHT,
-  NO_SETTINGS_FLAGS,
+  ALL_VISIBLE_FLAGS,
   applySettingsToTileCode,
   type SettingsFlags,
   unpackTile,
@@ -177,7 +177,7 @@ export class TrackRenderer {
    * point of the flags as a puzzle-design knob.
    */
   private settingsFlags: SettingsFlags;
-  constructor(parsedMap: ParsedMap, atlases: Atlases, settingsFlags: SettingsFlags = NO_SETTINGS_FLAGS) {
+  constructor(parsedMap: ParsedMap, atlases: Atlases, settingsFlags: SettingsFlags = ALL_VISIBLE_FLAGS) {
     this.parsedMap = parsedMap;
     this.atlases = atlases;
     this.settingsFlags = settingsFlags;

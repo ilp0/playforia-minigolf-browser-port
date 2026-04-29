@@ -1,4 +1,4 @@
-import { PacketType, Seed, parseSettingsFlags, type Packet } from "@minigolf/shared";
+import { ALL_VISIBLE_FLAGS, PacketType, Seed, parseSettingsFlags, type Packet } from "@minigolf/shared";
 import type { App } from "../app.ts";
 import type { Panel } from "../panel.ts";
 import { loadAtlases, type Atlases } from "../game/sprites.ts";
@@ -1181,11 +1181,14 @@ export class GamePanel implements Panel {
     try {
       const parsed = buildMap(tLine, this.atlases);
       this.parsedMap = parsed;
-      // S line: 4 visibility/shadow flags + legacy 2-digit player range. Server
-      // forwards the raw body; we decode the first four chars. Missing/short
-      // S → all-false, mirroring `new boolean[4]` in Java's track parser.
-      const settingsBody = extractField(f, "S ") ?? "";
-      const settingsFlags = parseSettingsFlags(settingsBody);
+      // S line: 4 visibility/shadow flags + legacy 2-digit player range. The
+      // server only ships S when the track file actually had one, so an
+      // absent field means "no S line in the source" - we default to
+      // all-visible (the editor's view of the track). A present body decodes
+      // per `parseSettingsFlags` (missing chars stay false, matching Java).
+      const settingsBody = extractField(f, "S ");
+      const settingsFlags =
+        settingsBody === null ? ALL_VISIBLE_FLAGS : parseSettingsFlags(settingsBody);
       this.renderer = new TrackRenderer(parsed, this.atlases, settingsFlags);
       // Pick the common (shape-24) start, deterministic from gameId.
       const commonStart: [number, number] | null =

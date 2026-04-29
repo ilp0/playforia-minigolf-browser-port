@@ -145,8 +145,12 @@ The `B` line is omitted if `bestPar < 0`. The `C` and `S` lines are OUR port
 extensions - Java doesn't include them. `S` carries the four-flag visibility
 string (`mines/magnets/teleports/illusion-shadows`, plus the legacy 2-digit
 player-range suffix); use `parseSettingsFlags` from `@minigolf/shared` to
-decode the first four chars. Use `extractField(fields, "C ")` /
-`extractField(fields, "S ")` on the client.
+decode the first four chars. The `S` line is only shipped when the track file
+actually has one (~8% of stock tracks); when absent, the client falls back to
+`ALL_VISIBLE_FLAGS` so mines and magnets render the way they look in the
+editor. Use `extractField(fields, "C ")` / `extractField(fields, "S ")` on
+the client and treat a `null` return from the latter as "no settings - default
+visible".
 
 ## Game info packet (15 fields)
 

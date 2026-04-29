@@ -94,18 +94,30 @@ export function networkSerialize(stats: TrackStats): string {
     // shadow). Java's networkSerialize omits this - combined with the buggy
     // `length() != 6` skip in VersionedTrackFileParser the original client
     // never honored S at all. The port forwards the raw S body so the renderer
-    // can apply it. Empty string when the track file has no S line; the client
-    // treats that as all-false (Java parser default).
-    const sLine = "S " + (t.settings ?? "");
+    // can apply it. We only emit when the track file actually has an S line:
+    // an absent S means "default to all visible" on the client (matches the
+    // editor preview), while a present "S ffff" means "explicitly hide
+    // everything". Eliding the line for the common no-S case is what restores
+    // mine/magnet visibility on stock tracks.
+    const sLine = t.settings ? "S " + t.settings : null;
+    const lines = [
+        "V 1",
+        "A " + t.author,
+        "N " + t.name,
+        "T " + t.map,
+        cLine,
+        ...(sLine ? [sLine] : []),
+        iLine,
+    ];
 
     if (stats.bestPar < 0) {
-        return tabularize("V 1", "A " + t.author, "N " + t.name, "T " + t.map, cLine, sLine, iLine, rLine);
+        return tabularize(...lines, rLine);
     }
 
     const bestPlayer = stats.bestPlayer ?? "";
     const bestEpoch = stats.bestParEpoch ?? 0;
     const bLine = "B " + commaize(bestPlayer, bestEpoch);
-    return tabularize("V 1", "A " + t.author, "N " + t.name, "T " + t.map, cLine, sLine, iLine, bLine, rLine);
+    return tabularize(...lines, bLine, rLine);
 }
 
 /**

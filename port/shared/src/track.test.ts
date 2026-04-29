@@ -40,7 +40,10 @@ describe("parseTrack - defaults for missing optional lines", () => {
     it("returns defaults when only required lines are present", () => {
         const text = ["V 2", "A x", "N y", "T BAQQ"].join("\n");
         const track = parseTrack(text);
-        assert.equal(track.settings, "ffff");
+        // Empty string is the "no S line was present" sentinel - distinct from
+        // an explicit "S ffff" body and used by `networkSerialize` to decide
+        // whether to ship the S line at all.
+        assert.equal(track.settings, "");
         assert.equal(track.plays, 0);
         assert.equal(track.bestPar, -1);
         assert.deepEqual(track.categories, []);

@@ -9,7 +9,13 @@ export interface Track {
     map: string;
     /** Parsed from C line as integer ids (e.g. [3], [1,2]). Empty if no C line. */
     categories: number[];
-    /** 4-character flag string ("ttff" etc). Default "ffff" if missing. */
+    /**
+     * Raw S-line body when the track file declares one (e.g. "tttt", "fttf14").
+     * Empty string when the track has no S line at all - distinct from an
+     * explicit "ffff" because the renderer treats "absent" as "all visible"
+     * (matches what the editor preview shows the creator) while "ffff" means
+     * "explicitly hide everything".
+     */
     settings: string;
     plays: number;
     strokes: number;
@@ -31,7 +37,9 @@ export interface TrackSet {
     trackNames: string[];
 }
 
-const DEFAULT_SETTINGS = "ffff";
+// Empty - we no longer fabricate "ffff" for tracks that lack an S line. See
+// the comment on `Track.settings` for the absent-vs-explicit-ffff distinction.
+const DEFAULT_SETTINGS = "";
 
 /**
  * Four boolean flags decoded from a track's `S` line. Indexes mirror Java's
@@ -44,6 +52,15 @@ const DEFAULT_SETTINGS = "ffff";
 export type SettingsFlags = readonly [boolean, boolean, boolean, boolean];
 
 export const NO_SETTINGS_FLAGS: SettingsFlags = [false, false, false, false];
+
+/**
+ * Default flags used when a track has no S line at all. We treat "no S line" as
+ * "everything visible" so that mines/magnets/teleports render the way they
+ * appear in the track editor (the creator's intent). This deliberately
+ * diverges from Java's runtime, which - thanks to the `length() != 6` parser
+ * typo - silently rendered most tracks with mines and magnets hidden.
+ */
+export const ALL_VISIBLE_FLAGS: SettingsFlags = [true, true, true, true];
 
 /**
  * Decode the first 4 chars of an S-line body into the boolean flag array.

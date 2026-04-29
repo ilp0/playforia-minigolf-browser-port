@@ -28,6 +28,7 @@ export {
     type TrackSetDifficulty,
     type SettingsFlags,
     NO_SETTINGS_FLAGS,
+    ALL_VISIBLE_FLAGS,
     parseTrack,
     parseTrackset,
     parseSettingsFlags,
