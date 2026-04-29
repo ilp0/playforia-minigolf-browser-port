@@ -3,7 +3,7 @@
  * a `#replay=<base64url>` URL fragment.
  *
  * Determinism: the recording stores each stroke as `(ballCoords, mouseCoords,
- * seed)`. The 32-bit seed already embeds the original gameId — feeding it to
+ * seed)`. The 32-bit seed already embeds the original gameId - feeding it to
  * `new Seed(BigInt(seed))` and replaying via the same physics path the live
  * game uses for peers reproduces the trajectory bit-exactly. We don't need a
  * server connection, the original gameId, or seat assignment; we just drop
@@ -78,7 +78,7 @@ export class ReplayPanel implements Panel {
     header.className = "replay-header";
     const title = document.createElement("div");
     title.className = "replay-title";
-    title.textContent = t("Port_Replay_Title", "Daily Cup Replay — %1", this.replay.d);
+    title.textContent = t("Port_Replay_Title", "Daily Cup Replay - %1", this.replay.d);
     const meta = document.createElement("div");
     meta.className = "replay-meta";
     const tn = this.replay.n || t("Port_Replay_UnknownTrack", "(unknown track)");
@@ -158,7 +158,7 @@ export class ReplayPanel implements Panel {
       this.atlases = await loadAtlases();
       this.parsedMap = buildMap(this.replay.t, this.atlases);
       // DailyReplay doesn't carry the track's S-line body (yet) so the
-      // renderer defaults to all-false flags — mines/magnets/teleports hide,
+      // renderer defaults to all-false flags - mines/magnets/teleports hide,
       // illusion walls don't cast shadows. Matches Java's "no S" default and
       // is acceptable since replay physics doesn't depend on visibility.
       this.renderer = new TrackRenderer(this.parsedMap, this.atlases);
@@ -172,7 +172,7 @@ export class ReplayPanel implements Panel {
               : "Press Play to watch %1 strokes.",
             this.replay.s.length,
           )
-        : t("Port_Replay_NoStrokes", "No strokes recorded — this run was forfeited before shooting."));
+        : t("Port_Replay_NoStrokes", "No strokes recorded - this run was forfeited before shooting."));
       this.draw();
       this.startLoop();
     } catch (err) {
@@ -186,7 +186,7 @@ export class ReplayPanel implements Panel {
       const c = decodeCoords(this.replay.s[0][0]);
       this.ball = newBall(c.x, c.y);
     } else {
-      // Empty recording — drop the ball roughly centre-ish so the canvas
+      // Empty recording - drop the ball roughly centre-ish so the canvas
       // isn't blank. The user only sees this when the run was forfeited
       // without a single shot.
       this.ball = newBall(367.5, 187.5);
@@ -253,13 +253,13 @@ export class ReplayPanel implements Panel {
       norandom: false,
       // Replay is single-ball with no live water-event metadata. 0 = "respawn
       // at stroke start", which is the most common server setting and the
-      // safest default — a rare edge case where a daily track sends the ball
+      // safest default - a rare edge case where a daily track sends the ball
       // into water on shore-respawn would visually diverge, but the recorded
       // ballCoords for the next stroke would re-snap it before then.
       waterEvent: 0,
       startX: this.ball.x,
       startY: this.ball.y,
-      // Single-ball replay — no peers to obstruct movable blocks. Pad to
+      // Single-ball replay - no peers to obstruct movable blocks. Pad to
       // length 1 since the obstruction loop is keyed by index.
       otherPlayers: [null],
     };

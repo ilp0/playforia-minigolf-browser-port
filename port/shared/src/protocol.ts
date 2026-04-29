@@ -7,7 +7,7 @@
 //   HEADER:  "h <message>"            handshake-on-connect, value is always "1"
 //   NONE:    raw "<message>"          (rare; unprefixed)
 
-// String-literal "enum" — Node's strip-only TS mode does not support `enum`.
+// String-literal "enum" - Node's strip-only TS mode does not support `enum`.
 export const PacketType = Object.freeze({
     COMMAND: "c",
     DATA: "d",
@@ -20,7 +20,7 @@ export type PacketType = (typeof PacketType)[keyof typeof PacketType];
 
 export interface Packet {
     type: PacketType;
-    /** DATA packets only — monotonic per-direction sequence number. */
+    /** DATA packets only - monotonic per-direction sequence number. */
     seq?: number;
     /** Message body after the prefix and (for DATA) sequence number. */
     raw: string;

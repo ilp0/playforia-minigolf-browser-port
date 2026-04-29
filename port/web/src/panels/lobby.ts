@@ -4,7 +4,7 @@ import type { Panel } from "../panel.ts";
 import { t } from "../i18n.ts";
 
 /**
- * Single-player lobby — visual port of agolf.lobby.LobbySinglePlayerPanel.
+ * Single-player lobby - visual port of agolf.lobby.LobbySinglePlayerPanel.
  * Sits on top of bg-lobby-single.gif. The original lets the player choose:
  *   - Track type (Basic / Traditional / Modern / Hole-in-one / Short / Long)
  *   - Number of tracks (1..18)
@@ -51,7 +51,7 @@ export class LobbyPanel implements Panel {
     const controls = document.createElement("div");
     controls.className = "controls";
 
-    // Track type — populated lazily once `lobby tagcounts` arrives.
+    // Track type - populated lazily once `lobby tagcounts` arrives.
     const typeGroup = this.makeGroup(t("LobbyReal_TrackTypes", "Track types:").replace(/:$/, ""));
     const trackType = document.createElement("select");
     typeGroup.appendChild(trackType);
@@ -109,7 +109,7 @@ export class LobbyPanel implements Panel {
       // `lobbyselect leave` removes us from this lobby on the server and the
       // server replies with `status lobbyselect 300`, which routes us back.
       // The previous code sent `lobbyselect select 1` (which RE-ENTERS the
-      // single-player lobby) — the local panel switch was immediately undone
+      // single-player lobby) - the local panel switch was immediately undone
       // when the server replied with `status lobby 1`.
       this.app.connection.sendData("lobbyselect", "leave");
     };
@@ -187,7 +187,7 @@ export class LobbyPanel implements Panel {
     const trackType = parseInt(this.trackTypeSel?.value ?? "1", 10);
     const numTracks = parseInt(this.numTracksSel?.value ?? "9", 10);
     const water = parseInt(this.waterSel?.value ?? "0", 10);
-    // Already inside the SINGLE lobby — verb is `lobby cspt` (sending
+    // Already inside the SINGLE lobby - verb is `lobby cspt` (sending
     // `lobbyselect cspt` here re-enters the lobby and bounces us back).
     // Regex: cspt <numTracks> <trackType> <water>
     this.app.connection.sendData("lobby", "cspt", numTracks, trackType, water);

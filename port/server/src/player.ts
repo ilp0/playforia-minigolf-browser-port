@@ -51,7 +51,7 @@ export class Player {
         this.id = id;
     }
 
-    /** Faithful port of Player.toString from Java — caret-joined with the "3:" nick prefix. */
+    /** Faithful port of Player.toString from Java - caret-joined with the "3:" nick prefix. */
     toString(): string {
         let tmp = "";
         if (this.registered) tmp += "r";

@@ -16,7 +16,7 @@ body. Bodies are tab-separated where they have multiple fields.
 
 DATA packets are the only ones with sequence numbers. Both directions count
 independently (server's outbound seq starts at 0, client's outbound seq starts
-at 0). A seq mismatch closes the connection — see `Connection.handleRawMessage`.
+at 0). A seq mismatch closes the connection - see `Connection.handleRawMessage`.
 
 ## Connect handshake
 
@@ -37,13 +37,13 @@ client → c new
 server → c id <int>            (assigned player id, monotonic)
 client → d 0 version<TAB>35    (35 = GOLF gametype version)
 server → d 0 status<TAB>login
-client → d 1 language<TAB>en   (en|fi|sv — server records, no reply)
+client → d 1 language<TAB>en   (en|fi|sv - server records, no reply)
 client → d 2 logintype<TAB>nr  (nr = guest; the only one we implement)
-server → d 1 status<TAB>login  (yes, twice — Java oddity)
-client → d 3 cid<TAB>{uuid}    (PORT EXTENSION — persistent browser id from
+server → d 1 status<TAB>login  (yes, twice - Java oddity)
+client → d 3 cid<TAB>{uuid}    (PORT EXTENSION - persistent browser id from
                                 localStorage; analytics only, no protocol
                                 use. Optional; missing = no cid logged.)
-client → d 4 nick<TAB>{name}   (PORT EXTENSION — optional; if omitted or
+client → d 4 nick<TAB>{name}   (PORT EXTENSION - optional; if omitted or
                                 rejected, server falls back to a random
                                 `~anonym-` placeholder)
 client → d 5 login
@@ -104,7 +104,7 @@ category id (0=Mixed, 1=Basic, 2=Traditional, 3=Modern, 4=HIO, 5=Short,
 ```
 client → d N lobby<TAB>say<TAB>{text}
 server → d K lobby<TAB>say<TAB>{text}<TAB>{senderNick}<TAB>{senderClan}
-   (broadcast to OTHERS only — sender echoes locally)
+   (broadcast to OTHERS only - sender echoes locally)
 
 client → d N lobby<TAB>sayp<TAB>{recipientNick}<TAB>{text}
 server → d K lobby<TAB>sayp<TAB>{senderNick}<TAB>{text}
@@ -142,7 +142,7 @@ V 1<TAB>A {author}<TAB>N {name}<TAB>T {map}<TAB>C {categories}<TAB>S {settings}
 <TAB>R {r0},{r1},...,{r10}
 ```
 The `B` line is omitted if `bestPar < 0`. The `C` and `S` lines are OUR port
-extensions — Java doesn't include them. `S` carries the four-flag visibility
+extensions - Java doesn't include them. `S` carries the four-flag visibility
 string (`mines/magnets/teleports/illusion-shadows`, plus the legacy 2-digit
 player-range suffix); use `parseSettingsFlags` from `@minigolf/shared` to
 decode the first four chars. Use `extractField(fields, "C ")` /
@@ -201,7 +201,7 @@ sends `game start` + `game starttrack` to all players.
 Initiating a stroke:
 ```
 client → d N game<TAB>beginstroke<TAB>{ballCoords}<TAB>{mouseCoords}
-   (client does NOT apply impulse — waits for the broadcast)
+   (client does NOT apply impulse - waits for the broadcast)
 server → d K game<TAB>beginstroke<TAB>{playerId}<TAB>{ballCoords}<TAB>{mouseCoords}<TAB>{seed}
    (broadcast to ALL players including the shooter; seed is the server-assigned
     32-bit per-stroke seed)
@@ -213,13 +213,13 @@ shooting mode (0 = normal, 1 = reverse 180°, 2 = 90° clockwise,
 3 = 90° counter-clockwise) on `mouseCoords`, mirroring the original
 GameCanvas.shootingMode. `ballCoords` always uses mode 0.
 
-When the ball stops (any reason — at rest, in hole, on water/acid):
+When the ball stops (any reason - at rest, in hole, on water/acid):
 ```
 client → d N game<TAB>endstroke<TAB>{playerId}<TAB>{playStatusString}
-   (only the shooter sends this; playStatus is one char per player —
+   (only the shooter sends this; playStatus is one char per player -
     't' = in hole, 'p' = forfeited/passed, 'f' = still playing)
 server → d K game<TAB>endstroke<TAB>{playerId}<TAB>{strokesThisTrack}<TAB>{status: t|p|f}
-   (broadcast to ALL — server may flip 'f' to 'p' if the player just hit the
+   (broadcast to ALL - server may flip 'f' to 'p' if the player just hit the
     stroke cap; the strokes count is authoritative)
 ```
 
@@ -242,11 +242,11 @@ server → d K game<TAB>end[<TAB>{p0Result}<TAB>{p1Result}...]
    (1 = winner, 0 = draw, -1 = loser; results omitted in single-player)
 ```
 
-## Live aim preview (cursor stream — port-specific)
+## Live aim preview (cursor stream - port-specific)
 
 Loss-tolerant 15 Hz cursor broadcast for spectator-flavoured UX: every player
 sees every other player's aim line in real time while they're lining up a
-shot. Not used for physics — purely cosmetic.
+shot. Not used for physics - purely cosmetic.
 
 ```
 client → d N game<TAB>cursor<TAB>{x}<TAB>{y}[<TAB>{shootingMode}]
@@ -255,8 +255,8 @@ client → d N game<TAB>cursor<TAB>{x}<TAB>{y}[<TAB>{shootingMode}]
     change so peers see right-click rotation even if the cursor is stationary)
 server → d K game<TAB>cursor<TAB>{playerId}<TAB>{x}<TAB>{y}[<TAB>{shootingMode}]
    (server stamps the sender's playerId and forwards to every OTHER player in
-    the game — sender doesn't get an echo. The shootingMode field is relayed
-    verbatim when present and omitted when absent — back-compat with clients
+    the game - sender doesn't get an echo. The shootingMode field is relayed
+    verbatim when present and omitted when absent - back-compat with clients
     that don't track the right-click cycle)
 ```
 
@@ -290,14 +290,14 @@ faithful port of Java's `ReconnectHandler`.
 
 Sequence:
 ```
-(network blip — client's WS dies, code 1006 / wasClean=false)
+(network blip - client's WS dies, code 1006 / wasClean=false)
 
 (server) handleDisconnect: defers full cleanup by 250s if player.game === null;
          player record stays in the lobby (peers' user lists unchanged).
-         Mid-game disconnects bypass grace and forfeit immediately —
+         Mid-game disconnects bypass grace and forfeit immediately -
          peers are otherwise stuck waiting for endstroke.
 
-(client) opens fresh WS — server sends usual banner:
+(client) opens fresh WS - server sends usual banner:
          h 1
          c crt 250
          c ctr
@@ -308,7 +308,7 @@ Sequence:
 ```
 
 Both directions reset their DATA seq counter to 0 on `c rcok`. The
-implementation does NOT replay packets sent during the dead window —
+implementation does NOT replay packets sent during the dead window -
 anything the server pushed while the WS was down is simply lost (e.g.
 peer chat). This matches what the original Java client effectively did
 (its retain-seq protocol tripped its own gap-detection on any peer
@@ -318,11 +318,11 @@ Client-side retry: 10 attempts, 3-second interval (~30s total budget).
 Capped well under the server's 250s window so we surface failure
 quickly when the network is genuinely down rather than thrashing.
 On exhaustion or `c rcf` the client emits `reconnect-failed` and shows
-"Reconnect failed — please refresh." in the error banner.
+"Reconnect failed - please refresh." in the error banner.
 
 The `c old`/`c rcok`/`c rcf` packets bypass DATA seq tracking (they're
 COMMAND packets) and are intercepted by `Connection.handleLine` while in
-reconnect mode — panels never see them. Files: `port/server/src/server.ts`
+reconnect mode - panels never see them. Files: `port/server/src/server.ts`
 (`handleReconnect`), `port/server/src/packet-handlers.ts` (`old` handler),
 `port/web/src/connection.ts` (reconnect mode + `c old <savedId>` driver),
 `port/web/src/app.ts` (`reconnecting`/`reconnected`/`reconnect-failed`

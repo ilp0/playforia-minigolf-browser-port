@@ -1,4 +1,4 @@
-// Smoke check for issue #27 — confirms `S <settings>` rides along in the
+// Smoke check for issue #27 - confirms `S <settings>` rides along in the
 // `game starttrack` payload so the client renderer can apply mine/magnet/
 // teleport visibility + illusion-shadow flags. Reuses the test-fullflow
 // handshake up to starttrack and asserts on the new field.
@@ -45,7 +45,7 @@ ws.on("error", (e) => {
 
 await new Promise<void>((r) => ws.once("open", () => r()));
 
-// Handshake (mirrors test-fullflow phases 1–7).
+// Handshake (mirrors test-fullflow phases 1-7).
 await awaitFrame((s) => s === "h 1", "h 1");
 await awaitFrame((s) => s.startsWith("c crt"), "c crt");
 await awaitFrame((s) => s === "c ctr", "c ctr");
@@ -75,13 +75,13 @@ if (!tField) {
     process.exit(1);
 }
 if (!sField) {
-    console.error("FAIL: no S line in starttrack frame — issue #27 fix incomplete");
+    console.error("FAIL: no S line in starttrack frame - issue #27 fix incomplete");
     process.exit(1);
 }
 const sBody = sField.substring(2);
 // The body itself is "ffff" for the ~93% of stock tracks without an explicit
 // S declaration and "<flags><minPlayers><maxPlayers>" (e.g. "tttt14") for the
-// ones that do. We just assert the line IS shipped — `parseTrack` /
+// ones that do. We just assert the line IS shipped - `parseTrack` /
 // `parseSettingsFlags` are unit-tested against real track files in
 // shared/src/track.test.ts so the value side is covered there.
 console.log("starttrack:", { hasT: true, hasC: !!cField, hasS: true, sBody, sBodyLen: sBody.length });

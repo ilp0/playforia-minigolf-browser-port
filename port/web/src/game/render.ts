@@ -28,7 +28,7 @@ export interface AimLine {
   toY: number;
   /**
    * Right-click shooting mode (0..3). Mirrors original GameCanvas.shootingMode:
-   *   0 = normal — render solid line ball→cursor as before.
+   *   0 = normal - render solid line ball→cursor as before.
    *   1 = reverse, 2 = 90° clockwise, 3 = 90° counter-clockwise.
    * For 1..3 we render a Java-faithful preview: a dashed line in the cursor
    * direction and a solid line in the rotated trajectory direction, both
@@ -47,7 +47,7 @@ export interface PeerAim {
   fromY: number;
   toX: number;
   toY: number;
-  /** Player index 0..3 — used to pick a ball-colour-matched stroke. */
+  /** Player index 0..3 - used to pick a ball-colour-matched stroke. */
   playerIdx: number;
   /** Same right-click shooting mode as the peer is in (see AimLine.mode). */
   mode?: number;
@@ -55,23 +55,23 @@ export interface PeerAim {
 
 /** Ball-colour-matched stroke style for peer aim previews. Indexed by playerIdx. */
 const PEER_AIM_COLOURS = [
-  "rgba(255, 255, 255, 0.7)", // 0 — white ball
-  "rgba(220, 80, 80, 0.7)",   // 1 — red ball
-  "rgba(80, 130, 255, 0.7)",  // 2 — blue ball
-  "rgba(240, 210, 80, 0.8)",  // 3 — yellow ball
+  "rgba(255, 255, 255, 0.7)", // 0 - white ball
+  "rgba(220, 80, 80, 0.7)",   // 1 - red ball
+  "rgba(80, 130, 255, 0.7)",  // 2 - blue ball
+  "rgba(240, 210, 80, 0.8)",  // 3 - yellow ball
 ];
 
 /**
  * Solid hex colour matched to the ball palette, used by the scoreboard nick
  * span so each player's name visibly matches their ball+cursor on the canvas.
  * Slot 0's "white" maps to a mid grey for readability against the panel
- * background — pure white text would be invisible. Indexed by `playerIdx % 4`.
+ * background - pure white text would be invisible. Indexed by `playerIdx % 4`.
  */
 const SLOT_NICK_COLOURS = [
-  "#5a5a5a", // 0 — neutral grey (white ball reads as a colourless circle)
-  "#b32020", // 1 — red
-  "#2050cc", // 2 — blue
-  "#a07000", // 3 — gold (yellow tones don't read well on the off-white scoreboard)
+  "#5a5a5a", // 0 - neutral grey (white ball reads as a colourless circle)
+  "#b32020", // 1 - red
+  "#2050cc", // 2 - blue
+  "#a07000", // 3 - gold (yellow tones don't read well on the off-white scoreboard)
 ];
 
 /** Public lookup for the scoreboard / chat / overlays. Cycles past slot 3 like
@@ -125,7 +125,7 @@ export interface BallSprite {
   /** Hide the ball entirely (e.g. holed-in). */
   hidden: boolean;
   /**
-   * Daily-mode "ghost" — render the ball at half opacity with a name label
+   * Daily-mode "ghost" - render the ball at half opacity with a name label
    * floating above. Used to distinguish other players' concurrent balls from
    * the local player's own ball in the daily room.
    */
@@ -140,14 +140,14 @@ export interface BallSprite {
    *   3 = name + "[clan]" stacked beside the ball; falls back to mode-2 layout
    *       when clan is empty
    * Java draws self in white and others in black, both with a green
-   * (rgb(19,167,19) — the panel background) 1px orthogonal outline; the port
+   * (rgb(19,167,19) - the panel background) 1px orthogonal outline; the port
    * matches that exactly so labels look identical to the original.
    */
   nameDisplay?: {
     mode: 1 | 2 | 3;
     name: string;
     clan?: string;
-    /** True if this is the local player's ball — flips the fill colour from
+    /** True if this is the local player's ball - flips the fill colour from
      *  black (other players, Java GameCanvas:116) to white (self, GameCanvas:125). */
     isSelf: boolean;
   };
@@ -173,7 +173,7 @@ export class TrackRenderer {
    *   [3] illusion-wall (collision id 19) casts shadow / not
    * Java applies these only at draw time (via `Tile.getSpecialsettingCode` and
    * `Map.castShadow`); collision/physics keeps the original tile semantics so
-   * "hidden" mines/magnets/teleports still trigger normally — that's the whole
+   * "hidden" mines/magnets/teleports still trigger normally - that's the whole
    * point of the flags as a puzzle-design knob.
    */
   private settingsFlags: SettingsFlags;
@@ -213,13 +213,13 @@ export class TrackRenderer {
     code: number,
   ): void {
     // Visibility / colour-key remap per the track's S-line flags. Done here
-    // (visual layer) only — collision/physics keeps the unmodified code so
+    // (visual layer) only - collision/physics keeps the unmodified code so
     // hidden mines still detonate, hidden magnets still pull, etc.
     code = applySettingsToTileCode(code, this.settingsFlags);
     const u = unpackTile(code);
     const special = u.isNoSpecial;
     if (special === 0) {
-      // Empty tile — fill with white-ish per Java default 0xFFFFFF.
+      // Empty tile - fill with white-ish per Java default 0xFFFFFF.
       const x0 = tx * PIXEL_PER_TILE;
       const y0 = ty * PIXEL_PER_TILE;
       for (let py = 0; py < PIXEL_PER_TILE; py++) {
@@ -266,7 +266,7 @@ export class TrackRenderer {
   /**
    * Rebuild the cached background canvas from the current `parsedMap.tiles[][]`
    * and `parsedMap.collision`. Call after one or more `mutateTile` invocations
-   * (movable blocks, breakable bricks) — the shading pass casts shadows across
+   * (movable blocks, breakable bricks) - the shading pass casts shadows across
    * tile boundaries, so per-tile reblits aren't enough; we need to re-run
    * `applyShading` against the full collision state. Drained from
    * `parsedMap.dirtyTiles` once per frame in the panel tick.
@@ -278,7 +278,7 @@ export class TrackRenderer {
   private buildBackground(): void {
     const ctx = this.bgCanvas.getContext("2d");
     if (!ctx) return;
-    // Default fill — outside the playable area gets a dark border colour.
+    // Default fill - outside the playable area gets a dark border colour.
     const img = ctx.createImageData(MAP_PIXEL_WIDTH, MAP_PIXEL_HEIGHT);
     const data = img.data;
     for (let i = 0; i < data.length; i += 4) {
@@ -305,7 +305,7 @@ export class TrackRenderer {
    * (collision 16..23, illusion-wall id 19 excluded by default) we look at the
    * up-left and down-right neighbours:
    *   - inner-corner solid (only down-right neighbour is solid): big +128 boost
-   *     on top of the corner pixel — that's what gives walls the chiselled bevel.
+   *     on top of the corner pixel - that's what gives walls the chiselled bevel.
    *   - top/left edge: +24 (bright)
    *   - bottom/right edge: −24 (dark)
    * Then for each solid pixel we cast a 7-pixel down-right drop shadow (−8 per
@@ -321,7 +321,7 @@ export class TrackRenderer {
     const collision = this.parsedMap.collision;
 
     // Java `Map.castShadow`: solid pixels are collision id 16..23, with id 19
-    // (illusion wall) gated by `specialSettings[3]` — when the flag is on,
+    // (illusion wall) gated by `specialSettings[3]` - when the flag is on,
     // illusion walls cast shadows like normal walls; when off, they don't.
     const illusionShadow = this.settingsFlags[3];
     const isSolid = (x: number, y: number): boolean => {
@@ -373,7 +373,7 @@ export class TrackRenderer {
             if (!dr && ul) shift(x, y, -16);
           }
         }
-        // Grain — Math.floor(Math.random()*11) − 5 ∈ [-5, 5].
+        // Grain - Math.floor(Math.random()*11) − 5 ∈ [-5, 5].
         shift(x, y, ((Math.random() * 11) | 0) - 5);
       }
     }
@@ -399,7 +399,7 @@ export class TrackRenderer {
       ctx.lineWidth = 1;
       const mode = pa.mode ?? 0;
       if (mode === 0) {
-        // Cursor stream coords aren't power-scaled — peer sees a dashed line
+        // Cursor stream coords aren't power-scaled - peer sees a dashed line
         // straight to the cursor (matches mode-0 self preview which goes
         // ball→cursor without scaling either).
         ctx.setLineDash([3, 3]);
@@ -473,7 +473,7 @@ export class TrackRenderer {
       //   row 1 (idx 4..7): players 0..3 frame B (Java's dithered alternate
       //                      driven by `(x/5 + y/5) % 2 * 4`)
       // The previous `colour * 2 + moving` formula assumed each player's two
-      // frames were horizontally adjacent (cols 2k, 2k+1) — they aren't, which
+      // frames were horizontally adjacent (cols 2k, 2k+1) - they aren't, which
       // made slot 1 render as P2's sprite, slot 2 as P0 frame B, and slot 3 as
       // P2 frame B. End result: only two distinct ball colours visible across
       // four players. Daily rooms can hold 100 players (vs Java's 4-cap), so
@@ -528,7 +528,7 @@ export class TrackRenderer {
             // Java draws the outline by 4 offset fillText copies of the same
             // string (StringDraw.drawOutlinedString:53-63). Replicating that
             // pixel-for-pixel in canvas leaves a green halo that's washed out
-            // against the canvas's anti-aliased glyph edges — so use canvas
+            // against the canvas's anti-aliased glyph edges - so use canvas
             // strokeText instead, which produces a single solid 1.5px outline
             // that reads clearly while still using Java's exact colour choices
             // (green outline, white-self / black-others fill).

@@ -10,13 +10,13 @@
  *    a key only lives in `en/AGolf.xml`. The Java client just returns
  *    `{key}` because it never overlays a fallback locale.
  *  - We treat keys as lowercase (matching Java's `.toLowerCase()` lookup).
- *  - The `reverse="yes"` attribute on BadNicks/BadWords is ignored — the
+ *  - The `reverse="yes"` attribute on BadNicks/BadWords is ignored - the
  *    port has no client-side moderation that consumes those lists.
  */
 export type Lang = "en" | "fi" | "sv";
 
 const STORAGE_KEY = "pmg.lang";
-/** Site default. Finnish — the original Playforia game was a Finnish product
+/** Site default. Finnish - the original Playforia game was a Finnish product
  *  and the user base of this port leans that way. EN remains the fallback
  *  overlay for any keys missing in the active locale. */
 const DEFAULT_LANG: Lang = "fi";
@@ -31,7 +31,7 @@ export function loadSavedLang(): Lang {
     const v = window.localStorage.getItem(STORAGE_KEY);
     if (isLang(v)) return v;
   } catch {
-    // localStorage may throw in private mode / sandboxed iframes — fall through.
+    // localStorage may throw in private mode / sandboxed iframes - fall through.
   }
   return DEFAULT_LANG;
 }
@@ -69,7 +69,7 @@ class TextManager {
 
   /**
    * Switch the active locale. EN remains the fallback overlay. Safe to call
-   * with `en` — it's a no-op since the active map is already EN.
+   * with `en` - it's a no-op since the active map is already EN.
    */
   async setLanguage(lang: Lang): Promise<void> {
     if (lang === this.currentLang) return;
@@ -97,7 +97,7 @@ class TextManager {
     let out = template;
     for (let i = 0; i < args.length; i++) {
       // String#replace with a string pattern only replaces the first match,
-      // matching Java's replaceFirst — `%1` with "$2" must NOT eat the literal
+      // matching Java's replaceFirst - `%1` with "$2" must NOT eat the literal
       // "$2" the way `replace` with a string treats `$&` etc. when the
       // replacement is computed lazily, so we use a function to disable
       // pattern interpretation.
@@ -141,7 +141,7 @@ class TextManager {
 /**
  * Parse an `AGolf.xml` body into a key→string map. Keys are lowercased.
  * `<parsererror>` (the DOMParser failure marker) is treated as a hard error
- * — DOMParser doesn't throw on malformed XML, so we have to spot it ourselves.
+ * - DOMParser doesn't throw on malformed XML, so we have to spot it ourselves.
  */
 export function parseAGolfXml(text: string): Map<string, string> {
   const parser = new DOMParser();
@@ -160,7 +160,7 @@ export function parseAGolfXml(text: string): Map<string, string> {
     // Trim whitespace contributed by XML pretty-printing around the CDATA
     // section (`\n\t  CDATA\n\t`). Java DOM behaves the same here; their
     // strings only look right because the source XML happens to have the
-    // CDATA flush against the tag in some entries — relying on that is
+    // CDATA flush against the tag in some entries - relying on that is
     // brittle, so we trim universally.
     const text = (node.textContent ?? "").trim();
     out.set(key.toLowerCase(), text);
@@ -169,7 +169,7 @@ export function parseAGolfXml(text: string): Map<string, string> {
 }
 
 /**
- * Singleton — created at module load so panels can import `t` directly
+ * Singleton - created at module load so panels can import `t` directly
  * without threading the manager through every constructor. Boot order:
  *   1. main.ts calls `i18n.init()` (awaits) → EN loaded as active+fallback.
  *   2. Login panel kicks `i18n.setLanguage(<picked>)` on dropdown change.

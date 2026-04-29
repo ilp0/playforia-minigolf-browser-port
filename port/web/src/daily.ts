@@ -1,5 +1,5 @@
 /**
- * Daily Cup — client-side helpers for the once-per-day mode.
+ * Daily Cup - client-side helpers for the once-per-day mode.
  *
  * - `todayKey()` matches the server's `todayDateKey()` (UTC YYYY-MM-DD), so a
  *   localStorage entry survives if and only if the player already finished
@@ -7,7 +7,7 @@
  * - Results are stored in localStorage to gate the "Daily Cup" button on
  *   the lobby-select panel and to render the share text.
  *
- * No backend persistence — the server doesn't know if you've played; the
+ * No backend persistence - the server doesn't know if you've played; the
  * gate is purely client-side. Refreshing or clearing storage lets you replay,
  * matching the user's "we can allow that" stance.
  */
@@ -42,7 +42,7 @@ export function saveDailyResult(r: DailyResult): void {
     try {
         localStorage.setItem(STORAGE_PREFIX + r.date, JSON.stringify(r));
     } catch {
-        // storage quota / disabled — best-effort.
+        // storage quota / disabled - best-effort.
     }
 }
 
@@ -93,10 +93,10 @@ export function shareText(r: DailyResult): string {
     const score = dailyScore(r.strokes, r.average, r.forfeited);
     const avgStr = r.average > 0 ? r.average.toFixed(1) : "?";
     const lines = [
-        `Playforia Minigolf — Daily Cup ${r.date}`,
+        `Playforia Minigolf - Daily Cup ${r.date}`,
         r.forfeited
             ? `Forfeited "${r.trackName}" (avg ${avgStr})`
-            : `${r.strokes} stroke${r.strokes === 1 ? "" : "s"} on "${r.trackName}" (avg ${avgStr}) — score ${score}`,
+            : `${r.strokes} stroke${r.strokes === 1 ? "" : "s"} on "${r.trackName}" (avg ${avgStr}) - score ${score}`,
     ];
     return lines.join("\n");
 }
@@ -106,18 +106,18 @@ export function shareText(r: DailyResult): string {
 // A daily run is fully reproducible from the broadcast `beginstroke` packets:
 // each carries `(ballCoords, mouseCoords, seed)` and the physics is
 // deterministic. We pack the run plus the track's RLE tile data ("T <map>"
-// line value) into the URL fragment, so the link is self-contained — playback
+// line value) into the URL fragment, so the link is self-contained - playback
 // works on any future day with no server lookup of past tracks.
 //
 // Lossy in two known edge cases (acceptable for v1; bounded errors because the
 // next stroke's recorded ballCoords re-snaps the ball):
 //
-// 1. `PhysicsContext.otherPlayers` — peers' resting positions feed the
+// 1. `PhysicsContext.otherPlayers` - peers' resting positions feed the
 //    movable-block obstruction check. Daily-room strokes from concurrent
 //    players are NOT recorded here, so movable blocks during playback move as
 //    if the player were alone. If a daily track ever combines movable blocks
 //    with high-traffic ghost positions, divergence is possible.
-// 2. `PhysicsContext.startX/Y` — used by water-event=0 ("respawn at stroke
+// 2. `PhysicsContext.startX/Y` - used by water-event=0 ("respawn at stroke
 //    start"). Replay sets these to the recorded ball position, which is the
 //    same value the live game uses, so this is only lossy if the original
 //    server had `waterEvent !== 0` (unlikely; daily uses default 0).
@@ -139,7 +139,7 @@ export interface DailyReplay {
      * Raw value of the `T <map>` line from the original `starttrack` payload.
      * Fed straight into `buildMap()` during playback. The full 32-bit per-stroke
      * seed (broadcast by the server) embeds the original gameId, so playback
-     * doesn't need to mirror server seat assignment — we drop the ball at each
+     * doesn't need to mirror server seat assignment - we drop the ball at each
      * stroke's recorded ballCoords and the seed alone reproduces the trajectory.
      */
     t: string;

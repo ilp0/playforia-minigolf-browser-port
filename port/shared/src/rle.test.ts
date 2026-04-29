@@ -13,7 +13,7 @@ import {
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 
-describe("rle — expandRle", () => {
+describe("rle - expandRle", () => {
     it("treats a bare letter as count=1", () => {
         assert.equal(expandRle("ABC"), "ABC");
     });
@@ -33,7 +33,7 @@ describe("rle — expandRle", () => {
     });
 });
 
-describe("rle — decodeMap on a real track", () => {
+describe("rle - decodeMap on a real track", () => {
     it("decodes 100degrees.track to a 49x25 grid and unpacks tiles sanely", () => {
         const trackPath = path.resolve(
             __dirname,
@@ -75,7 +75,7 @@ describe("rle — decodeMap on a real track", () => {
     });
 });
 
-describe("rle — unpackTile", () => {
+describe("rle - unpackTile", () => {
     it("decomposes a 32-bit packed code", () => {
         const code = (2 << 24) | (3 << 16) | (4 << 8) | 5;
         assert.deepEqual(unpackTile(code >>> 0), {

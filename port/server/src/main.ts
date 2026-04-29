@@ -10,7 +10,7 @@ import { getReplay, saveReplay } from "./replay-store.ts";
 import { LobbyType } from "./lobby.ts";
 import { logEvent } from "./log.ts";
 
-/** Cadence for the analytics `snapshot` event — short enough to give a
+/** Cadence for the analytics `snapshot` event - short enough to give a
  *  reasonable population time-series, long enough that an idle server
  *  doesn't spam the logs. */
 const SNAPSHOT_INTERVAL_MS = 60_000;
@@ -113,11 +113,11 @@ function cacheControlFor(urlPath: string): string {
 }
 
 /**
- * `/api/replay` endpoints — POST a JSON-encoded `DailyReplay`, get back a
+ * `/api/replay` endpoints - POST a JSON-encoded `DailyReplay`, get back a
  * short id; GET `/api/replay/<id>` returns the stored payload. Sized for
  * casual share-link traffic, not a public service: an ID-validation regex
  * gates GETs and a 64 KB cap gates POST bodies. Replays sit in memory
- * only — see replay-store.ts for the eviction policy.
+ * only - see replay-store.ts for the eviction policy.
  *
  * Returns `true` if the request was an /api/replay route (handled here);
  * `false` to let the static-file path try.
@@ -148,7 +148,7 @@ function handleReplayApi(req: IncomingMessage, res: ServerResponse): boolean {
         req.on("end", () => {
             if (aborted) return;
             const body = Buffer.concat(chunks).toString("utf-8");
-            // Validate JSON shape minimally — we don't decode the full
+            // Validate JSON shape minimally - we don't decode the full
             // DailyReplay schema here, just confirm it's parseable JSON
             // and isn't empty. The client-side decoder enforces the schema
             // when it fetches the replay back.
@@ -211,7 +211,7 @@ function tryServeStatic(req: IncomingMessage, res: ServerResponse, webDist: stri
         const st = lstatSync(target);
         if (!st.isFile()) return false;
         const mime = MIME[path.extname(target)] ?? "application/octet-stream";
-        // Weak ETag from size+mtime is enough here — the assets are static
+        // Weak ETag from size+mtime is enough here - the assets are static
         // and only change on rebuild/restart, so collisions are not a worry.
         const etag = `W/"${st.size.toString(16)}-${st.mtimeMs.toString(16)}"`;
         const lastModified = new Date(st.mtimeMs).toUTCString();
@@ -248,7 +248,7 @@ function tryServeStatic(req: IncomingMessage, res: ServerResponse, webDist: stri
 
 export interface RunningServer {
     close(): Promise<void>;
-    /** Test hook — peek at lobby state directly. Not used in production. */
+    /** Test hook - peek at lobby state directly. Not used in production. */
     golfServer: GolfServer;
 }
 
@@ -258,7 +258,7 @@ export async function startServer(args: CliArgs): Promise<RunningServer> {
     const chatEnabled = args.chatEnabled ?? true;
     const golfServer = new GolfServer(trackManager, { chatEnabled });
     if (!chatEnabled) {
-        console.log("[chat] disabled — say/sayp packets will be dropped with a notice to the sender");
+        console.log("[chat] disabled - say/sayp packets will be dropped with a notice to the sender");
     }
 
     // Cache the per-category counts on each lobby so newcomers get the
@@ -298,7 +298,7 @@ export async function startServer(args: CliArgs): Promise<RunningServer> {
 
         // Same-origin guard. Without this any third-party page can drive a
         // visitor's browser into our server (chat, lurking, free compute).
-        // We compare host of the Origin to the request's Host header — the
+        // We compare host of the Origin to the request's Host header - the
         // operator can pass --allow-any-origin for dev/cross-host tooling.
         if (!allowAnyOrigin) {
             const origin = req.headers.origin;
@@ -311,7 +311,7 @@ export async function startServer(args: CliArgs): Promise<RunningServer> {
                     return;
                 }
             }
-            // Origin omitted is allowed — non-browser clients (test harnesses,
+            // Origin omitted is allowed - non-browser clients (test harnesses,
             // server-to-server tooling) don't send one. Browsers always do.
         }
 
@@ -331,7 +331,7 @@ export async function startServer(args: CliArgs): Promise<RunningServer> {
 
         // User-Agent for analytics. Most browsers send one; non-browser
         // clients (test harnesses, server-to-server tooling) often don't.
-        // Stored verbatim — we don't strip or normalise here; consumer-side
+        // Stored verbatim - we don't strip or normalise here; consumer-side
         // jq queries are fine with the raw header.
         const ua = String(req.headers["user-agent"] ?? "");
 
@@ -357,7 +357,7 @@ export async function startServer(args: CliArgs): Promise<RunningServer> {
         tracks_total: counts[0],
     });
 
-    // Periodic population snapshot — one structured line per minute summarising
+    // Periodic population snapshot - one structured line per minute summarising
     // who's connected and where. Lets offline analysis (e.g. via `kubectl logs |
     // jq 'select(.evt=="snapshot")'`) reconstruct a player-count time-series
     // even on an idle server. unref() so smoke-tests can exit cleanly without

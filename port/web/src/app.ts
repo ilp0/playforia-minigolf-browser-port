@@ -31,7 +31,7 @@ export class App {
   private currentPanel: Panel | null = null;
   private currentName: PanelName | null = null;
 
-  /** Flags from initial handshake — read by login panel before submit. */
+  /** Flags from initial handshake - read by login panel before submit. */
   serverHandshakeOk = false;
   serverId: string | null = null;
 
@@ -61,7 +61,7 @@ export class App {
     });
 
     // Reconnect lifecycle. The Connection itself drives the `c old <id>`
-    // handshake — App's job is just to surface that something's happening
+    // handshake - App's job is just to surface that something's happening
     // (so the user doesn't think the UI froze) and clear it on success.
     this.connection.addEventListener("reconnecting", (ev) => {
       const { attempt, maxAttempts } = ev.detail;
@@ -73,8 +73,8 @@ export class App {
     this.connection.addEventListener("reconnect-failed", (ev) => {
       this.clearReconnect();
       const msg = ev.detail.reason === "rcf"
-        ? "Reconnect refused — please refresh."
-        : "Reconnect failed — please refresh.";
+        ? "Reconnect refused - please refresh."
+        : "Reconnect failed - please refresh.";
       this.showError(msg);
     });
   }

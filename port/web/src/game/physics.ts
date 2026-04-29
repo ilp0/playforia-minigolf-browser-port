@@ -1,4 +1,4 @@
-// Ball physics — port of GameCanvas.run()'s inner loop. Ports more of the
+// Ball physics - port of GameCanvas.run()'s inner loop. Ports more of the
 // original mechanics:
 //   - Slopes (4..11): per-substep directional acceleration
 //   - Water/acid (12..15): when the ball stops on liquid, count up a 6-second
@@ -17,7 +17,7 @@ export interface BallState {
   vx: number;
   vy: number;
   bounciness: number;
-  /** Magnet decay multiplier — Java's `somethingSpeedThing`. */
+  /** Magnet decay multiplier - Java's `somethingSpeedThing`. */
   magnetMul: number;
   onHole: boolean;
   onLiquidOrSwamp: boolean;
@@ -25,7 +25,7 @@ export interface BallState {
   liquidTimer: number;
   /** Where the ball was when the current stroke began (Java's tempCoordX/Y).
    *  This is the position water-event=0 ("restart from shot position") returns
-   *  to — i.e., the player's last hit position. */
+   *  to - i.e., the player's last hit position. */
   strokeStartX: number;
   strokeStartY: number;
   /** Last "safe" (solid-ground) position during this stroke (Java's
@@ -38,7 +38,7 @@ export interface BallState {
   iterationsThisStroke: number;
   /** Per-ball stuck counters mirroring Java GameCanvas.run. Each one drops the
    *  corresponding force on this ball when the ball has been *slow* under that
-   *  force for too many iterations — so a ball resting on a slope (or magnet,
+   *  force for too many iterations - so a ball resting on a slope (or magnet,
    *  or hole rim) clears within ~1.5s instead of riding out the 9s safety cap. */
   downhillStuckCounter: number;
   magnetStuckCounter: number;
@@ -100,13 +100,13 @@ const DIAG_OFFSET = Math.round(6 * MAGIC_OFFSET); // 4
 
 /**
  * Wall-clock milliseconds per physics iteration. Java targets `6 * maxPhysicsIterations`
- * ms per outer loop with `maxPhysicsIterations` iterations inside it — so 6ms per
+ * ms per outer loop with `maxPhysicsIterations` iterations inside it - so 6ms per
  * iteration regardless of the iteration batch size. We replicate that exact cadence
  * with a fixed accumulator in the RAF loop (see GamePanel.tick).
  */
 export const PHYSICS_STEP_MS = 6;
 
-/** Hard cap on a single stroke. 4000 iterations / 166 Hz ≈ 24 seconds — matches
+/** Hard cap on a single stroke. 4000 iterations / 166 Hz ≈ 24 seconds - matches
  *  Java's `loopStuckCounter > 4000` first-tier safety threshold (GameCanvas.run
  *  line 445). Java zeroes bounciness at that point and gives the ball another
  *  3000 iterations to settle; we instead lean on the per-ball stuck counters
@@ -115,10 +115,10 @@ export const PHYSICS_STEP_MS = 6;
  *  organically settle stuck strokes well before this cap. */
 const MAX_STROKE_ITERATIONS = 4000;
 
-/** Apply stroke impulse with deterministic noise — matches GameCanvas.doStroke.
+/** Apply stroke impulse with deterministic noise - matches GameCanvas.doStroke.
  *  `shootingMode` mirrors the original right-click cycle: 0=normal, 1=reverse,
  *  2=90° clockwise, 3=90° counter-clockwise. Rotation is applied BEFORE the
- *  noise so each rotated direction has its own random branch — same order as
+ *  noise so each rotated direction has its own random branch - same order as
  *  Java's doStroke. */
 export function applyStrokeImpulse(
   ball: BallState,
@@ -181,7 +181,7 @@ export function applyStrokeImpulse(
  * Pixel-precise: player is "at" tile (tx, ty) iff their CENTER is strictly
  * inside the tile's 15×15 footprint, with a 1-px exclusion on the +x/+y
  * edges (Java uses `< x*15 + 15 - 1`, not `<= x*15 + 15`). NOT a radius
- * overlap — Java doesn't account for the ball's sprite size here.
+ * overlap - Java doesn't account for the ball's sprite size here.
  */
 function ballOnTile(tx: number, ty: number, px: number, py: number): boolean {
   const x0 = tx * PIXEL_PER_TILE;
@@ -225,7 +225,7 @@ function canMovableBlockMove(
  * Recursively follow a sunkable block (shape 46) down a chain of downhill
  * tiles until it either rests on flat ground or hits an obstruction. Returns
  * `[finalTx, finalTy, finalBg]`. Mirrors Java's
- * `calculateMovableBlockEndPosition` — same i<1078 recursion cap, same gate
+ * `calculateMovableBlockEndPosition` - same i<1078 recursion cap, same gate
  * `!nonSunkable && background1 in 4..11`, so non-sunkable shape 27 always
  * stops after the first slide step.
  */
@@ -284,7 +284,7 @@ function handleMovableBlock(
   const shape = (code >>> 16) & 0xff; // shapeReduced (Java's `shape` is +24)
   const bg = (code >>> 8) & 0xff;
   // Validate it really is a live movable block. The collision pixel may have
-  // been a 27/46 even if a previous push has since cleared the source — bail
+  // been a 27/46 even if a previous push has since cleared the source - bail
   // unless the tile-data still says it's there.
   const fullShape = shape + 24;
   if (special !== 2 || (fullShape !== 27 && fullShape !== 46)) return false;
@@ -350,7 +350,7 @@ function isWall(v: number): boolean {
 }
 
 /**
- * Bounce coefficient for a wall collision — applied as a multiplier on the
+ * Bounce coefficient for a wall collision - applied as a multiplier on the
  * reflected velocity component. For bouncy blocks (18) the coefficient is
  * dynamic and CAN exceed 1.0 (super-bouncy), accelerating slow balls toward
  * ~6.5 units while decaying with each hit. Mirrors Java getSpeedEffect.
@@ -406,7 +406,7 @@ function readNeighbors(map: ParsedMap, x: number, y: number): Neighbors {
  *
  * The collision pixel may not always be in the block's tile (e.g. the ball
  * grazes a wall pixel that belongs to the neighbouring tile due to mask
- * shape) — `handleMovableBlock` validates the tile-data and bails if it
+ * shape) - `handleMovableBlock` validates the tile-data and bails if it
  * isn't a real block tile, which keeps us correct for those edge cases.
  */
 function bounceCoeff(
@@ -437,7 +437,7 @@ function bounceCoeff(
 }
 
 /**
- * Wall collision — port of GameCanvas.handleWallCollision (lines 1205-1451).
+ * Wall collision - port of GameCanvas.handleWallCollision (lines 1205-1451).
  * Includes one-way wall (20-23) directional pass-through.
  */
 function handleWallCollision(ball: BallState, ctx: PhysicsContext, n: Neighbors, ix: number, iy: number): void {
@@ -451,7 +451,7 @@ function handleWallCollision(ball: BallState, ctx: PhysicsContext, n: Neighbors,
   let tl = isWall(n.tl);
 
   // One-way wall pass-through. 20=N (no top hit), 21=E (no right hit),
-  // 22=S (no bottom hit), 23=W (no left hit) — per Java GameCanvas:1244-1322.
+  // 22=S (no bottom hit), 23=W (no left hit) - per Java GameCanvas:1244-1322.
   if (top && n.t === 20) top = false;
   if (tl && n.tl === 20) tl = false;
   if (tr && n.tr === 20) tr = false;
@@ -476,7 +476,7 @@ function handleWallCollision(ball: BallState, ctx: PhysicsContext, n: Neighbors,
   if (bottom && n.b === 23) bottom = false;
   if (top && n.t === 23) top = false;
 
-  // Inside-corner suppression — match Java:1324-1362.
+  // Inside-corner suppression - match Java:1324-1362.
   if (top && tr && right && (n.t < 20 || n.t > 23) && (n.tr < 20 || n.tr > 23) && (n.r < 20 || n.r > 23)) {
     right = false;
     top = false;
@@ -568,7 +568,7 @@ function handleWallCollision(ball: BallState, ctx: PhysicsContext, n: Neighbors,
   }
 }
 
-/** Slope acceleration — values 4..11, 8 directions. Java handleDownhill. */
+/** Slope acceleration - values 4..11, 8 directions. Java handleDownhill. */
 function handleDownhill(ball: BallState, centerVal: number): boolean {
   if (centerVal < 4 || centerVal > 11) return false;
   const a = 0.025;
@@ -670,7 +670,7 @@ function handleTeleport(ball: BallState, ctx: PhysicsContext, n: Neighbors, ix: 
     ball.y = e[1];
     return;
   }
-  // No exit — pick a random other-coloured exit, or another start.
+  // No exit - pick a random other-coloured exit, or another start.
   const starts = ctx.map.teleportStarts[foundColour];
   if (starts.length >= 2) {
     for (let attempt = 0; attempt < 100; attempt++) {
@@ -941,7 +941,7 @@ export function step(ball: BallState, ctx: PhysicsContext): StepResult {
           return { stopped: true, inHole: true };
         }
         if (centerVal === 12 || centerVal === 14) {
-          // Water — respawn at last shore (waterEvent=1) or back where the
+          // Water - respawn at last shore (waterEvent=1) or back where the
           // player hit from (waterEvent=0, the default).
           if (ctx.waterEvent === 1) {
             ball.x = ball.shoreX;
@@ -955,7 +955,7 @@ export function step(ball: BallState, ctx: PhysicsContext): StepResult {
           ball.vx = 0;
           ball.vy = 0;
         } else if (centerVal === 13 || centerVal === 15) {
-          // Acid — always reset to the track's start position (Java behaviour).
+          // Acid - always reset to the track's start position (Java behaviour).
           resetToStart(ball, ctx);
         }
         ball.onHole = false;

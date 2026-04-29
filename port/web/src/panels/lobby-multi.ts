@@ -12,7 +12,7 @@ interface GameInfo {
   numPlayers: number;
   /**
    * True once the game has started (server cleared `isPublic`). Field 5 of
-   * the wire gameString — the original Java client treated this slot as
+   * the wire gameString - the original Java client treated this slot as
    * an unused legacy `-1` value, so emitting `0`/`1` is back-compatible
    * with anyone still parsing the old format. Drives the "(In progress)"
    * badge and the Join enable/disable in the games list.
@@ -77,7 +77,7 @@ function parseGameFields(fields: string[], offset: number): GameInfo {
     perms: parseInt(f(3), 10) || 0,
     numPlayers: parseInt(f(4), 10) || 0,
     // f(5) was the legacy `-1` slot; we emit "1" once the room has started
-    // so the client can show "(In progress)". Older servers send "-1" — any
+    // so the client can show "(In progress)". Older servers send "-1" - any
     // non-"1" value parses as "still waiting", which matches the old UX.
     inProgress: f(5) === "1",
     numTracks: parseInt(f(6), 10) || 0,
@@ -93,7 +93,7 @@ function parseGameFields(fields: string[], offset: number): GameInfo {
 }
 
 /**
- * Multiplayer lobby — visual & functional port of agolf.lobby.LobbyMultiPlayerPanel.
+ * Multiplayer lobby - visual & functional port of agolf.lobby.LobbyMultiPlayerPanel.
  * Lays out a game list (left), a player list + create-game form (right) and a
  * chat band along the bottom. Backed by the bg-lobby-multi.gif background.
  */
@@ -373,7 +373,7 @@ export class LobbyMultiPanel implements Panel {
     const grid = document.createElement("div");
     grid.style.display = "grid";
     // `minmax(0, 1fr)` lets the input column shrink below its content's natural
-    // width — without this the 1fr track grows to fit the widest dropdown
+    // width - without this the 1fr track grows to fit the widest dropdown
     // option (e.g. Finnish "Takaisin lyöntipaikkaan") and overflows the
     // panel's 320px right column.
     grid.style.gridTemplateColumns = "auto minmax(0, 1fr)";
@@ -630,7 +630,7 @@ export class LobbyMultiPanel implements Panel {
       empty.style.padding = "8px";
       empty.style.color = "#666";
       empty.style.fontStyle = "italic";
-      empty.textContent = t("Port_Lobby_NoGamesYet", "(No games yet — create one to get started)");
+      empty.textContent = t("Port_Lobby_NoGamesYet", "(No games yet - create one to get started)");
       el.appendChild(empty);
       return;
     }
@@ -644,7 +644,7 @@ export class LobbyMultiPanel implements Panel {
     // (lock | name+meta block | slots | join button) so the slot count and
     // Join button vertically center against the stacked name+meta cell. The
     // narrow Games column couldn't fit everything inline once
-    // "(In progress)" was added — splitting the middle cell lets the name
+    // "(In progress)" was added - splitting the middle cell lets the name
     // breathe while keeping the action controls anchored to the right.
     const row = document.createElement("div");
     row.style.display = "grid";
@@ -711,7 +711,7 @@ export class LobbyMultiPanel implements Panel {
       join.textContent = t("LobbySelect_Full", "(Full)");
     } else {
       // Slot is free regardless of whether the room is waiting or already
-      // running — the server's `addPlayerWithPassword` catches late joiners
+      // running - the server's `addPlayerWithPassword` catches late joiners
       // up via `start` / `starttrack` / `gametrack`. Surface the verb
       // difference so users know what they're walking into.
       if (g.inProgress) {
@@ -762,7 +762,7 @@ export class LobbyMultiPanel implements Panel {
       return;
     }
 
-    // Echo locally — server only forwards to *others*. Use our captured nick
+    // Echo locally - server only forwards to *others*. Use our captured nick
     // so the format matches incoming `<{sender}> ...` lines from peers.
     this.app.connection.sendData("lobby", "say", text);
     this.appendChat(`<${this.myNick || "you"}> ${text}`, "say-self");
@@ -784,7 +784,7 @@ export class LobbyMultiPanel implements Panel {
     // Ask the server to remove us from the multi lobby. The server replies
     // with `status lobbyselect 300` which we handle in `onPacket` to flip
     // the panel. Doing the roundtrip (instead of a local-only setPanel)
-    // keeps server and client lobby state consistent — otherwise our
+    // keeps server and client lobby state consistent - otherwise our
     // sticky `player.lobby` reference would still inflate the multi
     // player count in `lobbyselect rnop` until we joined a different lobby.
     this.app.connection.sendData("lobbyselect", "leave");

@@ -169,7 +169,7 @@ async function ensurePorts(state) {
             return { web, ws };
         }
         offset++;
-        // Skip 0 — that's the main worktree's slot.
+        // Skip 0 - that's the main worktree's slot.
         if (offset >= PORT_RANGE) offset = 1;
     }
     throw new Error("Could not find a free port pair within range");
@@ -186,7 +186,7 @@ function findVite() {
         if (existsSync(c)) return c;
     }
     throw new Error(
-        "vite not found in node_modules — run `npm install` in port/ first",
+        "vite not found in node_modules - run `npm install` in port/ first",
     );
 }
 
@@ -253,7 +253,7 @@ async function cmdUp(args) {
     ensureDirs();
     // Advisory lock so two near-simultaneous `up` invocations (parallel
     // agents, hook + manual run) don't both check isPortBound, both see
-    // free, and both spawn — the loser dies on Vite's --strictPort and
+    // free, and both spawn - the loser dies on Vite's --strictPort and
     // overwrites the winner's state.
     const releaseLock = await acquireUpLock();
     try {
@@ -319,12 +319,12 @@ async function runUp(args) {
             delete state[svc];
         }
 
-        // PID dead (or never set). Don't spawn on a port someone else owns —
+        // PID dead (or never set). Don't spawn on a port someone else owns -
         // that's almost certainly another worktree, the main worktree's
         // dev server, or a stale process whose ownership we can't confirm.
         if (await isPortBound(port)) {
             console.error(
-                `${svc}: port ${port} bound by an unknown process — refusing to spawn. ` +
+                `${svc}: port ${port} bound by an unknown process - refusing to spawn. ` +
                 `Investigate or pick a different port. State file: ${STATE_FILE}`,
             );
             process.exitCode = 1;

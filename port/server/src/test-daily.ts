@@ -3,7 +3,7 @@
 // Verifies the server-side daily room: two clients select daily, both end up
 // in the same singleton DailyGame, both see each other's stroke broadcasts,
 // and finishing (hole-in / forfeit) sends a personal `game end` to the
-// finisher only — the room stays alive for the other player.
+// finisher only - the room stays alive for the other player.
 //
 // Usage: node --experimental-strip-types --no-warnings src/test-daily.ts
 
@@ -124,7 +124,7 @@ async function main(): Promise<void> {
         // A should see B's `game join` broadcast (B was added after A) AND
         // it must carry the new player's 1-based ordinal (=2 for B). The
         // client treats this as 1-based and subtracts 1 to get the slot
-        // index — sending 1 here would make A's client overwrite slot 0
+        // index - sending 1 here would make A's client overwrite slot 0
         // (its own row) with B's nick.
         const joinPkt = await a.waitFor((s) => /^d \d+ game\tjoin\t/.test(s), "A sees B join");
         const joinFields = joinPkt.split("\t");
@@ -134,7 +134,7 @@ async function main(): Promise<void> {
         }
         console.log(`[OK] join broadcast carries correct 1-based ordinal=${ordinal}`);
 
-        // Both shoot — same async semantics as MultiGame. The strokes happen
+        // Both shoot - same async semantics as MultiGame. The strokes happen
         // in the singleton daily game; both players see each other's strokes.
         const ball = (200 * 1500 + 200 * 4 + 0).toString(36).padStart(4, "0");
         const mouseA = (300 * 1500 + 250 * 4 + 0).toString(36).padStart(4, "0");
@@ -159,12 +159,12 @@ async function main(): Promise<void> {
         await b.waitFor((s) => /^d \d+ game\tendstroke\t0\t1\tt$/.test(s), "B sees A holed");
         await a.waitFor((s) => /^d \d+ game\tend$/.test(s), "A gets personal end");
 
-        // Crucially, B must NOT receive a `game end` — they're still playing.
+        // Crucially, B must NOT receive a `game end` - they're still playing.
         const bNoEnd = await b.expectAbsent((s) => /^d \d+ game\tend$/.test(s), "B's spurious end", 300);
         if (!bNoEnd) throw new Error("B got `game end` despite still playing");
         console.log("[OK] only the finisher gets `game end`; room continues for others");
 
-        // B forfeits — also gets a personal `game end`.
+        // B forfeits - also gets a personal `game end`.
         b.sendData("game", "forfeit");
         await b.waitFor((s) => /^d \d+ game\tendstroke\t1\t/.test(s), "B sees forfeit endstroke");
         await b.waitFor((s) => /^d \d+ game\tend$/.test(s), "B gets personal end after forfeit");
@@ -187,7 +187,7 @@ async function main(): Promise<void> {
         await c.open();
         await login(c);
         await enterDaily(c);
-        // Owninfo must show id=0 — the room reset on empty-join, otherwise C's
+        // Owninfo must show id=0 - the room reset on empty-join, otherwise C's
         // numberIndex would still be 2 here and the next assert (charAt 0) is
         // the wrong slot.
         const owninfo = await c.waitFor((s) => /^d \d+ game\towninfo\t/.test(s), "C owninfo");
@@ -204,7 +204,7 @@ async function main(): Promise<void> {
         // client iterated up to `numPlayers` (= broadcast `playStatus` length)
         // when building its outgoing playStatus and ball-sprite list, omitted
         // its own slot at the high sparse id, and the server's `endStroke`
-        // resolved `charAt(myId) === ""` to `"f"` — the daily run never ended.
+        // resolved `charAt(myId) === ""` to `"f"` - the daily run never ended.
         // Also: existing players received `game join` with ordinal
         // `playerCount() + 1`, smaller than the joiner's real id, so their
         // scoreboards overwrote an existing player's slot with the joiner.
@@ -220,7 +220,7 @@ async function main(): Promise<void> {
         const did = parseInt(dOwn.split("\t")[2] ?? "-1", 10);
         if (did !== 1) throw new Error(`D entered with id=${did}; want 1`);
 
-        // C leaves. Room has only D, but numberIndex stayed 2 — sparse setup.
+        // C leaves. Room has only D, but numberIndex stayed 2 - sparse setup.
         c.sendData("game", "back");
         await c.waitFor((s) => /^d \d+ status\tlobbyselect\t/.test(s), "C back to lobbyselect");
 
@@ -231,14 +231,14 @@ async function main(): Promise<void> {
         await enterDaily(e);
         const eOwn = await e.waitFor((s) => /^d \d+ game\towninfo\t/.test(s), "E owninfo");
         const eid = parseInt(eOwn.split("\t")[2] ?? "-1", 10);
-        if (eid !== 2) throw new Error(`E entered with id=${eid}; want 2 (sparse — C's slot still owned)`);
+        if (eid !== 2) throw new Error(`E entered with id=${eid}; want 2 (sparse - C's slot still owned)`);
 
         // D should see E's join with ordinal = eid + 1 = 3, not players.length+1=2.
         // Pre-fix: ordinal would have been 2, overwriting D's own slot 1 with E's nick.
         const eJoinOnD = await d.waitFor((s) => /^d \d+ game\tjoin\t/.test(s), "D sees E join");
         const eOrdinal = parseInt(eJoinOnD.split("\t")[2] ?? "0", 10);
         if (eOrdinal !== eid + 1) {
-            throw new Error(`D saw E join with ordinal=${eOrdinal}; want ${eid + 1} — pre-fix bug overwrites existing slot`);
+            throw new Error(`D saw E join with ordinal=${eOrdinal}; want ${eid + 1} - pre-fix bug overwrites existing slot`);
         }
         console.log(`[OK] sparse-id join into non-empty room: E's join carries ordinal=${eOrdinal}`);
 
@@ -269,13 +269,13 @@ async function main(): Promise<void> {
         // socket, `fullyRemovePlayer` called `lobby.removeGame(daily_game)`,
         // unregistering the singleton from `daily_lobby.games`. The singleton
         // object lived on in `golfServer.dailyGame`, so subsequent joiners
-        // entered a "ghost" room — `daily_lobby.gameCount()` and
+        // entered a "ghost" room - `daily_lobby.gameCount()` and
         // `inGamePlayerCount()` both stayed at 0 for the rest of the server's
         // lifetime, breaking the analytics snapshot and the lobbyselect
         // "Daily Cup: N players" display alike.
         //
         // Setup: D and E are still in the daily room here. Close them to drop
-        // both sockets — the in-game disconnect path runs synchronously, so
+        // both sockets - the in-game disconnect path runs synchronously, so
         // by the time both `close` calls have round-tripped through their
         // server-side `handleDisconnect`, the daily room has emptied and
         // (pre-fix) been unregistered.
@@ -283,7 +283,7 @@ async function main(): Promise<void> {
         e.close();
         // Yield so the WebSocket close events surface to the server. The
         // server's in-game disconnect handler is synchronous once it runs,
-        // but the close itself is async — give Windows CI extra slack.
+        // but the close itself is async - give Windows CI extra slack.
         await new Promise((r) => setTimeout(r, 250));
 
         const dailyLobby = server.golfServer.getLobby("d");

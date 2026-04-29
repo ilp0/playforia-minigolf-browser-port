@@ -2,7 +2,7 @@
 //
 // Boots a fresh GolfServer on port 4249 and walks through the broken-before
 // scenario: A creates a 4-player game, B joins, then B leaves. The MultiGame
-// scoreboard must reuse B's slot id when a fresh joiner D arrives — previously
+// scoreboard must reuse B's slot id when a fresh joiner D arrives - previously
 // the server emitted two divergent `game join` ordinals (one at
 // `playerCount()+1`, one at `numberIndex+1` from the base `sendJoinMessages`),
 // which made existing clients render the joiner at TWO scoreboard rows and
@@ -181,7 +181,7 @@ async function main(): Promise<void> {
         await b.waitFor((s) => /^d \d+ status\tlobby\tx/.test(s), "B back in lobby");
         console.log("[OK] B left, A saw part for slot 1");
 
-        // C joins (a fresh client) and MUST take slot 1 (B's old slot) — not 2.
+        // C joins (a fresh client) and MUST take slot 1 (B's old slot) - not 2.
         const c = new Client("C");
         await c.open();
         await login(c);
@@ -190,7 +190,7 @@ async function main(): Promise<void> {
         await c.waitFor((s) => /^d \d+ status\tgame/.test(s), "C status game");
         const cOwn = await c.waitFor((s) => /game\towninfo/.test(s), "C owninfo");
         if (ownInfoSlot(cOwn) !== 1) {
-            throw new Error(`C should reuse B's freed slot 1, got ${ownInfoSlot(cOwn)} — sparse-id regression`);
+            throw new Error(`C should reuse B's freed slot 1, got ${ownInfoSlot(cOwn)} - sparse-id regression`);
         }
         await c.settle();
         const aJoinC = a.drain((s) => /game\tjoin\t/.test(s));
@@ -202,7 +202,7 @@ async function main(): Promise<void> {
         }
         console.log("[OK] C reclaimed slot 1 with a single broadcast (no scoreboard bloat)");
 
-        // B rejoins — they should be assigned slot 2 (next free), again single broadcast.
+        // B rejoins - they should be assigned slot 2 (next free), again single broadcast.
         b.sendData("lobby", "jmpt", String(gameId));
         await b.waitFor((s) => /^d \d+ status\tgame/.test(s), "B status game (rejoin)");
         const bRejoinOwn = await b.waitFor((s) => /game\towninfo/.test(s), "B owninfo (rejoin)");

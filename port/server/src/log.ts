@@ -1,4 +1,4 @@
-// Structured analytics logging — one JSON line per event to stdout.
+// Structured analytics logging - one JSON line per event to stdout.
 //
 // Kubernetes captures container stdout, so this is the cheapest way to ship
 // "how many players, what did they do" data off-server without integrating an
@@ -6,7 +6,7 @@
 // `t` (ISO timestamp) and `evt` (event name); consumers can `jq -c 'select(.evt=="…")'`.
 //
 // The existing diagnostic console.log lines (`[server]`, `[connection]`, etc.)
-// stay unchanged — they don't start with `{`, so they're trivially separable
+// stay unchanged - they don't start with `{`, so they're trivially separable
 // from this stream.
 //
 // Best-effort: if stdout write throws (EPIPE in tests, broken pipe), swallow

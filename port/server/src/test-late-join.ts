@@ -4,11 +4,11 @@
 // in the lobby and observes:
 //   1. Initial gamelist (carries A's room).
 //   2. A `gamelist change` flipping the `inProgress` flag to '1' once the
-//      room fills (room stays in the list — no `gamelist remove`).
+//      room fills (room stays in the list - no `gamelist remove`).
 //   3. A `gamelist change` shrinking the room back to 1/2 when B leaves
 //      mid-game.
 // Then C joins the now-1/2 room and verifies the catch-up sequence:
-//   - personal `start` / `resetvoteskip` / `starttrack` / `gametrack 1` — no
+//   - personal `start` / `resetvoteskip` / `starttrack` / `gametrack 1` - no
 //     full-room `start` broadcast (A is mid-game and shouldn't be reset).
 //
 // Usage: node --experimental-strip-types --no-warnings src/test-late-join.ts
@@ -156,7 +156,7 @@ async function main(): Promise<void> {
         await a.waitFor((s) => /^d \d+ game\tbeginstroke\t0\t/.test(s), "A own beginstroke");
         a.sendData("game", "endstroke", 0, "tf");
         await a.waitFor((s) => /^d \d+ game\tendstroke\t0\t1\tt$/.test(s), "A holed");
-        // B leaves voluntarily — `removePlayer` should mark slot 1 'p' so
+        // B leaves voluntarily - `removePlayer` should mark slot 1 'p' so
         // allDone passes and the track advances; we'll only assert on the
         // gamelist side here.
         c.drain();
@@ -171,7 +171,7 @@ async function main(): Promise<void> {
         console.log("[OK] B left mid-game → gamelist shrinks back to 1/2 (inProgress=1)");
 
         // C joins the 1/2 in-progress room. Expect personal start / resetvoteskip /
-        // starttrack / gametrack — but NO `lobby gamelist remove`.
+        // starttrack / gametrack - but NO `lobby gamelist remove`.
         c.drain();
         c.sendData("lobby", "jmpt", String(gameId));
         await c.waitFor((s) => /^d \d+ status\tgame/.test(s), "C status game");
@@ -179,7 +179,7 @@ async function main(): Promise<void> {
         await c.waitFor((s) => /^d \d+ game\tresetvoteskip$/.test(s), "C resetvoteskip");
         const stt = await c.waitFor((s) => /^d \d+ game\tstarttrack\t/.test(s), "C personal starttrack");
         await c.waitFor((s) => /^d \d+ game\tgametrack\t\d+$/.test(s), "C gametrack");
-        // playStatus length should be 2 (slots 0..1 — A's slot 0 and C's slot 1).
+        // playStatus length should be 2 (slots 0..1 - A's slot 0 and C's slot 1).
         // Specifically: server padded playStatus for C's slot to 'f', and the
         // wire buff is "f".repeat(playStatus.length) = "ff".
         if (!/game\tstarttrack\tff\t/.test(stt)) {

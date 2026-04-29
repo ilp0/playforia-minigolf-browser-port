@@ -27,7 +27,7 @@ export default defineConfig({
         changeOrigin: true,
         rewriteWsOrigin: true,
       },
-      // Server-side replay store lives next to the WebSocket — proxy so dev
+      // Server-side replay store lives next to the WebSocket - proxy so dev
       // mode reaches the same endpoints in-process.
       "/api": {
         target: `http://127.0.0.1:${WS_PORT}`,

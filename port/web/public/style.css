@@ -1,4 +1,4 @@
-/* Playforia Minigolf — browser port. Visual goal: pixel-faithful match to the
+/* Playforia Minigolf - browser port. Visual goal: pixel-faithful match to the
    original Java AWT client (light-green background #99FF99, pastel buttons,
    serif titles, AWT-style 3D-bevel widgets).
 
@@ -30,7 +30,7 @@ body {
   justify-content: center;
   /* `100dvh` follows the dynamic viewport so the layout shrinks when the
      mobile address bar appears and grows when it collapses. `100vh` falls
-     back for browsers that don't support dvh — they get the static large
+     back for browsers that don't support dvh - they get the static large
      viewport which can be partially covered by the bar. */
   min-height: 100vh;
   min-height: 100dvh;
@@ -69,7 +69,7 @@ select:focus {
 }
 
 button {
-  background: #d9d9d9; /* Dialog grey — matches AWT default */
+  background: #d9d9d9; /* Dialog grey - matches AWT default */
   color: #000;
   border: 2px outset #d9d9d9;
   padding: 3px 12px;
@@ -383,7 +383,7 @@ button.btn-blue   { background: #9090e0; border-color: #9090e0; }
   cursor: crosshair;
 }
 
-/* Bottom band — flex row that holds the chat strip (left, multiplayer only)
+/* Bottom band - flex row that holds the chat strip (left, multiplayer only)
    and the trackinfo block. Trackinfo shrinks/expands depending on whether
    chat is visible. */
 .panel-game .bottom-band {
@@ -455,7 +455,7 @@ button.btn-blue   { background: #9090e0; border-color: #9090e0; }
 /* ---------- Multiplayer bottom-band layout ----------
    Mirrors the original Playforia layout: chat on the left, then
    [Rata X/Y + name + author] | [stats] | [skip + menu] on the right.
-   Stroke counter, "Click to shoot" hint, and Forfeit button are hidden —
+   Stroke counter, "Click to shoot" hint, and Forfeit button are hidden -
    the original had no such elements, and the scoreboard already shows
    per-hole stroke counts. */
 .panel-game.is-multi .chat-strip {
@@ -556,7 +556,7 @@ button.btn-blue   { background: #9090e0; border-color: #9090e0; }
   z-index: 100;
 }
 
-/* Non-fatal "we're trying to recover" banner — distinct from .error-banner so
+/* Non-fatal "we're trying to recover" banner - distinct from .error-banner so
    it can sit alongside other UI without screaming red and is removed cleanly
    on `reconnected`. */
 .reconnect-banner {
@@ -623,7 +623,7 @@ button.btn-blue   { background: #9090e0; border-color: #9090e0; }
   text-align: center;
 }
 
-/* Valikko button — visual pressed state mirrors a sunken Win98 toolbar
+/* Valikko button - visual pressed state mirrors a sunken Win98 toolbar
  * toggle. `is-active` is added while the popover is open so the button
  * shows it's the source of the current menu. */
 .panel-game .btn-yellow.is-active {
@@ -755,7 +755,7 @@ input[type="range"].win98-slider::-moz-range-thumb {
   justify-content: center;
 }
 
-/* The phone is a small AWT-bezel rectangle drawn entirely with CSS — a
+/* The phone is a small AWT-bezel rectangle drawn entirely with CSS - a
    3D-bevel border, dark grey body, a screen window in pastel green with a
    white golf ball inside, and a home indicator pill. The whole assembly
    rotates from upright to landscape on a loop, mimicking the gesture the
@@ -803,7 +803,7 @@ input[type="range"].win98-slider::-moz-range-thumb {
   overflow: hidden;
 }
 
-/* Golf ball — white circle with a faint shading dot in the corner so it
+/* Golf ball - white circle with a faint shading dot in the corner so it
    reads as a ball rather than a flat disc. Rolls left↔right inside the
    "screen" so there's a hint of motion even mid-rotation. */
 #rotate-prompt .rotate-prompt__ball {
@@ -843,7 +843,7 @@ input[type="range"].win98-slider::-moz-range-thumb {
   100% { transform: rotate(0deg); }
 }
 
-/* Ball nudges sideways on the rotation peak — implies the ball is "ready
+/* Ball nudges sideways on the rotation peak - implies the ball is "ready
    to roll" once the phone is in the right orientation. */
 @keyframes rotate-prompt-ball {
   0%   { transform: translateX(0); }
@@ -853,7 +853,7 @@ input[type="range"].win98-slider::-moz-range-thumb {
   100% { transform: translateX(0); }
 }
 
-/* Magnifier loupe — a fixed-position circular canvas painted from the main
+/* Magnifier loupe - a fixed-position circular canvas painted from the main
    game canvas every frame while a touch drag is active. Floats above the
    finger so the user sees what's hidden under their fingertip. */
 .aim-loupe {
@@ -867,7 +867,7 @@ input[type="range"].win98-slider::-moz-range-thumb {
   background: #99ff99;
   pointer-events: none;
   z-index: 1500;
-  /* Pixel art look — keep the zoomed-in pixels crisp instead of blurry. */
+  /* Pixel art look - keep the zoomed-in pixels crisp instead of blurry. */
   image-rendering: pixelated;
   image-rendering: crisp-edges;
 }
@@ -875,7 +875,7 @@ input[type="range"].win98-slider::-moz-range-thumb {
   display: block;
 }
 
-/* Mobile shoot-mode cycle button — desktop right-click parity. The button
+/* Mobile shoot-mode cycle button - desktop right-click parity. The button
    itself is created in TS and lives inside `.canvas-frame` so it scales with
    the canvas under the landscape `transform: scale()`. The default rule
    below hides it on every device; the touch-primary @media block re-enables
@@ -914,7 +914,7 @@ input[type="range"].win98-slider::-moz-range-thumb {
   border-style: inset;
 }
 
-/* Fullscreen gate — covers the play area on touch-primary devices in
+/* Fullscreen gate - covers the play area on touch-primary devices in
    landscape until the user taps "Play fullscreen". Tapping triggers
    `requestFullscreen()` (which only works inside a user-gesture handler),
    and the body picks up `.is-fullscreen` from a fullscreenchange listener
@@ -945,7 +945,7 @@ input[type="range"].win98-slider::-moz-range-thumb {
   cursor: pointer;
   box-shadow: 0 4px 0 #2a2d33;
   border-radius: 6px;
-  /* Big tap target — comfortably hittable with a thumb. */
+  /* Big tap target - comfortably hittable with a thumb. */
   min-width: 240px;
 }
 
@@ -975,7 +975,7 @@ input[type="range"].win98-slider::-moz-range-thumb {
 /* Touch device adjustments. Gated on `body.is-touch-mode`, applied by
    `setupTouchMode()` in main.ts. We previously used
    `@media (hover: none) and (pointer: coarse)` here but that query proved
-   unreliable on real phones — Chrome on Galaxy S23 reports `(hover: hover)`
+   unreliable on real phones - Chrome on Galaxy S23 reports `(hover: hover)`
    despite being a touch-only device, so the rotate prompt + fullscreen gate
    + mobile settings all stayed hidden. The JS detector combines client
    hints, the media query, and a touch-capability + viewport-size fallback,
@@ -983,7 +983,7 @@ input[type="range"].win98-slider::-moz-range-thumb {
    verdict as the in-game `isTouchPrimary` flag. */
 body.is-touch-mode .panel-game .shoot-mode-btn { display: block; }
 
-/* Block default scroll/zoom gestures on the play canvas — touch input is
+/* Block default scroll/zoom gestures on the play canvas - touch input is
    consumed by drag-to-shoot. Buttons and chat scrolling outside the
    canvas remain unaffected. */
 body.is-touch-mode .panel-game canvas {
@@ -991,19 +991,19 @@ body.is-touch-mode .panel-game canvas {
   cursor: default;
 }
 
-/* Portrait — show rotate prompt, hide everything else. */
+/* Portrait - show rotate prompt, hide everything else. */
 @media (orientation: portrait) {
   body.is-touch-mode #app { display: none !important; }
   body.is-touch-mode #rotate-prompt { display: flex; }
 }
 
-/* Landscape — fit the fixed-size #app inside the viewport via a uniform
+/* Landscape - fit the fixed-size #app inside the viewport via a uniform
    transform, preserving the 735×525 internal layout. We can't use
    `width: 100vw` etc. because every child has hardcoded pixel sizes keyed
    to that 735×525 design; CSS-scaling the whole thing keeps the pixel art
    lined up exactly while filling the screen. The scale factor is computed
    in JS (see `setupMobileScale` in main.ts) and written to `--mobile-scale`
-   because `scale()` requires a unitless number — `min(100vw/735, 100vh/525)`
+   because `scale()` requires a unitless number - `min(100vw/735, 100vh/525)`
    resolves to a length and fails to parse. */
 @media (orientation: landscape) {
   body.is-touch-mode {

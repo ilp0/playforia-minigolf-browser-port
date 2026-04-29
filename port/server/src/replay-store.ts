@@ -8,7 +8,7 @@
 //
 // Capacity is a hard upper bound: oldest entries are evicted as new ones
 // arrive. Sized for "lots of daily players sharing freely" without letting
-// the server's heap balloon — 10k replays at ~2 KB each ≈ 20 MB.
+// the server's heap balloon - 10k replays at ~2 KB each ≈ 20 MB.
 
 const MAX_REPLAYS = 10_000;
 
@@ -19,7 +19,7 @@ const MAX_REPLAYS = 10_000;
  */
 const store = new Map<string, string>();
 
-/** 8-char base36 id — 36^8 ≈ 2.8e12, collision-free at our scale. */
+/** 8-char base36 id - 36^8 ≈ 2.8e12, collision-free at our scale. */
 function generateId(): string {
     // Two 32-bit chunks ensure ≥ 4 bytes of entropy each.
     const a = Math.floor(Math.random() * 0xffffffff).toString(36);
@@ -44,7 +44,7 @@ export function getReplay(id: string): string | null {
     return store.get(id) ?? null;
 }
 
-/** Test hook — wipes the store. */
+/** Test hook - wipes the store. */
 export function _clearReplayStore(): void {
     store.clear();
 }

@@ -1,4 +1,4 @@
-// GolfServer — singleton container for state. Mirrors org.moparforia.server.Server.
+// GolfServer - singleton container for state. Mirrors org.moparforia.server.Server.
 import { type Packet, PacketType } from "@minigolf/shared";
 import type { Connection } from "./connection.ts";
 import { Player } from "./player.ts";
@@ -14,7 +14,7 @@ import { logEvent } from "./log.ts";
  *  full-cleanup. */
 const RECONNECT_GRACE_MS = 250_000;
 
-/** UTC YYYY-MM-DD — single source of truth for "today". */
+/** UTC YYYY-MM-DD - single source of truth for "today". */
 export function todayDateKey(): string {
     return new Date().toISOString().slice(0, 10);
 }
@@ -65,7 +65,7 @@ export class GolfServer {
         // when the room empties via mid-game disconnect, but the singleton
         // itself lives on; without re-adding here, `daily_lobby.gameCount()`,
         // `inGamePlayerCount()`, and `totalPlayerCount()` perpetually report 0
-        // even when subsequent joiners are sitting in the daily room — breaking
+        // even when subsequent joiners are sitting in the daily room - breaking
         // both the analytics snapshot and the lobbyselect "Daily Cup: N players"
         // display. `addGame` is idempotent (no-op if already registered).
         this.getLobby(LobbyType.DAILY).addGame(this.dailyGame);
@@ -118,14 +118,14 @@ export class GolfServer {
         const player = conn.player;
         if (!player) return;
         // Belt-and-suspenders: if this connection has been swapped (via
-        // `handleReconnect`) it's no longer the player's live socket — the
+        // `handleReconnect`) it's no longer the player's live socket - the
         // close event is just the old socket's death rattle, ignore it so we
         // don't tear down the player record we just rescued.
         if (player.connection !== conn) return;
 
         // Mid-game disconnect: peers are waiting on this player's `endstroke`,
         // so we can't keep them logically present. Fall through to immediate
-        // cleanup as before. (Reconnect mid-game is a deferred follow-up — see
+        // cleanup as before. (Reconnect mid-game is a deferred follow-up - see
         // KNOWN_ISSUES.)
         if (player.game) {
             this.fullyRemovePlayer(player, "in_game");
@@ -146,7 +146,7 @@ export class GolfServer {
             console.log(`[reconnect] grace expired for ${player.id}/${player.nick}`);
             this.fullyRemovePlayer(player, "grace_expired");
         }, RECONNECT_GRACE_MS);
-        // Don't keep the event loop alive solely on this timer — the smoke
+        // Don't keep the event loop alive solely on this timer - the smoke
         // tests close their server cleanly and rely on natural process exit;
         // a 250s pending grace would hang them.
         timer.unref();
@@ -195,7 +195,7 @@ export class GolfServer {
      *
      * Both directions of the seq counter reset to 0 on the new connection
      * (the new Connection's defaults), which the client matches on `c rcok`.
-     * We don't try to replay/dedup packets sent during the gap — anything the
+     * We don't try to replay/dedup packets sent during the gap - anything the
      * server pushed during the dead window is lost. This is the same trade
      * the original Java applet effectively made (its retain-seq protocol
      * tripped its own gap-detection on any peer broadcast during the blip).
@@ -223,7 +223,7 @@ export class GolfServer {
         // needed here. Client mirrors this on receipt of `c rcok`.
         console.log(`[reconnect] reattached ${id}/${player.nick}`);
         // The reattached socket carries its own cid (the client re-sent it on
-        // the new connection's `cid` packet — or, for a same-tab transparent
+        // the new connection's `cid` packet - or, for a same-tab transparent
         // reconnect that happens before login, the new conn has a fresh cid
         // that will be filled later). Either way, log against `conn.clientId`
         // (the new socket) and `conn.connId` (the new socket id) so the trail

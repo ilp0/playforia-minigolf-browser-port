@@ -47,14 +47,14 @@ export const NO_SETTINGS_FLAGS: SettingsFlags = [false, false, false, false];
 
 /**
  * Decode the first 4 chars of an S-line body into the boolean flag array.
- * Real-world tracks store six chars — four flags plus a 2-digit min/max
- * player range — but the Java client only consults the first four. We do the
+ * Real-world tracks store six chars - four flags plus a 2-digit min/max
+ * player range - but the Java client only consults the first four. We do the
  * same and tolerate strings shorter than 4 by leaving the missing flags false
  * (matching `new boolean[4]` in `VersionedTrackFileParser.constructTrack`).
  *
  * Note: the upstream Java parser has a long-standing typo (`length() != 6`)
  * that drops the flags entirely whenever the string is exactly 6 chars long
- * — i.e. for nearly every real track. The dev-comment "should throw error"
+ * - i.e. for nearly every real track. The dev-comment "should throw error"
  * in the `else` branch shows the original intent was to parse the first 4
  * chars regardless of total length, which is what we do here.
  */
@@ -71,8 +71,8 @@ export function parseSettingsFlags(settings: string | null | undefined): Setting
 /**
  * Mirror of Java `Tile.getSpecialsettingCode(boolean[])`. Substitutes a raw
  * 32-bit tile code based on visibility flags so the substituted code unpacks
- * into the "hidden" / "colourless" form. Pure function — no dependencies on
- * canvas / sprites — so the renderer just calls this on each tile before
+ * into the "hidden" / "colourless" form. Pure function - no dependencies on
+ * canvas / sprites - so the renderer just calls this on each tile before
  * unpacking.
  *
  * Shape values here are the RAW byte (Java's `tile.shape` is `raw + 24`):
@@ -89,7 +89,7 @@ export function parseSettingsFlags(settings: string | null | undefined): Setting
  * plain dirt, not plain grass).
  *
  * IMPORTANT: only the visual layer should call this. Java `Map.collisionMap()`
- * does NOT consult specialSettings — the collision/physics layer keeps the
+ * does NOT consult specialSettings - the collision/physics layer keeps the
  * unmodified tile semantics so a hidden mine still detonates, a hidden magnet
  * still pulls, etc. That's the whole point of the flags as a puzzle knob.
  */
@@ -98,11 +98,11 @@ export function applySettingsToTileCode(code: number, flags: SettingsFlags): num
     if (special !== 2) return code;
     const shape = (code >>> 16) & 0xff;
     const bg = (code >>> 8) & 0xff;
-    // [0] mines invisible — Java shape 28/30 (raw 4/6).
+    // [0] mines invisible - Java shape 28/30 (raw 4/6).
     if (!flags[0] && (shape === 4 || shape === 6)) return 16777216 + bg * 256;
-    // [1] magnets invisible — Java shape 44/45 (raw 20/21).
+    // [1] magnets invisible - Java shape 44/45 (raw 20/21).
     if (!flags[1] && (shape === 20 || shape === 21)) return 16777216 + bg * 256;
-    // [2] teleports colourless — colour-keyed starts/exits collapse to blue.
+    // [2] teleports colourless - colour-keyed starts/exits collapse to blue.
     if (!flags[2]) {
         if (shape === 10 || shape === 12 || shape === 14) return 34078720 + bg * 256;
         if (shape === 11 || shape === 13 || shape === 15) return 34144256 + bg * 256;
@@ -114,12 +114,12 @@ export function applySettingsToTileCode(code: number, flags: SettingsFlags): num
  * Parse a versioned (.track) file. Tolerates missing optional lines.
  *
  * Format (per VersionedTrackFileParser javadoc):
- *   V <version>            — only V >= 2 is supported
+ *   V <version>            - only V >= 2 is supported
  *   A <author>
  *   N <name>
- *   T <encoded_map>        — raw, undecoded
- *   C <category_csv>       — comma-separated ints
- *   S <settings>           — "ttff" etc
+ *   T <encoded_map>        - raw, undecoded
+ *   C <category_csv>       - comma-separated ints
+ *   S <settings>           - "ttff" etc
  *   I <plays>,<strokes>,<bestPar>,<numBestPar>
  *   R <r0,r1,...,r10>
  *   B <player>,<epoch_millis>
@@ -144,7 +144,7 @@ export function parseTrack(text: string): Track {
     for (const rawLine of lines) {
         if (rawLine.length < 2) continue;
         const tag = rawLine.charAt(0);
-        // GenericTrackParser uses line.substring(2) — i.e. expects "<tag> <body>".
+        // GenericTrackParser uses line.substring(2) - i.e. expects "<tag> <body>".
         if (rawLine.charAt(1) !== " ") continue;
         const body = rawLine.substring(2);
 

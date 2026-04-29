@@ -82,7 +82,7 @@ function attach(ws: WebSocket): FrameQueue {
     // 'close' fires for normal close too; the queue is reusable across socket
     // swaps via fresh attach() calls.
     ws.on("close", () => queue.fail(new Error("ws closed")));
-    ws.on("error", () => { /* swallow — `close` follows */ });
+    ws.on("error", () => { /* swallow - `close` follows */ });
     return queue;
 }
 
@@ -167,7 +167,7 @@ async function run(): Promise<void> {
         // ---------------------------------------------------------------
         console.log("\nPhase 2: drop the socket abruptly (no close handshake)");
         // `terminate()` slams the underlying TCP without sending a CLOSE frame
-        // — the closest we can simulate to a network blip from the server's
+        // - the closest we can simulate to a network blip from the server's
         // POV.
         c1.ws.terminate();
 
@@ -216,7 +216,7 @@ async function run(): Promise<void> {
         await awaitMatch(c4.queue, (s) => s.startsWith("c crt 250"), "crt");
         await awaitMatch(c4.queue, (s) => s === "c ctr", "ctr");
         // c2.ws.close() above was a *clean* close (1000), which our server
-        // treats the same as any other disconnect — i.e. it also starts a
+        // treats the same as any other disconnect - i.e. it also starts a
         // grace window. So this id should still be reconnectable. Verify
         // that rather than rcf, since it matches the actual code path.
         c4.ws.send(`c old ${playerId}`);

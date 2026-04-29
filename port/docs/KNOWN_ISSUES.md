@@ -15,7 +15,7 @@ future maintainer (or fresh-context Claude) can pick up where we left off.
 - Added proactive client-side `c ping` every 15s so even a heavily throttled
   background tab keeps the connection warm.
 - Added always-on logging of close reasons in `Connection.close` with the
-  player nick — every disconnect now prints `[connection] closing
+  player nick - every disconnect now prints `[connection] closing
   {id}/{nick}: {reason}` to the server stdout.
 
 **Next time it happens:** Look at the server log for the close reason.
@@ -38,14 +38,14 @@ Likely candidates:
 Things we deferred for MVP that the original Java game has:
 
 - **Player-player ball collision.** Java has it gated on `collision: 1`; we
-  ignore the flag. Adding it has determinism implications — any per-iteration
+  ignore the flag. Adding it has determinism implications - any per-iteration
   call ordering must match between clients. The collision math is in
   `GameCanvas.handlePlayerCollisions`.
 - **Sound playback.** All 8 .wav files are bundled in
   `port/web/public/sound/shared/` but the client never plays them. Need
   Web Audio integration: `gamemove` on stroke, `winner`/`loser` on game end,
   `notify` on chat, etc.
-- **Localisation extension.** Core wiring exists (`web/src/i18n.ts` —
+- **Localisation extension.** Core wiring exists (`web/src/i18n.ts` -
   Java `TextManager` analog) and en/fi/sv `AGolf.xml` are loaded via
   `fetch` from `/l10n/<lang>/AGolf.xml`. Visible strings in the login,
   lobby-select, single/multi lobby, in-game and replay panels resolve
@@ -89,25 +89,25 @@ Things we deferred for MVP that the original Java game has:
 A few non-obvious pitfalls when modifying things:
 
 - **`player.lobby` is sticky.** `Lobby.removePlayer` does NOT null
-  `player.lobby` — needed so `Game.handlePacket("back")` can route the
+  `player.lobby` - needed so `Game.handlePacket("back")` can route the
   player back to the lobby they came from. If you re-introduce the null,
   `back` from a multi-game silently drops to nothing.
 - **Order of registered handlers matters.** The chat handler must come
   before the generic `^game\t.+$` handler in `packet-handlers.ts`. Both
   match `game say`; the first hit wins.
-- **`GolfServer.getNextGameId` starts at 1.** Old smoke tests assumed 0 —
+- **`GolfServer.getNextGameId` starts at 1.** Old smoke tests assumed 0 -
   watch out.
 - **`networkSerialize` has a port-specific addition.** It now includes a
   `C <categories>` line that Java's `FileSystemTrackStats.networkSerialize`
   doesn't emit, plus an `S <settings>` line that the Java server also
   omitted (the Java client never honored these flags because of a parser
-  typo on the receiving side — see `parseSettingsFlags` in
+  typo on the receiving side - see `parseSettingsFlags` in
   `shared/src/track.ts`). Clients use C for the in-game tag chips and S
   for tile-visibility / illusion-shadow rendering. If you ever cross-test
   against a real Java client, expect it to ignore both lines (it scans
   for known prefixes only).
 - **The shooter waits for the server broadcast.** Don't optimize the
-  click→impulse path by applying locally — it would desync everyone.
+  click→impulse path by applying locally - it would desync everyone.
 - **HMR delivers physics changes instantly.** The Vite dev server hot-reloads
   edits to anything in `web/src/`. Server changes need a restart of `npm run
   dev:server`.
@@ -119,7 +119,7 @@ A few non-obvious pitfalls when modifying things:
   same shared seed, so block positions converge without any new packet. The
   `canMovableBlockMove` obstruction check uses an `otherPlayers` snapshot
   taken at beginstroke (in `panels/game.ts`) and skips any peer who is
-  currently mid-stroke — that keeps the check deterministic across clients
+  currently mid-stroke - that keeps the check deterministic across clients
   even when multiple balls are in flight.
 - **Late joiners see the original block layout, not the current one.** Same
   class as the daily-mode resting-ghost issue: a player who joins a multi
@@ -140,15 +140,15 @@ A few non-obvious pitfalls when modifying things:
   was also dropped (server is async-mode now). Files:
   `port/server/src/test-fullflow.ts`, `port/server/src/test-handshake.ts`.
 - **3D shading on tile rendering.** The original `GameBackgroundCanvas`
-  edge-light pass — corner highlight, bevel edges, 7-px drop shadow on
-  solids, ±16 on teleport markers, ±5 grain — is now applied once at track
+  edge-light pass - corner highlight, bevel edges, 7-px drop shadow on
+  solids, ±16 on teleport markers, ±5 grain - is now applied once at track
   build in `TrackRenderer`, with a partial rebuild on movable-block tile
   mutations.
 - **Movable / sunkable blocks (27, 46) sliding behaviour.** Block now
   slides on impact and sinks into adjacent water/acid; see the caveats
   section above for the determinism shape.
 - **Same maps appeared too often.** Added a 50-entry recently-served ringbuffer
-  to `TrackManager` — `getRandomTracks` now prefers tracks not in the ring and
+  to `TrackManager` - `getRandomTracks` now prefers tracks not in the ring and
   only falls through to recents when the filtered pool is too small.
 - **Inconsistent chat formatting between lobby and game.** Lobby chat used
   `<you>` for self while game used `<{nick}>`. Lobby-multi now captures the
@@ -165,7 +165,7 @@ A few non-obvious pitfalls when modifying things:
   track advance becomes the recorded final). `renderScoreboard` now shows the
   per-hole tally for past holes and derives the running total from the same
   array. The `strokesTotal` field was removed (was double-counting risk).
-- Track-type form values were 0–5 instead of 1–6 (sent ALL when "Basic" was
+- Track-type form values were 0-5 instead of 1-6 (sent ALL when "Basic" was
   picked). Fixed in `lobby.ts` / `lobby-multi.ts`.
 - Bouncy blocks (18) returned a flat 0.84; now use the dynamic
   `bounciness * 6.5 / speed` formula matching Java.
