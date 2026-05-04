@@ -263,6 +263,11 @@ export class ReplayPanel implements Panel {
       // Single-ball replay - no peers to obstruct movable blocks. Pad to
       // length 1 since the obstruction loop is keyed by index.
       otherPlayers: [null],
+      // No krokkaus in single-ball replay - daily share-link replays are
+      // always one player's stroke trace, never multiplayer collision.
+      collisionMode: 0,
+      peers: [this.ball],
+      myIdx: 0,
     };
     applyStrokeImpulse(this.ball, this.ctx, m.x, m.y, m.mode);
     this.simulating = true;

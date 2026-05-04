@@ -292,9 +292,14 @@ export class GolfGame extends Game {
                 return true;
             }
             case "endstroke": {
-                // Wire form: game\tendstroke\t<playerId>\t<playStatus>
+                // Wire form: game\tendstroke\t<playerId>\t<playStatus>\t<src?>
+                //   src='s' (default) → real stroke end, server bumps counter.
+                //   src='k'            → krokkaus pushed this player into a
+                //                        hole; mark them done but do NOT bump
+                //                        their stroke counter.
                 const newPlayStatus = fields[3] ?? this.playStatus;
-                this.endStroke(player, newPlayStatus);
+                const src = fields[4] ?? "s";
+                this.endStroke(player, newPlayStatus, src === "k" ? "k" : "s");
                 return true;
             }
             case "voteskip":
@@ -355,16 +360,24 @@ export class GolfGame extends Game {
      * broadcast a fresh per-player update so every client's scoreboard agrees.
      * Once all live players are either holed or skipped, advance the track.
      *
-     *   wire: client → server  : game endstroke <playerId> <playStatus>
+     *   wire: client → server  : game endstroke <playerId> <playStatus> <src?>
      *           (we trust only their OWN char of the playStatus; shooter sees the
      *            board through their own eyes but we authoritatively own the rest)
      *         server → all     : game endstroke <playerId> <strokesThisTrack> <inHole>
+     *
+     *   src = "s" (default, real stroke) → bump stroke counter.
+     *   src = "k" (krokkaus push)        → don't bump; the player was knocked
+     *                                      into a hole by another player's
+     *                                      stroke and didn't shoot themselves.
      */
-    protected endStroke(player: Player, newPlayStatus: string): void {
+    protected endStroke(player: Player, newPlayStatus: string, src: "s" | "k" = "s"): void {
         const id = this.getPlayerId(player);
         const myStatus = newPlayStatus.charAt(id);
-        // Bump stroke count for this player.
-        this.playerStrokesThisTrack[id] = (this.playerStrokesThisTrack[id] ?? 0) + 1;
+        // Bump stroke count for this player - unless this is a krokkaus
+        // outcome, in which case the player didn't take a stroke.
+        if (src === "s") {
+            this.playerStrokesThisTrack[id] = (this.playerStrokesThisTrack[id] ?? 0) + 1;
+        }
 
         // Update authoritative playStatus with this player's char (only).
         const psArr = this.playStatus.split("");

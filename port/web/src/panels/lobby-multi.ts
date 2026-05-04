@@ -453,7 +453,11 @@ export class LobbyMultiPanel implements Panel {
       o.textContent = label;
       collisionSel.appendChild(o);
     }
-    collisionSel.disabled = true;
+    // Default to "No". Java's LobbyPanel.addChoicerCollision defaulted to
+    // "Yes" via `c.select(1)`, but we deliberately diverge: krokkaus changes
+    // a stranger's hole significantly and most casual rooms don't expect it,
+    // so opt-in feels safer for the port. Host can toggle it on per-room.
+    collisionSel.value = "0";
     fillCell(collisionSel);
     grid.appendChild(this.label(t("LobbyReal_Collision", "Ball collisions:")));
     grid.appendChild(collisionSel);

@@ -45,6 +45,22 @@ export interface BallState {
   spinningStuckCounter: number;
   stopped: boolean;
   inHole: boolean;
+  /**
+   * Did this ball start moving because the player took a stroke (true), or
+   * because another player's krokkaus push gave it velocity (false)?
+   *
+   * Used by the multiplayer panel's tick loop when this ball comes to rest:
+   *   - `true` → our own stroke ended → send `game endstroke … s` so the
+   *     server bumps our stroke counter.
+   *   - `false` → we were just bumped → if we ended in a hole, send
+   *     `game endstroke … k` so the server marks us done WITHOUT counting
+   *     the push as a stroke; if we stopped on solid ground, no packet is
+   *     needed (the server doesn't track ball positions).
+   *
+   * Set by {@link applyStrokeImpulse}; cleared the moment the resulting
+   * stroke ends.
+   */
+  causedByShot: boolean;
 }
 
 export interface PhysicsContext {
@@ -68,6 +84,29 @@ export interface PhysicsContext {
    * clients during async play.
    */
   otherPlayers: Array<{ x: number; y: number } | null>;
+  /**
+   * Krokkaus / ball-vs-ball collisions. Java's `state.collisionMode` from the
+   * lobby's "Krokkaus" setting. 0 = off (balls pass through each other),
+   * 1 = on (balls bounce off each other and exchange velocity in the normal
+   * direction with a 0.75 damping factor).
+   */
+  collisionMode: number;
+  /**
+   * Live `BallState` references for every player slot, indexed by slot id.
+   * Used per-substep for the krokkaus collision check (when `collisionMode`
+   * is 1). `null` for vacant slots or players already done with this hole
+   * (holed / forfeited / parted) - those balls don't participate in
+   * collisions, mirroring Java's `simulatePlayer[k] && !onHoleSync[k]` gate.
+   *
+   * The ARRAY is shared by every slot's ctx so all balls see the same live
+   * peer set. When `step()` mutates `peers[k].vx/vy` during a collision,
+   * the change is visible to peer k's own ctx.peers[k] on the next physics
+   * tick (it's the same `BallState` object).
+   */
+  peers: Array<BallState | null>;
+  /** Slot index of THIS ball within `peers`. The collision loop skips this
+   *  index so a ball never tries to collide with itself. */
+  myIdx: number;
 }
 
 export function newBall(x: number, y: number): BallState {
@@ -92,6 +131,7 @@ export function newBall(x: number, y: number): BallState {
     spinningStuckCounter: 0,
     stopped: false,
     inHole: false,
+    causedByShot: false,
   };
 }
 
@@ -784,6 +824,45 @@ function resetToStart(ball: BallState, ctx: PhysicsContext): void {
   ball.shoreY = ctx.startY;
 }
 
+/**
+ * Krokkaus collision response between two balls - port of
+ * GameCanvas.handlePlayerCollisions (lines 1118-1141).
+ *
+ * Splits each ball's velocity into normal (along the line connecting their
+ * centres) and tangential components, then SWAPS the normal components
+ * (perfectly elastic 1D collision) while keeping the tangentials. Returns
+ * `true` if the collision was processed; the caller scales BOTH balls'
+ * resulting velocities by 0.75 to match Java's damping in GameCanvas.run.
+ *
+ * Touching but not approaching (`a` and `b` separating) is a no-op so
+ * already-resolved overlap can't double-count. Diameter check `<= 13.0` is
+ * Java's exact constant (ball radius 6.5 px each).
+ *
+ * Side effects: ALL state mutation lands on the velocity fields - this
+ * function never re-arms the `stopped` flag or stuck counters. The caller
+ * (panels/game.ts tick loop) is responsible for noticing a previously-
+ * stopped ball gained velocity and clearing its stop state for the next
+ * physics tick.
+ */
+function handlePlayerCollisions(a: BallState, b: BallState): boolean {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const distance = Math.sqrt(dx * dx + dy * dy);
+  if (distance === 0 || distance > 13.0) return false;
+  const fx = dx / distance;
+  const fy = dy / distance;
+  const aSpeed = a.vx * fx + a.vy * fy;
+  const bSpeed = b.vx * fx + b.vy * fy;
+  if (aSpeed - bSpeed <= 0) return false;
+  const aPerp = -a.vx * fy + a.vy * fx;
+  const bPerp = -b.vx * fy + b.vy * fx;
+  a.vx = bSpeed * fx - aPerp * fy;
+  a.vy = bSpeed * fy + aPerp * fx;
+  b.vx = aSpeed * fx - bPerp * fy;
+  b.vy = aSpeed * fy + bPerp * fx;
+  return true;
+}
+
 export interface StepResult {
   stopped: boolean;
   inHole: boolean;
@@ -812,6 +891,27 @@ export function step(ball: BallState, ctx: PhysicsContext): StepResult {
       if (ball.x >= 727.9) ball.x = 727.9;
       if (ball.y < 6.6) ball.y = 6.6;
       if (ball.y >= 367.9) ball.y = 367.9;
+
+      // Krokkaus / ball-vs-ball collision (Java GameCanvas.run line 249-267,
+      // HackedShot.run line 198-213). Per-substep check against every other
+      // peer that's still in this hole and not currently on a hole/liquid.
+      // On a successful normal-direction collision both balls' velocities
+      // are scaled by 0.75 (the same damping Java applies in the caller).
+      if (ctx.collisionMode === 1 && !ball.onHole && !ball.onLiquidOrSwamp) {
+        const peers = ctx.peers;
+        for (let pi = 0; pi < peers.length; pi++) {
+          if (pi === ctx.myIdx) continue;
+          const other = peers[pi];
+          if (!other) continue;
+          if (other.inHole || other.onHole || other.onLiquidOrSwamp) continue;
+          if (handlePlayerCollisions(ball, other)) {
+            ball.vx *= 0.75;
+            ball.vy *= 0.75;
+            other.vx *= 0.75;
+            other.vy *= 0.75;
+          }
+        }
+      }
 
       const ix = (ball.x + 0.5) | 0;
       const iy = (ball.y + 0.5) | 0;
