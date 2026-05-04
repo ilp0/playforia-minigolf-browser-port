@@ -1305,6 +1305,30 @@
 	<str key="Port_Lobby_JoinInProgress">
 		<![CDATA[Hoppa in]]>
 	</str>
+	<str key="Port_Lobby_TurnMode">
+		<![CDATA[Spelläge:]]>
+	</str>
+	<str key="Port_Lobby_TurnsAsync">
+		<![CDATA[Realtid]]>
+	</str>
+	<str key="Port_Lobby_TurnsBased">
+		<![CDATA[Turordning]]>
+	</str>
+	<str key="Port_Lobby_TurnsBadge">
+		<![CDATA[(Turer)]]>
+	</str>
+	<str key="Port_Game_TurnWaiting">
+		<![CDATA[Väntar på nästa tur…]]>
+	</str>
+	<str key="Port_Game_TurnYours">
+		<![CDATA[Din tur — klicka för att slå.]]>
+	</str>
+	<str key="Port_Game_TurnOther">
+		<![CDATA[%1:s tur — vänta tills hen slår.]]>
+	</str>
+	<str key="Port_Game_TurnTitleAlert">
+		<![CDATA[(Din tur!) ]]>
+	</str>
 	<str key="UserList_Ignore">
 		<![CDATA[Ignorera vald användare]]>
 	</str>

@@ -326,11 +326,14 @@ register({
             const collision = parseInt(rest[8] ?? "1", 10) || 1;
             const scoreSystem = parseInt(rest[9] ?? "0", 10) || 0;
             const weightEnd = parseInt(rest[10] ?? "0", 10) || 0;
+            // Port extension: 12th cmpt arg is the turn-based flag. Older
+            // clients omit it - default to async (false) for back-compat.
+            const turnBased = (rest[11] ?? "0") === "1";
 
             console.log(
                 `[lobby] cmpt by ${player.nick}: name="${name}" pwd=${password === "-" ? "no" : "yes"}` +
                     ` players=${playerCount} tracks=${numberOfTracks} trackType=${trackType}` +
-                    ` maxStrokes=${maxStrokes} water=${water} collision=${collision}`,
+                    ` maxStrokes=${maxStrokes} water=${water} collision=${collision} turnBased=${turnBased}`,
             );
             new MultiGame(
                 player,
@@ -348,6 +351,7 @@ register({
                 weightEnd,
                 playerCount,
                 server.trackManager,
+                turnBased,
             );
             return;
         }

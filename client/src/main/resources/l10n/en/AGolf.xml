@@ -1305,6 +1305,30 @@
 	<str key="Port_Lobby_JoinInProgress">
 		<![CDATA[Drop in]]>
 	</str>
+	<str key="Port_Lobby_TurnMode">
+		<![CDATA[Play mode:]]>
+	</str>
+	<str key="Port_Lobby_TurnsAsync">
+		<![CDATA[Real-time (async)]]>
+	</str>
+	<str key="Port_Lobby_TurnsBased">
+		<![CDATA[Turn-based]]>
+	</str>
+	<str key="Port_Lobby_TurnsBadge">
+		<![CDATA[(Turns)]]>
+	</str>
+	<str key="Port_Game_TurnWaiting">
+		<![CDATA[Waiting for next turn…]]>
+	</str>
+	<str key="Port_Game_TurnYours">
+		<![CDATA[Your turn — click to shoot.]]>
+	</str>
+	<str key="Port_Game_TurnOther">
+		<![CDATA[%1's turn — wait for them to shoot.]]>
+	</str>
+	<str key="Port_Game_TurnTitleAlert">
+		<![CDATA[(Your turn!) ]]>
+	</str>
 	<str key="UserList_Ignore">
 		<![CDATA[Ignore selected user]]>
 	</str>

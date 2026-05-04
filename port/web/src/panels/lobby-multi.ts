@@ -3,7 +3,7 @@ import type { App } from "../app.ts";
 import type { Panel } from "../panel.ts";
 import { t } from "../i18n.ts";
 
-/** A row from the lobby's game list. Mirrors the 15-field gameString. */
+/** A row from the lobby's game list. Mirrors the 16-field gameString. */
 interface GameInfo {
   id: number;
   name: string;
@@ -27,6 +27,12 @@ interface GameInfo {
   scoring: number;
   scoringEnd: number;
   currentPlayers: number;
+  /**
+   * Port extension - 16th gameString field. True for turn-based rooms, false
+   * (or missing) for the default real-time async play. Drives the "(Turns)"
+   * badge in the lobby's game list.
+   */
+  turnBased: boolean;
 }
 
 interface PlayerInfo {
@@ -67,7 +73,8 @@ function parsePlayerString(s: string): PlayerInfo {
   };
 }
 
-/** Build a GameInfo from 15 consecutive fields. */
+/** Build a GameInfo from 16 consecutive fields. */
+const GAME_FIELD_STRIDE = 16;
 function parseGameFields(fields: string[], offset: number): GameInfo {
   const f = (i: number): string => fields[offset + i] ?? "";
   return {
@@ -89,6 +96,10 @@ function parseGameFields(fields: string[], offset: number): GameInfo {
     scoring: parseInt(f(12), 10) || 0,
     scoringEnd: parseInt(f(13), 10) || 0,
     currentPlayers: parseInt(f(14), 10) || 0,
+    // Port extension. Missing (older server) or "0" → false. Anything truthy
+    // ("1") → true. Older clients still parse the previous 15 fields and
+    // simply ignore this column.
+    turnBased: f(15) === "1",
   };
 }
 
@@ -335,12 +346,12 @@ export class LobbyMultiPanel implements Panel {
   private handleGameList(f: string[]): void {
     const op = f[2];
     if (op === "full") {
-      // lobby gamelist full <count> <g0_f0> ... <gN_f14>
+      // lobby gamelist full <count> <g0_f0> ... <gN_f15>
       const count = parseInt(f[3] ?? "0", 10) || 0;
       this.games.clear();
       for (let i = 0; i < count; i++) {
-        const offset = 4 + i * 15;
-        if (offset + 14 >= f.length) break;
+        const offset = 4 + i * GAME_FIELD_STRIDE;
+        if (offset + GAME_FIELD_STRIDE - 1 >= f.length) break;
         const g = parseGameFields(f, offset);
         this.games.set(g.id, g);
       }
@@ -472,6 +483,23 @@ export class LobbyMultiPanel implements Panel {
     grid.appendChild(this.label(t("LobbyReal_WaterEvent", "When ball goes to water:")));
     grid.appendChild(waterSel);
 
+    // Port extension - lobby option to revert to the original Java client's
+    // strict turn order. Default is async (real-time) play; the create form
+    // exposes the toggle so anyone hosting a "classic" room can opt in.
+    const turnBasedSel = document.createElement("select");
+    for (const [v, label] of [
+      ["0", t("Port_Lobby_TurnsAsync", "Real-time (async)")],
+      ["1", t("Port_Lobby_TurnsBased", "Turn-based")],
+    ] as const) {
+      const o = document.createElement("option");
+      o.value = v;
+      o.textContent = label;
+      turnBasedSel.appendChild(o);
+    }
+    fillCell(turnBasedSel);
+    grid.appendChild(this.label(t("Port_Lobby_TurnMode", "Play mode:")));
+    grid.appendChild(turnBasedSel);
+
     wrap.appendChild(grid);
 
     const createBtn = document.createElement("button");
@@ -488,8 +516,10 @@ export class LobbyMultiPanel implements Panel {
       const maxStrokes = parseInt(maxStrokesSel.value, 10);
       const collision = parseInt(collisionSel.value, 10);
       const water = parseInt(waterSel.value, 10);
+      const turnBased = turnBasedSel.value === "1" ? 1 : 0;
       // lobby cmpt <name> <password> <perms=0> <numPlayers> <numTracks>
-      // <trackType> <maxStrokes> <strokeTimeout> <water> <collision> <scoring> <scoringEnd>
+      // <trackType> <maxStrokes> <strokeTimeout> <water> <collision>
+      // <scoring> <scoringEnd> <turnBased>     (port-extension trailing arg)
       this.app.connection.sendData(
         "lobby",
         "cmpt",
@@ -505,6 +535,7 @@ export class LobbyMultiPanel implements Panel {
         collision,
         0,
         0,
+        turnBased,
       );
     });
     wrap.appendChild(createBtn);
@@ -706,6 +737,12 @@ export class LobbyMultiPanel implements Panel {
       const badge = document.createElement("span");
       badge.textContent = t("Port_Lobby_InProgress", "(In progress)");
       badge.style.color = "#806040";
+      metaLine.appendChild(badge);
+    }
+    if (g.turnBased) {
+      const badge = document.createElement("span");
+      badge.textContent = t("Port_Lobby_TurnsBadge", "(Turns)");
+      badge.style.color = "#205080";
       metaLine.appendChild(badge);
     }
     block.appendChild(metaLine);

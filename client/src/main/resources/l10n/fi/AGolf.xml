@@ -1305,6 +1305,30 @@
 	<str key="Port_Lobby_JoinInProgress">
 		<![CDATA[Liity peliin]]>
 	</str>
+	<str key="Port_Lobby_TurnMode">
+		<![CDATA[Pelitapa:]]>
+	</str>
+	<str key="Port_Lobby_TurnsAsync">
+		<![CDATA[Reaaliaikainen]]>
+	</str>
+	<str key="Port_Lobby_TurnsBased">
+		<![CDATA[Vuoropohjainen]]>
+	</str>
+	<str key="Port_Lobby_TurnsBadge">
+		<![CDATA[(Vuoroin)]]>
+	</str>
+	<str key="Port_Game_TurnWaiting">
+		<![CDATA[Odotetaan seuraavaa vuoroa…]]>
+	</str>
+	<str key="Port_Game_TurnYours">
+		<![CDATA[Sinun vuorosi — klikkaa lyödäksesi.]]>
+	</str>
+	<str key="Port_Game_TurnOther">
+		<![CDATA[%1:n vuoro — odota että hän lyö.]]>
+	</str>
+	<str key="Port_Game_TurnTitleAlert">
+		<![CDATA[(Vuorosi!) ]]>
+	</str>
 	<str key="UserList_Ignore">
 		<![CDATA[Mykistä valittu käyttäjä]]>
 	</str>

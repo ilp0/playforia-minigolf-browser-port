@@ -163,9 +163,11 @@ async function main(): Promise<void> {
         b.sendData("game", "back");
 
         // C should see a gamelist change shrinking the room to 1/2,
-        // inProgress still '1' (game still in progress).
+        // inProgress still '1' (game still in progress). The trailing field
+        // is the port-extension `turnBased` flag (0 here); currentPlayers=1
+        // is the second-to-last column.
         await c.waitFor(
-            (s) => /^d \d+ lobby\tgamelist\tchange\t\d+\tDropInTest\tf\t0\t2\t1\t.*\t1$/.test(s),
+            (s) => /^d \d+ lobby\tgamelist\tchange\t\d+\tDropInTest\tf\t0\t2\t1\t.*\t1\t0$/.test(s),
             "C sees 1/2 update with inProgress=1",
         );
         console.log("[OK] B left mid-game → gamelist shrinks back to 1/2 (inProgress=1)");

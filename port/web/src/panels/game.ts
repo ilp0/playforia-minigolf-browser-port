@@ -349,6 +349,25 @@ export class GamePanel implements Panel {
   private myPlayerId = 0;
   private waterEvent = 0;
   private myNick = "You";
+  /**
+   * Turn-based room: -1 means "no turn assigned" (async room, or between
+   * tracks). Anything ≥ 0 is the slot id whose turn it currently is. Set
+   * from `gameinfo` (for the room mode) and `startturn` (for who shoots).
+   */
+  private turnBased = false;
+  private currentTurnSlot = -1;
+  /** Last "is it my turn" we evaluated - used to fire the beep/title flash
+   *  on the rising edge while the tab is unfocused. */
+  private lastMyTurn = false;
+  /** Original `document.title` snapshotted before we started flashing it,
+   *  so `restoreTitle()` can put it back exactly. */
+  private originalTitle = "";
+  /** RAF/timeout handle for the title flash interval, or 0 when idle. */
+  private titleFlashTimer: ReturnType<typeof setInterval> | null = null;
+  /** Detach handlers for window focus/visibility events so the title flash
+   *  resolves the moment the user comes back to the tab. */
+  private focusHandler: (() => void) | null = null;
+  private visibilityHandler: (() => void) | null = null;
 
   private keyHandler: ((ev: KeyboardEvent) => void) | null = null;
   private mouseMoveHandler: ((ev: MouseEvent) => void) | null = null;
@@ -658,12 +677,18 @@ export class GamePanel implements Panel {
       if (!me || me.ball.inHole || me.simulating) return;
       // Java parity: BUTTON1 = shoot; any other button cycles shootingMode
       // through 0..3 (normal → reverse → 90° CW → 90° CCW → …). The cycle
-      // is gated on the same "ball at rest" condition as a shot.
+      // is gated on the same "ball at rest" condition as a shot. Right-click
+      // mode-cycle stays available even on a peer's turn so the local user
+      // can pre-aim while waiting for their slot to come up.
       if (ev.button !== 0) {
         ev.preventDefault();
         this.cycleShootingMode();
         return;
       }
+      // Turn-based room: refuse the click outright if it isn't my turn. The
+      // server enforces this too, but stopping here also suppresses the
+      // shot-feedback flash and unnecessary network traffic.
+      if (this.turnBased && !this.canIShootNow()) return;
       const [mx, my] = localCoords(ev);
       const dx = me.ball.x - mx;
       const dy = me.ball.y - my;
@@ -758,6 +783,8 @@ export class GamePanel implements Panel {
       // Mirror the mousedown shoot path. Same gating: ball must be at rest.
       const me = this.players[this.myPlayerId];
       if (!me || me.ball.inHole || me.simulating) return;
+      // Turn-based: only shoot when it's my turn (mirrors clickHandler).
+      if (this.turnBased && !this.canIShootNow()) return;
       const dx = me.ball.x - mx;
       const dy = me.ball.y - my;
       if (Math.sqrt(dx * dx + dy * dy) < TOUCH_SHOT_DEADZONE) return;
@@ -796,6 +823,7 @@ export class GamePanel implements Panel {
       this.setStatus(t("Port_Game_SpriteLoadFailed", "Sprite load failed: %1", String(err)));
     });
 
+    this.setupTurnFocusListeners();
     this.startLoop();
   }
 
@@ -805,6 +833,18 @@ export class GamePanel implements Panel {
     this.closeSettingsMenu();
     this.menuButtonEl = null;
     if (this.keyHandler) window.removeEventListener("keydown", this.keyHandler);
+    // Always restore the title and tear down focus listeners on panel exit:
+    // a tab still showing "(Your turn!) ..." after navigating to the lobby
+    // would be incorrect, and the focus/visibility handlers leak otherwise.
+    this.stopTitleFlash();
+    if (this.focusHandler) {
+      window.removeEventListener("focus", this.focusHandler);
+      this.focusHandler = null;
+    }
+    if (this.visibilityHandler) {
+      document.removeEventListener("visibilitychange", this.visibilityHandler);
+      this.visibilityHandler = null;
+    }
     if (this.canvas) {
       if (this.mouseMoveHandler) this.canvas.removeEventListener("mousemove", this.mouseMoveHandler);
       if (this.clickHandler) this.canvas.removeEventListener("mousedown", this.clickHandler);
@@ -847,6 +887,9 @@ export class GamePanel implements Panel {
     this.practiceButton = null;
     this.gameStartedReceived = false;
     this.practiceMode = false;
+    this.turnBased = false;
+    this.currentTurnSlot = -1;
+    this.lastMyTurn = false;
     this.roomCapacity = 1;
     this.overlay = null;
     this.panelEl = null;
@@ -886,6 +929,10 @@ export class GamePanel implements Panel {
         this.roomCapacity = this.numPlayers;
         this.numTracks = parseInt(f[6] ?? "1", 10) || 1;
         this.waterEvent = parseInt(f[10] ?? "0", 10) || 0;
+        // Port extension - 15th field carries the turn-based flag. Older
+        // servers omit it and the parsed value will be undefined; treat as
+        // async so the legacy real-time gating applies.
+        this.turnBased = (f[15] ?? "f") === "t";
         // Fresh gameinfo arrives on every join - reset the "started" gate so
         // the Practice button reappears for any new room (including a
         // re-join). The trailing `f` flag in the packet always says
@@ -893,10 +940,13 @@ export class GamePanel implements Panel {
         // `start` broadcast.
         this.gameStartedReceived = false;
         this.practiceMode = false;
+        this.currentTurnSlot = -1;
+        this.lastMyTurn = false;
         this.ensurePlayerSlots(this.numPlayers);
         this.scoreboardDirty = true;
         this.applyChatVisibility();
         this.updateSkipButtonVisibility();
+        this.refreshTurnIndicator();
         break;
       case "owninfo":
         this.myPlayerId = parseInt(f[2] ?? "0", 10) || 0;
@@ -1063,6 +1113,13 @@ export class GamePanel implements Panel {
         // flip this back on if the start was for practice; otherwise we're
         // in a real game (full room) and per-hole columns should render.
         this.practiceMode = false;
+        // Clear any stale turn pointer left over from the previous game so
+        // the late-arriving `startturn` for the fresh game is the one that
+        // wins. Stop any title flash that was still alive from the prior
+        // round; the player is back at the panel by definition here.
+        this.currentTurnSlot = -1;
+        this.lastMyTurn = false;
+        this.stopTitleFlash();
         // Tear down any leftover end-of-game overlay before the new round
         // starts; otherwise the play-again button stays on screen even though
         // the new game has begun.
@@ -1100,6 +1157,23 @@ export class GamePanel implements Panel {
           const idx = parseInt(f[2] ?? "1", 10) || 1;
           this.currentTrackIdx = idx;
           this.refreshTrackProgress();
+          this.scoreboardDirty = true;
+        }
+        break;
+      case "startturn":
+        // Turn-based room: server announces whose turn it is now. Async
+        // rooms ignore this verb - the server only emits it for `turnBased`
+        // games (one historical async-mode emission survives in
+        // MultiGame.removePlayer for back-compat with stale clients but is
+        // a no-op for them today). Slot id is f[2].
+        {
+          const slot = parseInt(f[2] ?? "-1", 10);
+          this.currentTurnSlot = Number.isFinite(slot) ? slot : -1;
+          this.refreshTurnIndicator();
+          this.maybeBeepAndFlash();
+          // The scoreboard's "(turn)" badge follows currentTurnSlot - mark
+          // the next frame dirty so the badge moves to the new player even
+          // though no player-state field changed.
           this.scoreboardDirty = true;
         }
         break;
@@ -1278,6 +1352,15 @@ export class GamePanel implements Panel {
       }
       this.updateSkipButtonVisibility();
       this.scoreboardDirty = true;
+      // Refresh the "your turn / N's turn" hint - on a fresh track the server
+      // resets the turn pointer and immediately broadcasts `startturn` for
+      // the new hole, but until that packet arrives we flip the indicator to
+      // "waiting" so the previous track's status doesn't linger.
+      if (this.turnBased) {
+        this.currentTurnSlot = -1;
+        this.lastMyTurn = false;
+        this.refreshTurnIndicator();
+      }
       // Replay any beginstrokes that arrived too early.
       const queued = this.pendingBeginStrokes;
       this.pendingBeginStrokes = [];
@@ -1417,6 +1500,10 @@ export class GamePanel implements Panel {
   private maybeSendCursor(nowMs: number): void {
     if (!this.app.connection.isOpen) return;
     if (!this.settings.sendCursor) return;
+    // Turn-based rooms keep aim previews local: peers don't want to watch
+    // the active player line up their shot, and a non-current-turn player's
+    // aim is meaningless to peers anyway. Practice keeps the async behaviour.
+    if (this.turnBased && !this.practiceMode) return;
     const me = this.players[this.myPlayerId];
     if (!me) return;
     if (me.simulating || me.ball.inHole || me.holedThisTrack || me.forfeitedThisTrack) return;
@@ -1667,6 +1754,14 @@ export class GamePanel implements Panel {
         note.textContent = t("Port_Game_StatusInHole", "in hole");
       } else if (p.forfeitedThisTrack) {
         note.textContent = t("Port_Game_StatusForfeited", "forfeited");
+      } else if (this.turnBased && i === this.currentTurnSlot) {
+        // Turn-based room: surface the current-turn player consistently,
+        // both while they're aiming and while their ball is in motion.
+        // The "shooting" note becomes redundant once we know whose turn it
+        // is, so this branch wins over `p.simulating`. Reuses the existing
+        // Java translation key for the same concept ("Currently playing"
+        // / "Lyöntivuorossa" / "Har turen").
+        note.textContent = t("GamePlayerInfo_PlayerTurn", "Currently playing");
       } else if (p.simulating) {
         note.textContent = t("Port_Game_StatusShooting", "shooting");
       }
@@ -1800,7 +1895,11 @@ export class GamePanel implements Panel {
     // actively dragging - without this gate, mouseX/Y stays at the last
     // touch point (or the initial 0,0) and we'd render a stale/origin aim.
     const aimSuppressedByTouch = this.isTouchPrimary && !this.aimingByTouch;
-    if (me && !me.ball.inHole && !me.simulating && !aimSuppressedByTouch) {
+    // Turn-based: hide our own aim line until it's actually our turn.
+    // Drawing it on a peer's turn would be misleading - you can't actually
+    // shoot, and the line would still update with the cursor as if you could.
+    // `canIShootNow()` already short-circuits to true for async / practice.
+    if (me && !me.ball.inHole && !me.simulating && !aimSuppressedByTouch && this.canIShootNow()) {
       aim = {
         fromX: me.ball.x,
         fromY: me.ball.y,
@@ -1872,10 +1971,14 @@ export class GamePanel implements Panel {
       // and on each beginstroke so we never show a stale aim. Suppressed in
       // daily mode: the ghost rendering treats other players as non-interactive
       // shadows of past plays; live aim lines would clash with that framing.
+      // Also suppressed in turn-based rooms (outside practice) - the active
+      // player's aim is private and watching them line up adds clutter the
+      // original Java client never had.
       if (
         this.settings.showPeerCursors &&
         !isMine &&
         !ghost &&
+        !(this.turnBased && !this.practiceMode) &&
         !p.ball.inHole &&
         !p.simulating &&
         !p.holedThisTrack &&
@@ -2657,6 +2760,104 @@ export class GamePanel implements Panel {
     // layout switch (chat visible on left, stroke/status/forfeit hidden,
     // `.right` becomes a horizontal row). See style.css for the rules.
     if (this.panelEl) this.panelEl.classList.toggle("is-multi", this.numPlayers > 1);
+  }
+
+  // ----- turn-based helpers ---------------------------------------------
+
+  /**
+   * Whether the local player is allowed to begin a stroke right now. Async
+   * rooms always say yes; turn-based rooms only when our slot matches the
+   * server-broadcast `currentTurnSlot`. Practice mode (which the server
+   * never gates) returns true regardless of `turnBased` so the warm-up
+   * keeps its free-play contract.
+   */
+  private canIShootNow(): boolean {
+    if (!this.turnBased) return true;
+    if (this.practiceMode) return true;
+    return this.currentTurnSlot === this.myPlayerId;
+  }
+
+  /**
+   * Update the HUD status string with whose turn it is in turn-based rooms.
+   * Async rooms return early so the existing "Click to shoot" hint stays
+   * visible. Called on every `gameinfo`, `startturn`, and `starttrack`.
+   */
+  private refreshTurnIndicator(): void {
+    if (!this.turnBased) return;
+    if (this.currentTurnSlot < 0) {
+      this.setStatus(t("Port_Game_TurnWaiting", "Waiting for next turn…"));
+      return;
+    }
+    if (this.currentTurnSlot === this.myPlayerId) {
+      this.setStatus(t("Port_Game_TurnYours", "Your turn — click to shoot."));
+    } else {
+      const slot = this.players[this.currentTurnSlot];
+      const nick = slot?.nick || t("Port_Game_PlayerFmt", "Player %1", this.currentTurnSlot + 1);
+      this.setStatus(t("Port_Game_TurnOther", "%1's turn — wait for them to shoot.", nick));
+    }
+  }
+
+  /**
+   * On the rising-edge of "it just became my turn" while the tab is in the
+   * background, beep and start flashing the document title. Both effects are
+   * suppressed once the user focuses the tab again (see `setupTurnFocusListeners`).
+   * No-op for async rooms, peer turns, or repeated `startturn` packets that
+   * confirm but don't change my turn state.
+   */
+  private maybeBeepAndFlash(): void {
+    const myTurn = this.canIShootNow() && this.turnBased && this.currentTurnSlot === this.myPlayerId;
+    const wasMine = this.lastMyTurn;
+    this.lastMyTurn = myTurn;
+    if (!myTurn || wasMine) return;
+    const tabHidden =
+      document.visibilityState === "hidden" || (typeof document.hasFocus === "function" && !document.hasFocus());
+    if (!tabHidden) return;
+    audio.playNotify();
+    this.startTitleFlash();
+  }
+
+  private startTitleFlash(): void {
+    if (this.titleFlashTimer !== null) return;
+    if (typeof document === "undefined") return;
+    this.originalTitle = document.title;
+    const alertText = t("Port_Game_TurnTitleAlert", "(Your turn!) ");
+    let on = true;
+    document.title = alertText + this.originalTitle;
+    this.titleFlashTimer = setInterval(() => {
+      // Stop flashing the moment the user comes back, even if the focus
+      // listener hasn't fired yet (older browsers fire visibilitychange but
+      // not focus on a programmatic tab activation).
+      const stillHidden =
+        document.visibilityState === "hidden" || (typeof document.hasFocus === "function" && !document.hasFocus());
+      if (!stillHidden) {
+        this.stopTitleFlash();
+        return;
+      }
+      on = !on;
+      document.title = on ? alertText + this.originalTitle : this.originalTitle;
+    }, 1000);
+  }
+
+  private stopTitleFlash(): void {
+    if (this.titleFlashTimer !== null) {
+      clearInterval(this.titleFlashTimer);
+      this.titleFlashTimer = null;
+    }
+    if (this.originalTitle && typeof document !== "undefined") {
+      document.title = this.originalTitle;
+      this.originalTitle = "";
+    }
+  }
+
+  /** Register window focus / document visibility listeners that stop the
+   *  title flash the moment the user comes back to the tab. Called once
+   *  from `mount`. */
+  private setupTurnFocusListeners(): void {
+    const restore = (): void => this.stopTitleFlash();
+    window.addEventListener("focus", restore);
+    document.addEventListener("visibilitychange", restore);
+    this.focusHandler = restore;
+    this.visibilityHandler = restore;
   }
 
   private ensurePlayerSlots(n: number): void {

@@ -515,6 +515,10 @@ export class GolfGame extends Game {
      * "in-progress" flag: `1` once the game has started (`!isPublic`),
      * `0` while it is still waiting / practicing. Old clients that ignored
      * the field keep working; new clients use it to badge running rooms.
+     *
+     * MultiGame appends a 16th field (turn-based flag, "1"/"0") - see
+     * `MultiGame.getGameString`. Trailing tabs are tolerated by older
+     * parsers so back-compat holds.
      */
     override getGameString(): string {
         return tabularize(
@@ -863,6 +867,20 @@ export class MultiGame extends GolfGame {
     public practiceActive = false;
     /** The map currently in play during practice. Replaced on every hole-in. */
     private practiceTrack: Track | null = null;
+    /**
+     * Lobby option: when true, only the player named by `currentTurn` may
+     * `beginstroke`. The original Java game was strictly turn-based; the port
+     * defaults to the looser real-time model and lets room creators opt back
+     * in via the lobby form. Practice mode ignores this flag - free play
+     * during the warm-up period is part of the practice contract.
+     */
+    public readonly turnBased: boolean;
+    /**
+     * Slot id of the player whose turn it currently is, or -1 if the room
+     * isn't in turn-bound play (waiting/practice/track-over). Always -1 for
+     * `turnBased=false` rooms.
+     */
+    private currentTurn: number = -1;
     constructor(
         creator: Player,
         gameId: number,
@@ -879,6 +897,7 @@ export class MultiGame extends GolfGame {
         trackScoringEnd: number,
         numPlayers: number,
         trackManager: TrackManager,
+        turnBased: boolean = false,
     ) {
         const passworded = !(password === "-" || password === "");
         super(
@@ -899,6 +918,7 @@ export class MultiGame extends GolfGame {
             numPlayers,
             trackManager,
         );
+        this.turnBased = turnBased;
 
         logEvent("game_create", {
             game_id: gameId,
@@ -910,6 +930,7 @@ export class MultiGame extends GolfGame {
             collision,
             passworded,
             creator_id: creator.id,
+            turn_based: turnBased,
         });
 
         // Add creator first.
@@ -1016,6 +1037,92 @@ export class MultiGame extends GolfGame {
                 );
             }
         }
+
+        // Turn-based late-join: tell the newcomer whose turn it currently is.
+        // The joiner's own slot was just stamped 'f' above; if no turn was
+        // active (currentTurn === -1, e.g. everyone present had finished and
+        // we're between hands), seed it with the joiner so the room doesn't
+        // stall waiting for a turn that was never assigned.
+        if (this.turnBased) {
+            if (this.currentTurn < 0) {
+                this.currentTurn = slotId;
+                this.broadcast(tabularize("game", "startturn", slotId));
+            } else {
+                player.connection.sendDataRaw(
+                    tabularize("game", "startturn", this.currentTurn),
+                );
+            }
+        }
+    }
+
+    // ----- turn-based helpers -----------------------------------------------
+
+    /**
+     * Pick the next-eligible slot for turn-based play. Walks `playersNumber`
+     * in ascending order so turn order matches the join order; wraps around
+     * starting just past `from`. Returns -1 if every present player has
+     * finished or skipped this track.
+     */
+    private nextEligibleTurn(from: number): number {
+        if (this.players.length === 0) return -1;
+        const ids = [...this.playersNumber].sort((a, b) => a - b);
+        // Find the lowest id strictly greater than `from`, wrapping if none.
+        let startIdx = 0;
+        for (let i = 0; i < ids.length; i++) {
+            if (ids[i] > from) { startIdx = i; break; }
+            // If `from` is >= every id, startIdx stays 0 (wrap).
+            if (i === ids.length - 1) startIdx = 0;
+        }
+        for (let n = 0; n < ids.length; n++) {
+            const id = ids[(startIdx + n) % ids.length];
+            if (this.playStatus.charAt(id) === "f") return id;
+        }
+        return -1;
+    }
+
+    /**
+     * Re-evaluate whose turn it is and broadcast `game startturn <slot>` if
+     * it changed. Called after every event that can shrink the eligible set:
+     * an endstroke that holed/forfeited the shooter, an explicit forfeit,
+     * a leave, or the start of a new track. No-op for async rooms or when
+     * no eligible player remains (the track-advance path takes over then).
+     */
+    private advanceTurn(after: number): void {
+        if (!this.turnBased) return;
+        const next = this.nextEligibleTurn(after);
+        if (next < 0) {
+            this.currentTurn = -1;
+            return;
+        }
+        if (next !== this.currentTurn) {
+            this.currentTurn = next;
+            this.broadcast(tabularize("game", "startturn", next));
+        }
+    }
+
+    /**
+     * Pick the first turn for a fresh track / fresh game and broadcast it.
+     * Called from `startGame` and `nextTrack` (for turn-based real-game play).
+     * Must be invoked AFTER `playStatus` is reset to all-'f'.
+     */
+    private assignFirstTurn(): void {
+        if (!this.turnBased) return;
+        if (this.players.length === 0) {
+            this.currentTurn = -1;
+            return;
+        }
+        const ids = [...this.playersNumber].sort((a, b) => a - b);
+        // First eligible slot - on a fresh track every present slot is 'f',
+        // so this is just `ids[0]`. Defensive iteration anyway in case a
+        // future code path lands here with a partially-filled playStatus.
+        for (const id of ids) {
+            if (this.playStatus.charAt(id) === "f") {
+                this.currentTurn = id;
+                this.broadcast(tabularize("game", "startturn", id));
+                return;
+            }
+        }
+        this.currentTurn = -1;
     }
 
     /**
@@ -1106,11 +1213,103 @@ export class MultiGame extends GolfGame {
         }
     }
 
+    /**
+     * Append the turn-based flag (16th field) to the game-list row so lobby
+     * clients can render the badge and the joiner's UI knows which gating to
+     * apply. Older clients stop parsing at field 14 and ignore the trailing
+     * tab+digit, so wire compatibility holds.
+     */
+    override getGameString(): string {
+        return tabularize(
+            this.gameId,
+            this.name,
+            this.passworded,
+            this.perms,
+            this.numPlayers,
+            this.isPublic ? 0 : 1,
+            this.tracks.length,
+            this.tracksType,
+            this.maxStrokes,
+            this.strokeTimeout,
+            this.waterEvent,
+            this.collision,
+            this.trackScoring,
+            this.trackScoringEnd,
+            this.players.length,
+            this.turnBased ? 1 : 0,
+        );
+    }
+
+    /**
+     * Append the turn-based flag (15th field, "t"/"f") so the freshly-joined
+     * client knows whether to apply turn gating before any `startturn` packet
+     * arrives. Older clients ignore the extra field.
+     */
+    override sendGameInfo(player: Player): void {
+        player.connection.sendData("status", "game");
+        player.connection.sendData(
+            "game",
+            "gameinfo",
+            this.name,
+            this.passworded,
+            this.gameId,
+            this.numPlayers,
+            this.tracks.length,
+            this.tracksType,
+            this.maxStrokes,
+            this.strokeTimeout,
+            this.waterEvent,
+            this.collision,
+            this.trackScoring,
+            this.trackScoringEnd,
+            "f",
+            this.turnBased ? "t" : "f",
+        );
+    }
+
+    /**
+     * Gate `beginstroke` on the current turn in turn-based rooms. Practice
+     * remains free-play. The base class also enforces `playStatus[id] === 'f'`,
+     * which catches doubled-up strokes; this override only adds the per-room
+     * turn check on top.
+     */
+    protected override beginStroke(p: Player, ballCoords: string, mouseCoords: string): void {
+        if (this.turnBased && !this.practiceActive) {
+            const id = this.getPlayerId(p);
+            if (id !== this.currentTurn) return;
+        }
+        super.beginStroke(p, ballCoords, mouseCoords);
+    }
+
+    /**
+     * After the base class settles the stroke (and possibly advances to the
+     * next track via `nextTrack`), bump the turn pointer if we're still on
+     * the same track. The `advanceTurn` call is a no-op when async or when
+     * `nextTrack` already ran (`assignFirstTurn` will have set the new turn).
+     */
+    protected override endStroke(player: Player, newPlayStatus: string): void {
+        const id = this.getPlayerId(player);
+        const wasTrack = this.currentTrack;
+        super.endStroke(player, newPlayStatus);
+        if (this.currentTrack === wasTrack) this.advanceTurn(id);
+    }
+
+    /** Forfeit advances the turn the same way endstroke does. */
+    protected override forfeit(player: Player): void {
+        const id = this.getPlayerId(player);
+        const wasTrack = this.currentTrack;
+        super.forfeit(player);
+        if (this.currentTrack === wasTrack) this.advanceTurn(id);
+    }
+
     /** During practice each hole-in / forfeit-all advances to a fresh random
      *  track instead of walking through `this.tracks`. */
     protected override nextTrack(): void {
         if (!this.practiceActive) {
             super.nextTrack();
+            // Real-game next-track: assign first turn for the new hole.
+            // Skipped for practice (free-play during warm-up).
+            this.assignFirstTurn();
             return;
         }
         const cat: TrackCategoryId = trackCategoryByTypeId(this.tracksType);
@@ -1147,7 +1346,11 @@ export class MultiGame extends GolfGame {
             }
             this.strokeCounter = 0;
         }
+        // Reset turn pointer before delegating - the base broadcasts `start`
+        // and `starttrack`, after which assignFirstTurn announces who shoots.
+        this.currentTurn = -1;
         super.startGame();
+        this.assignFirstTurn();
     }
 
     /** Inject the `practice` verb before falling through to the standard
@@ -1231,6 +1434,8 @@ export class MultiGame extends GolfGame {
         const wasPublic = this.isPublic;
         const wasPracticing = this.practiceActive;
         const playerNum = this.getPlayerId(player);
+        const trackBeforeLeave = this.currentTrack;
+        const wasTheirTurn = this.turnBased && this.currentTurn === playerNum;
         super.removePlayer(player, reason);
 
         if (this.playStatus.length > playerNum) {
@@ -1264,9 +1469,14 @@ export class MultiGame extends GolfGame {
 
         const lobby = player.lobby;
         if (this.players.length > 0) {
-            if (!wasPublic) {
-                // Game was in progress - pick the first remaining player to shoot.
-                this.broadcast(tabularize("game", "startturn", this.playersNumber[0] ?? 0));
+            if (!wasPublic && this.turnBased && !this.practiceActive) {
+                // Turn-based real game still in progress: if the leaver held
+                // the turn AND `nextTrack` didn't already kick everyone to a
+                // fresh hole (which assigns its own first turn), advance to
+                // the next eligible slot so the survivors aren't blocked.
+                if (wasTheirTurn && this.currentTrack === trackBeforeLeave) {
+                    this.advanceTurn(playerNum);
+                }
             }
             if (lobby) {
                 // Always update the gamelist row so the freed slot is visible
