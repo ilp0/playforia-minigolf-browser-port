@@ -399,14 +399,17 @@ export class TrackRenderer {
       ctx.lineWidth = 1;
       const mode = pa.mode ?? 0;
       if (mode === 0) {
-        // Cursor stream coords aren't power-scaled - peer sees a dashed line
-        // straight to the cursor (matches mode-0 self preview which goes
-        // ball→cursor without scaling either).
-        ctx.setLineDash([3, 3]);
-        ctx.beginPath();
-        ctx.moveTo(pa.fromX, pa.fromY);
-        ctx.lineTo(pa.toX, pa.toY);
-        ctx.stroke();
+        // Java clamps the aim line at the max-force length (power*200/6.5,
+        // mag ≤ 6.5 → 200 px max) for all shooting modes. Peer keeps the
+        // dashed style so the local aim line stays more prominent.
+        const dEl = scaledPowerDelta(pa.fromX, pa.fromY, pa.toX, pa.toY);
+        if (dEl) {
+          ctx.setLineDash([3, 3]);
+          ctx.beginPath();
+          ctx.moveTo(pa.fromX, pa.fromY);
+          ctx.lineTo(pa.fromX + dEl.dx, pa.fromY + dEl.dy);
+          ctx.stroke();
+        }
       } else {
         // Java preview for modes 1..3: dashed cursor-direction line +
         // solid rotated-trajectory line, both at power-scaled length.
@@ -433,10 +436,16 @@ export class TrackRenderer {
       ctx.lineWidth = 1;
       const mode = aim.mode ?? 0;
       if (mode === 0) {
-        ctx.beginPath();
-        ctx.moveTo(aim.fromX, aim.fromY);
-        ctx.lineTo(aim.toX, aim.toY);
-        ctx.stroke();
+        // Java clamps the aim line at power*200/6.5 with magnitude ≤ 6.5
+        // (max 200 px from the ball) so the line stops at max force rather
+        // than running all the way to the cursor.
+        const dEl = scaledPowerDelta(aim.fromX, aim.fromY, aim.toX, aim.toY);
+        if (dEl) {
+          ctx.beginPath();
+          ctx.moveTo(aim.fromX, aim.fromY);
+          ctx.lineTo(aim.fromX + dEl.dx, aim.fromY + dEl.dy);
+          ctx.stroke();
+        }
       } else {
         // Mode 1..3: dashed line in cursor direction + solid in rotated
         // trajectory direction, both scaled to Java's power*200/6.5 length.
