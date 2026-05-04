@@ -348,6 +348,14 @@ export class GamePanel implements Panel {
   private currentTrackIdx = 0;
   private myPlayerId = 0;
   private waterEvent = 0;
+  /**
+   * Krokkaus / ball-vs-ball collision toggle from `gameinfo`. Java's
+   * `LobbyReal_Collision` setting; 0 = balls pass through each other,
+   * 1 = balls bounce off each other (the original game's default). Plumbed
+   * straight into every per-stroke {@link PhysicsContext} so the physics
+   * step does (or skips) the player-collision check per substep.
+   */
+  private collisionMode = 1;
   private myNick = "You";
   /**
    * Turn-based room: -1 means "no turn assigned" (async room, or between
@@ -929,6 +937,10 @@ export class GamePanel implements Panel {
         this.roomCapacity = this.numPlayers;
         this.numTracks = parseInt(f[6] ?? "1", 10) || 1;
         this.waterEvent = parseInt(f[10] ?? "0", 10) || 0;
+        // f[11] is the lobby's "Krokkaus" setting. Default to ON when absent
+        // (matches the original Java client's selectedIndex=1 default).
+        this.collisionMode = parseInt(f[11] ?? "1", 10);
+        if (this.collisionMode !== 0 && this.collisionMode !== 1) this.collisionMode = 1;
         // Port extension - 15th field carries the turn-based flag. Older
         // servers omit it and the parsed value will be undefined; treat as
         // async so the legacy real-time gating applies.
@@ -1412,6 +1424,23 @@ export class GamePanel implements Panel {
       }
       otherPlayers.push({ x: peer.ball.x, y: peer.ball.y });
     }
+    // Live ball refs for krokkaus collision. Java's `simulatePlayer[k]` gate
+    // is "this player is in this hole at all" - we approximate it by
+    // excluding holed / forfeited / parted slots and vacant nicks. The ARRAY
+    // is shared by every slot's ctx so a collision in slot i's substep
+    // mutates peer k's BallState directly (same object reference).
+    const peers: Array<BallState | null> = [];
+    for (let pi = 0; pi < this.players.length; pi++) {
+      const peer = this.players[pi];
+      if (!peer) { peers.push(null); continue; }
+      const inTrack =
+        peer.nick !== "" &&
+        !peer.holedThisTrack &&
+        !peer.forfeitedThisTrack &&
+        peer.partReason === 0 &&
+        !peer.ball.inHole;
+      peers.push(inTrack ? peer.ball : null);
+    }
     const ctx: PhysicsContext = {
       map: this.parsedMap,
       seed: new Seed(BigInt(seedNum)),
@@ -1423,10 +1452,46 @@ export class GamePanel implements Panel {
       startX: slot.startX,
       startY: slot.startY,
       otherPlayers,
+      collisionMode: this.collisionMode,
+      peers,
+      myIdx: id,
     };
     slot.ctx = ctx;
     applyStrokeImpulse(slot.ball, ctx, mouse.x, mouse.y, mouse.mode);
+    // Track that slot.ball.stopped = false transitions came from a real
+    // stroke vs. a krokkaus push. Used by the tick loop to know whether
+    // to bill the stop as our stroke (`endstroke s`) or as a krokkaus
+    // outcome (`endstroke k`, doesn't bump the counter).
+    slot.ball.causedByShot = true;
     slot.simulating = true;
+
+    // Set up "ready-for-collision" ctxes on every OTHER active idle slot so
+    // their balls can be stepped if A's stroke pushes them. Each slot uses
+    // the SAME beginstroke seed value but its OWN Seed instance - so each
+    // ball's RNG draws are independent across clients but every client
+    // arrives at the same numbers. Skip slots that are currently mid-stroke
+    // (their ctx is in flight; replacing it would corrupt the seed stream).
+    for (let pi = 0; pi < this.players.length; pi++) {
+      if (pi === id) continue;
+      const peer = this.players[pi];
+      if (!peer) continue;
+      if (peer.simulating) continue;
+      if (peer.holedThisTrack || peer.forfeitedThisTrack || peer.partReason !== 0) continue;
+      if (peer.ball.inHole) continue;
+      if (peer.nick === "") continue;
+      peer.ctx = {
+        map: this.parsedMap,
+        seed: new Seed(BigInt(seedNum)),
+        norandom: false,
+        waterEvent: this.waterEvent,
+        startX: peer.startX,
+        startY: peer.startY,
+        otherPlayers,
+        collisionMode: this.collisionMode,
+        peers,
+        myIdx: pi,
+      };
+    }
     // Mirror Java GamePanel.java:388 / :448 - playGameMove() on every stroke,
     // including the local player's (server echoes their own click back).
     audio.playGameMove();
@@ -1536,8 +1601,16 @@ export class GamePanel implements Panel {
       // Step every ball that's currently moving. Each ball has its OWN
       // PhysicsContext (with its OWN Seed), so concurrent strokes can't
       // interfere with one another's randomness.
-      const anySimulating = this.players.some((p) => p.simulating);
-      if (anySimulating) {
+      //
+      // Krokkaus extension: a ball with non-zero velocity but `simulating ===
+      // false` was just bumped by another ball's collision in this same tick
+      // (or an earlier substep within this tick's slot loop). We re-arm its
+      // physics state machine and step it like any active ball, so the
+      // bumped ball naturally rolls until it stops on its own.
+      const anyMoving = this.players.some(
+        (p) => p.simulating || p.ball.vx !== 0 || p.ball.vy !== 0,
+      );
+      if (anyMoving) {
         const now = performance.now();
         if (this.lastTickMs === 0) this.lastTickMs = now;
         const elapsed = now - this.lastTickMs;
@@ -1548,18 +1621,66 @@ export class GamePanel implements Panel {
           this.physicsAccumMs -= PHYSICS_STEP_MS;
           for (let i = 0; i < this.players.length; i++) {
             const slot = this.players[i];
-            if (!slot.simulating || !slot.ctx) continue;
-            const r = step(slot.ball, slot.ctx);
+            if (!slot.ctx) continue;
+            const ball = slot.ball;
+            if (ball.inHole) continue;
+            if (slot.holedThisTrack || slot.forfeitedThisTrack) continue;
+            // Step if we're already simulating, or if a peer's krokkaus
+            // collision just gave us velocity this tick.
+            const moving = slot.simulating || ball.vx !== 0 || ball.vy !== 0;
+            if (!moving) continue;
+            // Re-arm a previously-stopped ball that just got bumped. We do
+            // NOT reset strokeStartX/Y - Java's `tempCoordX/Y` is only set
+            // by a real stroke, so a krokkaus victim that lands in water
+            // (event 0) goes back to where they LAST shot from, not where
+            // they were when bumped. shoreX/Y reset is fine since Java's
+            // `tempCoord2X/Y` is initialized to playerX/Y at run() entry.
+            if (ball.stopped) {
+              ball.stopped = false;
+              ball.iterationsThisStroke = 0;
+              ball.downhillStuckCounter = 0;
+              ball.magnetStuckCounter = 0;
+              ball.spinningStuckCounter = 0;
+              ball.bounciness = 1.0;
+              ball.magnetMul = 1.0;
+              ball.onHole = false;
+              ball.onLiquidOrSwamp = false;
+              ball.liquidTimer = 0;
+              ball.teleported = false;
+              ball.shoreX = ball.x;
+              ball.shoreY = ball.y;
+              // Krokkaus push: not our own stroke. Suppresses the counter
+              // bump on endstroke (see below).
+              ball.causedByShot = false;
+            }
+            slot.simulating = true;
+            const r = step(ball, slot.ctx);
             if (r.stopped) {
               slot.simulating = false;
               if (i === this.myPlayerId) {
-                // Tell the server our ball stopped (and whether we're in hole).
-                this.app.connection.sendData(
-                  "game",
-                  "endstroke",
-                  String(i),
-                  this.myPlayStatus(),
-                );
+                if (ball.causedByShot) {
+                  // Real stroke ending: server bumps our stroke counter.
+                  this.app.connection.sendData(
+                    "game",
+                    "endstroke",
+                    String(i),
+                    this.myPlayStatus(),
+                    "s",
+                  );
+                  ball.causedByShot = false;
+                } else if (ball.inHole) {
+                  // Krokkaus pushed us into the hole - server marks us
+                  // "done" but does NOT bump our stroke counter.
+                  this.app.connection.sendData(
+                    "game",
+                    "endstroke",
+                    String(i),
+                    this.myPlayStatus(),
+                    "k",
+                  );
+                }
+                // If we got bumped onto solid ground, the server doesn't
+                // need to know - it tracks playStatus, not positions.
               }
             }
           }
