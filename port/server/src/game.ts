@@ -1,6 +1,14 @@
 // Game base + GolfGame + TrainingGame. Ports Game.java / GolfGame.java / TrainingGame.java.
 import { performance } from "node:perf_hooks";
-import { tabularize, type Track } from "@minigolf/shared";
+import {
+    tabularize,
+    type Track,
+    decodeBallSnapshot,
+    encodeBallSnapshot,
+    type BallSnapshotEntry,
+    SNAPSHOT_AGREEMENT_EPSILON_PX,
+    resolveSnapshots,
+} from "@minigolf/shared";
 import type { Player } from "./player.ts";
 import type { Lobby } from "./lobby.ts";
 import { JoinType, PartReason, LobbyType } from "./lobby.ts";
@@ -51,6 +59,74 @@ export const PHYSICS_STEP_MS = 6;
 export const LOOKAHEAD_SAFETY_MS = 20;
 export const MIN_LOOKAHEAD_TICKS = 3;
 export const MAX_LOOKAHEAD_TICKS = 60;
+
+/**
+ * Worst tolerated wall-clock gap between two clients' `ballend` observations
+ * for the same subject before we treat them as describing different strokes.
+ * Anything within this window is "the same event from different observers";
+ * anything outside is two separate events. 1500 ms is generous enough for
+ * even a high-ping room while still small relative to between-stroke gaps.
+ */
+export const BALLEND_OBSERVATION_WINDOW_MS = 1500;
+
+/**
+ * Observers required before the divergence detector can fire. With a single
+ * observer there's nothing to compare against; with two we can detect a
+ * mismatch but can't resolve it without server simulation. We collect
+ * starting from 2 (so 2-player rooms are still protected) and resolve via
+ * majority once 3+ are in.
+ */
+export const RECOVERY_MIN_OBSERVERS = 2;
+
+/**
+ * How long to wait for snapshot reports after a `snapreq` broadcast before
+ * resolving with whatever we have. Short enough that clients waiting on
+ * the snap don't hitch noticeably, long enough that even the slowest player
+ * in the room has a chance to chime in.
+ */
+export const RECOVERY_RESPONSE_TIMEOUT_MS = 600;
+
+/**
+ * Lookahead added on top of the current adaptive stroke lookahead when
+ * scheduling a `snapapply` broadcast. The corrective state has to land at
+ * the same worldTick on every client; an extra cushion absorbs the
+ * RTT-and-a-half between snapreq and snap-back.
+ */
+export const RECOVERY_APPLY_EXTRA_TICKS = 8;
+
+/** A single client's view of one ball coming to rest. Aggregated per-subject
+ *  to detect cross-client position disagreement. */
+interface BallEndObservation {
+    observerId: number;
+    x: number;
+    y: number;
+    worldTick: number;
+    receivedAtMs: number;
+}
+
+/** In-progress snapshot-recovery session triggered by a `ballend` divergence.
+ *  Collects per-observer reports until quorum or timeout, then resolves. */
+interface RecoverySession {
+    nonce: number;
+    /** The subject ball whose mismatch triggered the recovery. Other balls'
+     *  state is collected too for completeness, but this is the diagnostic
+     *  anchor for logging. */
+    triggerSubjectId: number;
+    /** observerId → snapshot report. */
+    reports: Map<number, RecoverySnapshotReport>;
+    /** observerIds we expect to hear from (the room's slot ids at request
+     *  time). */
+    expectedObservers: Set<number>;
+    /** Timer that resolves on timeout if not enough reports arrive. */
+    timer: NodeJS.Timeout;
+    startedAtMs: number;
+}
+
+interface RecoverySnapshotReport {
+    observerId: number;
+    isLateApplier: boolean;
+    entries: BallSnapshotEntry[];
+}
 
 export abstract class Game {
     protected players: Player[] = [];
@@ -235,6 +311,24 @@ export class GolfGame extends Game {
     public playerStrokesThisTrack: number[];
     public playerStrokesTotal: number[];
 
+    /**
+     * Pending desync-recovery state. Per-subject ball-end observations
+     * collected from each observer (every client sends `ballend` when their
+     * local sim observes that ball stop). Cleared on `markTrackStart`.
+     *
+     * Keys: `<subjectId>` slot. Values: list of (observerId, x, y, worldTick).
+     */
+    private ballEndObservations = new Map<number, BallEndObservation[]>();
+
+    /**
+     * In-flight snapshot recovery sessions, keyed by the divergence nonce.
+     * Each entry collects per-observer snapshot reports until a quorum
+     * arrives (or a timer fires) and the resolver runs.
+     */
+    private pendingRecoveries = new Map<number, RecoverySession>();
+
+    private recoveryNonceCounter = 0;
+
     public numberOfTracks: number;
     public perms: number;
     public tracksType: number;
@@ -351,6 +445,22 @@ export class GolfGame extends Game {
                 this.endStroke(player, newPlayStatus, src === "k" ? "k" : "s");
                 return true;
             }
+            case "ballend": {
+                // Port extension. Each observer reports where THEIR local sim
+                // saw a given ball come to rest. Fed into the divergence
+                // detector; never affects scoring (the shooter's `endstroke`
+                // is still the canonical record).
+                //   wire: game ballend <observerId> <subjectId> <x> <y> <worldTick>
+                this.handleBallEndObservation(player, fields);
+                return true;
+            }
+            case "snap": {
+                // Port extension. Client's snapshot reply to a server-issued
+                // `snapreq`. Routed to the matching pending recovery session.
+                //   wire: game snap <nonce> <observerId> <late0/1> <ballsBlob>
+                this.handleSnapResponse(player, fields);
+                return true;
+            }
             case "voteskip":
             case "voteski":
             case "skip":
@@ -402,9 +512,15 @@ export class GolfGame extends Game {
      */
     protected getStrokeLookaheadTicks(): number {
         if (this.collision !== COLLISION_YES) return 0;
+        // Use peakPingMs (max over recent samples) rather than avgPingMs
+        // so the lookahead absorbs jitter, not just the steady-state RTT.
+        // A 1ms-mean / 25ms-spike connection deserves the 25ms lookahead -
+        // otherwise the spike puts the broadcast on the "in the past" side
+        // of apply_tick on the unlucky client, the impulse applies late,
+        // and peer ball positions diverge for the rest of the stroke.
         let maxPingMs = 0;
         for (const p of this.players) {
-            const ping = p.connection.avgPingMs;
+            const ping = p.connection.peakPingMs;
             if (ping > maxPingMs) maxPingMs = ping;
         }
         const ticks = Math.ceil((maxPingMs + LOOKAHEAD_SAFETY_MS) / PHYSICS_STEP_MS);
@@ -433,6 +549,14 @@ export class GolfGame extends Game {
      */
     protected markTrackStart(): void {
         this.trackStartedAtMs = performance.now();
+        // Wipe any in-flight desync-recovery state - the world clock just
+        // re-anchored, prior strokes are no longer comparable to current ones,
+        // and any pending session would resolve against meaningless ticks.
+        this.ballEndObservations.clear();
+        for (const session of this.pendingRecoveries.values()) {
+            clearTimeout(session.timer);
+        }
+        this.pendingRecoveries.clear();
     }
 
     /**
@@ -491,8 +615,32 @@ export class GolfGame extends Game {
         // 32-bit composite - distinct per (game, stroke) so all clients pick
         // up a fresh independent random stream.
         const seed = ((this.gameId & 0xffff) << 16) | (this.strokeSeedCounter & 0xffff);
-        const applyTick =
-            ((this.trackElapsedMs() / PHYSICS_STEP_MS) | 0) + this.getStrokeLookaheadTicks();
+        const lookahead = this.getStrokeLookaheadTicks();
+        const elapsedTick = (this.trackElapsedMs() / PHYSICS_STEP_MS) | 0;
+        const applyTick = elapsedTick + lookahead;
+        // Diagnostic so you can verify adaptive lookahead is active. Shows
+        // each player's measured RTT (avgPingMs) and the lookahead the
+        // server picked for THIS stroke. Localhost play converges to ~4
+        // ticks (24 ms) - barely perceptible. Remove once enough flight
+        // time tells us the math is right.
+        if (this.collision === COLLISION_YES) {
+            // Show both avg (steady-state) and peak (jitter) per player so a
+            // log line tells us "this stroke chose lookahead X because peak
+            // ping was Y" without having to recompute from samples.
+            const pings = this.players
+                .map(
+                    (pl) =>
+                        `${pl.id}=avg${pl.connection.avgPingMs.toFixed(1)}/peak${pl.connection.peakPingMs.toFixed(
+                            1,
+                        )}ms`,
+                )
+                .join(" ");
+            console.log(
+                `[lookahead] game=${this.gameId} stroke=${this.strokeSeedCounter} ` +
+                    `pid=${playerId} pings=[${pings}] lookahead=${lookahead}t (` +
+                    `${(lookahead * PHYSICS_STEP_MS).toFixed(0)}ms) apply_tick=${applyTick}`,
+            );
+        }
         this.writeAll(
             tabularize("game", "beginstroke", playerId, ballCoords, mouseCoords, seed, applyTick),
         );
@@ -563,6 +711,228 @@ export class GolfGame extends Game {
         }
 
         if (this.allDoneOnCurrentTrack()) this.nextTrack();
+    }
+
+    // ---- Desync recovery (port extension) ---------------------------------
+
+    /**
+     * Handle a `game ballend` observation from a client. The packet is sent
+     * by EVERY observer (not just the ball's owner) the moment their local
+     * simulation transitions the named ball from in-motion to at-rest. We
+     * aggregate these per-subject and detect position disagreement.
+     *
+     *   wire: game ballend <observerId> <subjectId> <x> <y> <worldTick>
+     *
+     * If two observers report positions for the same subject within
+     * BALLEND_OBSERVATION_WINDOW_MS but at different positions, we kick
+     * off a snapshot-recovery session.
+     */
+    protected handleBallEndObservation(player: Player, fields: string[]): void {
+        const observerId = this.getPlayerId(player);
+        if (observerId < 0) return;
+        const claimedObserverId = parseInt(fields[2] ?? "", 10);
+        if (claimedObserverId !== observerId) return; // clients may only speak for themselves
+        const subjectId = parseInt(fields[3] ?? "", 10);
+        if (!Number.isFinite(subjectId) || subjectId < 0 || subjectId >= this.players.length) return;
+        const x = parseFloat(fields[4] ?? "");
+        const y = parseFloat(fields[5] ?? "");
+        const worldTick = parseInt(fields[6] ?? "", 10);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(worldTick)) return;
+
+        const now = performance.now();
+        const list = this.ballEndObservations.get(subjectId) ?? [];
+        // Drop stale observations outside the window so unrelated past
+        // strokes don't pollute current divergence checks.
+        const fresh = list.filter((o) => now - o.receivedAtMs < BALLEND_OBSERVATION_WINDOW_MS);
+        // Ignore duplicate reports from the same observer (can happen if a
+        // client double-fires on a borderline stop/restart). First report wins.
+        if (fresh.some((o) => o.observerId === observerId)) {
+            this.ballEndObservations.set(subjectId, fresh);
+            return;
+        }
+        fresh.push({ observerId, x, y, worldTick, receivedAtMs: now });
+        this.ballEndObservations.set(subjectId, fresh);
+
+        if (fresh.length >= RECOVERY_MIN_OBSERVERS) {
+            this.checkBallEndDivergence(subjectId, fresh);
+        }
+    }
+
+    /**
+     * Compare position reports for `subjectId`. If any pair disagrees by
+     * more than SNAPSHOT_AGREEMENT_EPSILON_PX, fire a recovery session.
+     * Returns silently if everything agrees.
+     */
+    private checkBallEndDivergence(subjectId: number, observations: BallEndObservation[]): void {
+        let maxDiffSq = 0;
+        for (let i = 0; i < observations.length; i++) {
+            for (let j = i + 1; j < observations.length; j++) {
+                const dx = observations[i]!.x - observations[j]!.x;
+                const dy = observations[i]!.y - observations[j]!.y;
+                const d2 = dx * dx + dy * dy;
+                if (d2 > maxDiffSq) maxDiffSq = d2;
+            }
+        }
+        const epsSq = SNAPSHOT_AGREEMENT_EPSILON_PX * SNAPSHOT_AGREEMENT_EPSILON_PX;
+        if (maxDiffSq <= epsSq) return; // everyone agrees
+
+        // Don't fire a second recovery for the same subject while one is in
+        // flight — the existing session will resolve the whole world state
+        // including this ball.
+        for (const r of this.pendingRecoveries.values()) {
+            if (r.triggerSubjectId === subjectId) return;
+        }
+        this.startRecoverySession(subjectId);
+    }
+
+    /**
+     * Begin a snapshot-recovery session: broadcast `snapreq` to all clients,
+     * arm a response timer, and route incoming `snap` packets into this
+     * session until quorum is reached or the timer fires.
+     */
+    private startRecoverySession(triggerSubjectId: number): void {
+        const nonce = ++this.recoveryNonceCounter;
+        const expected = new Set<number>();
+        // Only count players still actively in the game (have a slot id and a
+        // game pointer back to us). Parted/disconnected players appear in
+        // playersNumber but their connection is gone.
+        for (const p of this.players) {
+            if (p.game !== this) continue;
+            const pid = this.getPlayerId(p);
+            if (pid >= 0) expected.add(pid);
+        }
+        if (expected.size < RECOVERY_MIN_OBSERVERS) return; // not enough peers to do anything useful
+
+        const session: RecoverySession = {
+            nonce,
+            triggerSubjectId,
+            reports: new Map(),
+            expectedObservers: expected,
+            startedAtMs: performance.now(),
+            timer: setTimeout(() => this.resolveRecoverySession(nonce), RECOVERY_RESPONSE_TIMEOUT_MS),
+        };
+        this.pendingRecoveries.set(nonce, session);
+
+        console.log(
+            `[recovery] game=${this.gameId} nonce=${nonce} subject=${triggerSubjectId} ` +
+                `observers=${[...expected].join(",")} starting`,
+        );
+        this.writeAll(tabularize("game", "snapreq", nonce));
+    }
+
+    /**
+     * Handle a client's `game snap` reply. Routes the report into the matching
+     * pending recovery session and resolves early once every expected observer
+     * has chimed in.
+     *
+     *   wire: game snap <nonce> <observerId> <late0/1> <ballsBlob>
+     */
+    protected handleSnapResponse(player: Player, fields: string[]): void {
+        const nonce = parseInt(fields[2] ?? "", 10);
+        if (!Number.isFinite(nonce)) return;
+        const session = this.pendingRecoveries.get(nonce);
+        if (!session) return; // session already resolved or never existed
+
+        const observerId = this.getPlayerId(player);
+        if (observerId < 0) return;
+        const claimedObserverId = parseInt(fields[3] ?? "", 10);
+        if (claimedObserverId !== observerId) return;
+        const isLateApplier = (fields[4] ?? "0") === "1";
+        const ballsBlob = fields[5] ?? "";
+        const entries = decodeBallSnapshot(ballsBlob);
+
+        session.reports.set(observerId, { observerId, isLateApplier, entries });
+        // Resolve as soon as everyone we expected has responded.
+        if (session.reports.size >= session.expectedObservers.size) {
+            clearTimeout(session.timer);
+            this.resolveRecoverySession(nonce);
+        }
+    }
+
+    /**
+     * Resolve a recovery session: run the majority-vote resolver, broadcast
+     * `snapapply` with an apply_tick that gives every client time to receive
+     * and queue the snapshot.
+     */
+    private resolveRecoverySession(nonce: number): void {
+        const session = this.pendingRecoveries.get(nonce);
+        if (!session) return;
+        this.pendingRecoveries.delete(nonce);
+
+        const reports = [...session.reports.values()];
+        if (reports.length < RECOVERY_MIN_OBSERVERS) {
+            console.log(
+                `[recovery] game=${this.gameId} nonce=${nonce} aborted: only ${reports.length} reports`,
+            );
+            return;
+        }
+
+        // Run resolver. Tiebreaker hook is null today; when the server-side
+        // physics simulator is wired, swap in a real callback that re-runs
+        // the disputed iterations from the last known synchronized state.
+        const tiebreaker = this.physicsTiebreaker();
+        const result = resolveSnapshots(
+            reports.map((r) => ({
+                observerId: r.observerId,
+                isLateApplier: r.isLateApplier,
+                entries: r.entries,
+            })),
+            tiebreaker,
+        );
+
+        if (result.winning.length === 0) {
+            console.log(`[recovery] game=${this.gameId} nonce=${nonce} resolver returned empty`);
+            return;
+        }
+
+        const lookahead = this.getStrokeLookaheadTicks();
+        const elapsedTick = (this.trackElapsedMs() / PHYSICS_STEP_MS) | 0;
+        const applyTick = elapsedTick + Math.max(lookahead, MIN_LOOKAHEAD_TICKS) + RECOVERY_APPLY_EXTRA_TICKS;
+
+        const summary: string[] = [];
+        for (const [slot, agreement] of result.perSlotAgreement) {
+            summary.push(`s${slot}=${agreement.agreed}/${agreement.total}`);
+        }
+        console.log(
+            `[recovery] game=${this.gameId} nonce=${nonce} resolved ` +
+                `apply_tick=${applyTick} agreement=[${summary.join(" ")}] ` +
+                `tied_slots=[${result.tiedSlots.join(",")}] ` +
+                `late=[${reports
+                    .filter((r) => r.isLateApplier)
+                    .map((r) => r.observerId)
+                    .join(",")}]`,
+        );
+
+        // Re-encode in a form that round-trips through `decodeBallSnapshot`
+        // on the receiving client.
+        const blob = encodeBallSnapshot(result.winning);
+        this.writeAll(tabularize("game", "snapapply", applyTick, blob));
+    }
+
+    /**
+     * Server-side physics tiebreaker hook. Returns null today, which makes
+     * the resolver fall back to a stable observer-id-based pick on the rare
+     * 1-1-1-style ties. The fallback is deterministic (no ping bias, no
+     * cohort bias) but doesn't constitute "ground truth" - it only ensures
+     * every client converges on the same answer.
+     *
+     * To make this authoritative: port `port/web/src/game/physics.ts` and
+     * `port/web/src/game/map.ts` into the shared package (or a new
+     * `@minigolf/physics` workspace), have both client and server consume
+     * it, and replace this stub with a function that:
+     *
+     *   1. Loads the current track's parsed map (cached per-game).
+     *   2. Re-simulates from the last server-side known-good state up to
+     *      the disputed iteration using the broadcast seeds.
+     *   3. Returns the canonical entry for the disputed slot.
+     *
+     * The integration point is intentionally narrow: ResolverResult.tiedSlots
+     * is what fires the call, and the cluster-vote winner is fed in as the
+     * candidate set, so the server only spends physics CPU on the rare
+     * cases where the client cohort genuinely disagrees with itself.
+     */
+    protected physicsTiebreaker(): null {
+        return null;
     }
 
     /**

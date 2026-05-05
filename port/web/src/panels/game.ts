@@ -1,4 +1,19 @@
-import { ALL_VISIBLE_FLAGS, PacketType, Seed, parseSettingsFlags, type Packet } from "@minigolf/shared";
+import {
+  ALL_VISIBLE_FLAGS,
+  PacketType,
+  Seed,
+  parseSettingsFlags,
+  type Packet,
+  encodeBallSnapshot,
+  decodeBallSnapshot,
+  type BallSnapshotEntry,
+  SNAP_FLAG_STOPPED,
+  SNAP_FLAG_IN_HOLE,
+  SNAP_FLAG_ON_HOLE,
+  SNAP_FLAG_ON_LIQUID,
+  SNAP_FLAG_TELEPORTED,
+  SNAP_FLAG_CAUSED_BY_SHOT,
+} from "@minigolf/shared";
 import type { App } from "../app.ts";
 import type { Panel } from "../panel.ts";
 import { loadAtlases, type Atlases } from "../game/sprites.ts";
@@ -1200,6 +1215,19 @@ export class GamePanel implements Panel {
         // wire: game endstroke <playerId> <strokesThisTrack> <inHole(t/f)>
         this.handleEndStrokeBroadcast(f);
         break;
+      case "snapreq":
+        // Server is asking us to dump our full ball state for divergence
+        // resolution. Reply on the next tick with the current snapshot.
+        // wire: game snapreq <nonce>
+        this.handleSnapRequest(f);
+        break;
+      case "snapapply":
+        // Server has resolved a divergence and broadcast the winning state.
+        // Queue it; the tick loop applies it when worldTick reaches
+        // applyTick (same machinery as `beginstroke`).
+        // wire: game snapapply <applyTick> <ballsBlob>
+        this.handleSnapApply(f);
+        break;
       case "cursor":
         // Live aim preview from a peer.
         // wire: game cursor <playerId> <x> <y> [<shootingMode>]
@@ -1260,6 +1288,8 @@ export class GamePanel implements Panel {
             // grace isn't supported, so on reconnect we're always in the
             // lobby with no pending strokes).
             this.pendingImpulses = [];
+            this.pendingSnaps = [];
+            this.lastStrokeWasLate = false;
           }
         }
         break;
@@ -1301,6 +1331,10 @@ export class GamePanel implements Panel {
     // Drop any leftover pending impulses from a previous track - their
     // apply_ticks were on the prior track's clock and are meaningless now.
     this.pendingImpulses = [];
+    // Same for pending snaps and the per-stroke late flag - new track =
+    // fresh world clock = stale corrections.
+    this.pendingSnaps = [];
+    this.lastStrokeWasLate = false;
     try {
       const parsed = buildMap(tLine, this.atlases);
       this.parsedMap = parsed;
@@ -1448,6 +1482,19 @@ export class GamePanel implements Panel {
       this.applyBeginStroke(f);
       return;
     }
+    // Track whether this client missed the apply window. The server uses
+    // this flag (relayed via the `late` field of the next `snap` reply) to
+    // exclude us from majority voting on disputes.
+    if (applyTickRaw < this.worldTick) {
+      this.lastStrokeWasLate = true;
+      if (DEV) {
+        console.warn(
+          "[recovery] beginstroke arrived late: apply_tick=%d worldTick=%d (will self-exclude from votes)",
+          applyTickRaw,
+          this.worldTick,
+        );
+      }
+    }
     // Insertion-sort by ascending applyTick so the head is always the
     // earliest pending. Concurrent strokes with the same apply_tick keep
     // FIFO order (the server already serializes packets, so wire order
@@ -1455,6 +1502,132 @@ export class GamePanel implements Panel {
     let i = this.pendingImpulses.length;
     while (i > 0 && this.pendingImpulses[i - 1].applyTick > applyTickRaw) i--;
     this.pendingImpulses.splice(i, 0, { applyTick: applyTickRaw, fields: f });
+  }
+
+  /**
+   * Server requested our current ball state for divergence resolution.
+   * Reply with the encoded snapshot for every active slot.
+   *   wire: game snapreq <nonce>
+   */
+  private handleSnapRequest(f: string[]): void {
+    const nonce = parseInt(f[2] ?? "", 10);
+    if (!Number.isFinite(nonce)) return;
+    if (this.myPlayerId < 0) return;
+
+    const entries: BallSnapshotEntry[] = [];
+    for (let i = 0; i < this.players.length; i++) {
+      const slot = this.players[i];
+      if (!slot) continue;
+      if (slot.nick === "") continue;
+      if (slot.partReason !== 0) continue;
+      const b = slot.ball;
+      let flags = 0;
+      if (b.stopped) flags |= SNAP_FLAG_STOPPED;
+      if (b.inHole) flags |= SNAP_FLAG_IN_HOLE;
+      if (b.onHole) flags |= SNAP_FLAG_ON_HOLE;
+      if (b.onLiquidOrSwamp) flags |= SNAP_FLAG_ON_LIQUID;
+      if (b.teleported) flags |= SNAP_FLAG_TELEPORTED;
+      if (b.causedByShot) flags |= SNAP_FLAG_CAUSED_BY_SHOT;
+      const seedHex =
+        slot.ctx?.seed ? slot.ctx.seed.getState().toString(16) : "0";
+      entries.push({
+        slot: i,
+        x: b.x,
+        y: b.y,
+        vx: b.vx,
+        vy: b.vy,
+        bounciness: b.bounciness,
+        magnetMul: b.magnetMul,
+        flags,
+        liquidTimer: b.liquidTimer,
+        iterationsThisStroke: b.iterationsThisStroke,
+        downhillStuckCounter: b.downhillStuckCounter,
+        magnetStuckCounter: b.magnetStuckCounter,
+        spinningStuckCounter: b.spinningStuckCounter,
+        strokeStartX: b.strokeStartX,
+        strokeStartY: b.strokeStartY,
+        shoreX: b.shoreX,
+        shoreY: b.shoreY,
+        seedHex,
+      });
+    }
+    const blob = encodeBallSnapshot(entries);
+    this.app.connection.sendData(
+      "game",
+      "snap",
+      String(nonce),
+      String(this.myPlayerId),
+      this.lastStrokeWasLate ? "1" : "0",
+      blob,
+    );
+    // Self-late state was a per-stroke claim; consume it on report so we
+    // don't carry the flag forward to unrelated future divergences.
+    this.lastStrokeWasLate = false;
+  }
+
+  /**
+   * Server has resolved a divergence and is broadcasting the winning
+   * snapshot. Queue against applyTick using the same scheduling discipline
+   * as beginstroke; the tick loop drains and applies at the agreed iteration.
+   *   wire: game snapapply <applyTick> <ballsBlob>
+   */
+  private handleSnapApply(f: string[]): void {
+    const applyTick = parseInt(f[2] ?? "", 10);
+    const blob = f[3] ?? "";
+    if (!Number.isFinite(applyTick) || applyTick < 0) return;
+    const entries = decodeBallSnapshot(blob);
+    if (entries.length === 0) return;
+    let i = this.pendingSnaps.length;
+    while (i > 0 && this.pendingSnaps[i - 1].applyTick > applyTick) i--;
+    this.pendingSnaps.splice(i, 0, { applyTick, entries });
+  }
+
+  /**
+   * Apply a server-resolved snapshot, snapping every covered slot to the
+   * authoritative state. Run from the tick-drain loop when worldTick
+   * reaches applyTick - same as beginstroke - so every client snaps at
+   * the same logical iteration.
+   */
+  private applySnap(entries: BallSnapshotEntry[]): void {
+    for (const e of entries) {
+      const slot = this.players[e.slot];
+      if (!slot) continue;
+      const b = slot.ball;
+      b.x = e.x;
+      b.y = e.y;
+      b.vx = e.vx;
+      b.vy = e.vy;
+      b.bounciness = e.bounciness;
+      b.magnetMul = e.magnetMul;
+      b.stopped = (e.flags & SNAP_FLAG_STOPPED) !== 0;
+      b.inHole = (e.flags & SNAP_FLAG_IN_HOLE) !== 0;
+      b.onHole = (e.flags & SNAP_FLAG_ON_HOLE) !== 0;
+      b.onLiquidOrSwamp = (e.flags & SNAP_FLAG_ON_LIQUID) !== 0;
+      b.teleported = (e.flags & SNAP_FLAG_TELEPORTED) !== 0;
+      b.causedByShot = (e.flags & SNAP_FLAG_CAUSED_BY_SHOT) !== 0;
+      b.liquidTimer = e.liquidTimer;
+      b.iterationsThisStroke = e.iterationsThisStroke;
+      b.downhillStuckCounter = e.downhillStuckCounter;
+      b.magnetStuckCounter = e.magnetStuckCounter;
+      b.spinningStuckCounter = e.spinningStuckCounter;
+      b.strokeStartX = e.strokeStartX;
+      b.strokeStartY = e.strokeStartY;
+      b.shoreX = e.shoreX;
+      b.shoreY = e.shoreY;
+      // Re-anchor the slot's RNG state if we have an active ctx for it.
+      // A slot whose ctx is null (vacant or holed-out) doesn't need it.
+      if (slot.ctx?.seed && e.seedHex && e.seedHex !== "0") {
+        try {
+          slot.ctx.seed.setState(BigInt("0x" + e.seedHex));
+        } catch {
+          // Malformed hex - leave seed as-is rather than crash the tick loop.
+        }
+      }
+      // If the snapped state has the ball moving, it should resume
+      // simulating; if at rest, it should not. simulating tracks
+      // motion intent, not position.
+      slot.simulating = !b.stopped && !b.inHole;
+    }
   }
 
   /**
@@ -1641,6 +1814,19 @@ export class GamePanel implements Panel {
    * earliest pending. Cleared on starttrack.
    */
   private pendingImpulses: Array<{ applyTick: number; fields: string[] }> = [];
+  /**
+   * Snapshot-recovery payloads buffered against their server-issued
+   * `apply_tick`. Same scheduling discipline as `pendingImpulses` so the
+   * snap lands at the same logical iteration on every client.
+   */
+  private pendingSnaps: Array<{ applyTick: number; entries: BallSnapshotEntry[] }> = [];
+  /**
+   * Did our local sim apply the most-recently-handled beginstroke AFTER its
+   * apply_tick had already passed? If so we are the late-applier for this
+   * stroke - reported back via the `late` flag in `snap` responses so the
+   * resolver knows to drop our vote. Cleared on each starttrack.
+   */
+  private lastStrokeWasLate = false;
   /** Cursor-broadcast throttle: timestamp of last `game cursor` we sent. */
   private lastCursorSentMs = 0;
   private lastCursorSentX = -9999;
@@ -1726,6 +1912,15 @@ export class GamePanel implements Panel {
             const item = this.pendingImpulses.shift()!;
             this.applyBeginStroke(item.fields);
           }
+          // Same for queued snapshot corrections: better to apply them late
+          // than to leave them stuck forever behind the catchup snap.
+          while (
+            this.pendingSnaps.length > 0 &&
+            this.pendingSnaps[0].applyTick <= targetTick
+          ) {
+            const item = this.pendingSnaps.shift()!;
+            this.applySnap(item.entries);
+          }
           this.worldTick = targetTick;
         }
       }
@@ -1745,6 +1940,17 @@ export class GamePanel implements Panel {
    * so the bumped ball naturally rolls until it stops on its own.
    */
   private runWorldTick(): void {
+    // Drain pending snaps FIRST: a corrective snapshot scheduled for this
+    // tick should land before any impulses applied this tick, so the
+    // impulse acts on the canonical post-correction state. Same priority
+    // discipline the server uses when picking apply_tick.
+    while (
+      this.pendingSnaps.length > 0 &&
+      this.pendingSnaps[0].applyTick <= this.worldTick
+    ) {
+      const item = this.pendingSnaps.shift()!;
+      this.applySnap(item.entries);
+    }
     while (
       this.pendingImpulses.length > 0 &&
       this.pendingImpulses[0].applyTick <= this.worldTick
@@ -1814,6 +2020,23 @@ export class GamePanel implements Panel {
           }
           // If we got bumped onto solid ground, the server doesn't need to
           // know - it tracks playStatus, not positions.
+        }
+        // EVERY observer (not just the ball's owner) reports where their
+        // local sim saw this ball stop. The server collates and detects
+        // cross-client position disagreement; this is the divergence
+        // signal that drives snapshot recovery. Suppressed when there's
+        // no shared world clock (offline / single-player), and when this
+        // client's myPlayerId hasn't been resolved yet.
+        if (this.trackStartedAtMs > 0 && this.myPlayerId >= 0) {
+          this.app.connection.sendData(
+            "game",
+            "ballend",
+            String(this.myPlayerId),
+            String(i),
+            ball.x.toFixed(3),
+            ball.y.toFixed(3),
+            String(this.worldTick),
+          );
         }
       }
     }

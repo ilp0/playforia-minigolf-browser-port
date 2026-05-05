@@ -307,6 +307,94 @@ exports the same `PHYSICS_STEP_MS`. Per-connection ping is in
 `port/server/src/connection.ts` (`Connection.avgPingMs`, sampled every
 `RTT_PROBE_INTERVAL_MS = 3000` via the existing `c ping`/`c pong` flow).
 
+## Desync recovery (port-specific - hardening on top of lockstep)
+
+Lockstep handles the in-stroke window cleanly when ping cooperates, but the
+unfixable edge cases (cross-engine float drift, sub-lookahead jitter spikes,
+late TCP retransmits) can still leave clients with disagreeing ball positions
+at end-of-stroke. The recovery layer detects this at the natural quiescence
+boundary and snaps the room back into agreement.
+
+Three pieces:
+
+### 1. Per-observer ball-end observations
+
+Every client (not just the ball's owner) reports where their local sim saw
+a ball stop. The shooter's normal `endstroke` is still the canonical record
+for stroke counting; this packet is purely diagnostic.
+
+```
+client → d N game<TAB>ballend<TAB>{observerId}<TAB>{subjectId}<TAB>{x}<TAB>{y}<TAB>{worldTick}
+   (sent the moment THIS client's local sim transitions ballSlot=subjectId
+    from in-motion to at-rest; observerId == this client's slot)
+```
+
+Server collects up to one observation per (observer, subject) within a
+1500 ms window (`BALLEND_OBSERVATION_WINDOW_MS`). When two or more observers
+report the same subject's resting position differing by more than
+`SNAPSHOT_AGREEMENT_EPSILON_PX = 0.5 px`, the divergence detector fires.
+
+### 2. On-demand snapshot exchange
+
+```
+server → d K game<TAB>snapreq<TAB>{nonce}
+   (broadcast to every active player in the room)
+
+client → d N game<TAB>snap<TAB>{nonce}<TAB>{observerId}<TAB>{late0/1}<TAB>{ballsBlob}
+   (full ball state for every active slot; `late=1` if THIS client's most
+    recent beginstroke arrived past its apply_tick - excludes it from voting)
+```
+
+`{ballsBlob}` is a semicolon-separated list of per-slot entries with the
+fields: `slot,x,y,vx,vy,bounciness,magnetMul,flags,liquidTimer,iters,
+downhillStuck,magnetStuck,spinningStuck,strokeStartX,strokeStartY,shoreX,
+shoreY,seedHex`. Numbers carry up to 6 decimals; floats trim trailing zeros
+so equal-on-the-wire snapshots compare bit-exact. `flags` is a bit-packed
+boolean: stopped(1), inHole(2), onHole(4), onLiquid(8), teleported(16),
+causedByShot(32). `seedHex` is the lowercase hex of the slot's `Seed.rnd`
+(the active 48-bit LCG state) so the corrected client's RNG stream re-aligns.
+
+The server resolves once every expected observer has chimed in, or after
+`RECOVERY_RESPONSE_TIMEOUT_MS = 600 ms`, whichever comes first.
+
+### 3. Resolution + scheduled snap-apply
+
+The resolver (`port/shared/src/snap-resolver.ts`):
+1. Drops any `late=1` observers from the vote (their state is stale by
+   self-report; they're the loser by definition).
+2. Per-slot, clusters remaining reports by position within the epsilon and
+   picks the largest cluster's centroid.
+3. On a tie (1-1-1 splits, 2-player rooms with disagreement), defers to the
+   server-side physics tiebreaker. Today the tiebreaker hook returns null;
+   the resolver falls back to a stable lowest-observerId pick - deterministic,
+   ping-blind, no cohort bias. The hook is the integration point for
+   future server-side authoritative simulation.
+
+```
+server → d K game<TAB>snapapply<TAB>{applyTick}<TAB>{ballsBlob}
+   (broadcast to every active player; clients queue this against their
+    pending-snap queue and apply when worldTick reaches applyTick - same
+    scheduling discipline as beginstroke. The snap drains BEFORE any
+    impulses scheduled at the same tick, so the corrective state lands
+    first and any same-tick stroke acts on the post-correction state)
+```
+
+`{applyTick}` is sized as the current adaptive lookahead plus
+`RECOVERY_APPLY_EXTRA_TICKS = 8` of cushion to absorb the
+RTT-and-a-half between snapreq and snap-apply.
+
+Client-side application snaps every covered slot's ball state (positions,
+velocities, stuck counters, RNG seed, all flags) and re-derives `simulating`
+from whether the snapped state has the ball moving.
+
+### Reset boundaries
+
+All three layers reset at every `starttrack`: server clears
+`ballEndObservations` and any pending recovery sessions, client clears
+`pendingSnaps` and `lastStrokeWasLate`. A new track means a re-anchored
+world clock; cross-track divergence comparison would compare meaningless
+ticks.
+
 ## Live aim preview (cursor stream - port-specific)
 
 Loss-tolerant 15 Hz cursor broadcast for spectator-flavoured UX: every player

@@ -46,3 +46,24 @@ export {
 } from "./tiles.ts";
 
 export { type ToolsArg, izer, tabularize, triangelize, commaize } from "./tools.ts";
+
+export {
+    type BallSnapshotEntry,
+    SNAP_FLAG_STOPPED,
+    SNAP_FLAG_IN_HOLE,
+    SNAP_FLAG_ON_HOLE,
+    SNAP_FLAG_ON_LIQUID,
+    SNAP_FLAG_TELEPORTED,
+    SNAP_FLAG_CAUSED_BY_SHOT,
+    encodeBallSnapshot,
+    decodeBallSnapshot,
+    ballPosDistSq,
+    SNAPSHOT_AGREEMENT_EPSILON_PX,
+} from "./snapshot.ts";
+
+export {
+    resolveSnapshots,
+    type SnapshotReport,
+    type ResolutionResult,
+    type PhysicsTiebreaker,
+} from "./snap-resolver.ts";

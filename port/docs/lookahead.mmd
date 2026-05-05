@@ -1,0 +1,81 @@
+%% Krokkaus determinism: how `apply_tick` keeps a multi-collision cascade
+%% bit-identical across clients with different pings.
+%%
+%% The diagram covers ONE click that triggers a 3-ball cascade:
+%%   Player B clicks → ball B → ball A (krokkaus) → ball A → ball C → wall
+%%
+%% Phases: SYNC (server picks apply_tick) → APPLY (clients drain at the same
+%% worldTick) → CASCADE (pure deterministic physics, no further sync).
+%%
+%% Render with any Mermaid renderer (e.g. https://mermaid.live).
+
+sequenceDiagram
+    autonumber
+    participant B as Player B
+    participant S as Server
+    participant CA as Client A<br/>(ping=80ms)
+    participant CB as Client B<br/>(ping=10ms)
+
+    Note over S,CB: TRACK SETUP — anchors the shared world clock
+
+    par
+        S-->>CA: starttrack  [E=0ms]
+    and
+        S-->>CB: starttrack  [E=0ms]
+    end
+    Note right of CA: CA: trackStartedAtMs = now<br/>worldTick = 0
+    Note right of CB: CB: trackStartedAtMs = now<br/>worldTick = 0
+    Note over CA,CB: per-client ping cancels in worldTick math:<br/>worldTick(t) = (t − trackStartedAtMs) / 6
+
+    rect rgb(255, 248, 225)
+        Note over B,CB: PHASE 1 — SYNC: server picks apply_tick
+
+        B->>S: click → game beginstroke
+        Note over S: serverTick = elapsed/6<br/>lookahead = max(peer.peakPing) + 20ms<br/>apply_tick = serverTick + ⌈lookahead / 6⌉<br/>(say apply_tick = 100, lookahead = 11t = 66ms)
+
+        par broadcast to ALL
+            S-->>CA: beginstroke [seed, apply_tick=100]
+        and
+            S-->>CB: beginstroke [seed, apply_tick=100]
+        end
+
+        Note right of CA: arrives at CA.worldTick ≈ 89<br/>queue impulse, wait 11 ticks
+        Note right of CB: arrives at CB.worldTick ≈ 89<br/>queue impulse, wait 11 ticks
+    end
+
+    rect rgb(225, 245, 225)
+        Note over CA,CB: PHASE 2 — APPLY: BOTH clients drain at worldTick=100
+
+        Note over CA: drain → applyStrokeImpulse(<br/> ball B, seed, ballCoords, mouseCoords<br/>)<br/>ball B has velocity, simulating=true
+        Note over CB: drain → applyStrokeImpulse(<br/> ball B, seed, ballCoords, mouseCoords<br/>)<br/>BIT-IDENTICAL state
+    end
+
+    rect rgb(225, 235, 250)
+        Note over CA,CB: PHASE 3 — CASCADE: pure deterministic physics<br/>(no packets, no sync, no apply_tick)
+
+        Note over CA: wT=110: B substep5 hits A<br/>(distance≤13px)<br/>handlePlayerCollisions:<br/>vels swap × 0.75
+        Note over CB: wT=110: B substep5 hits A<br/>(IDENTICAL position math)<br/>vels swap × 0.75
+
+        Note over CA: wT=112: A's step pushes A into C<br/>vels swap × 0.75
+        Note over CB: wT=112: A's step pushes A into C<br/>vels swap × 0.75
+
+        Note over CA: wT=115: C hits wall<br/>(restitution by tile id)
+        Note over CB: wT=115: C hits wall<br/>SAME
+
+        Note over CA: wT=140: B,A,C settle<br/>(end-of-stroke positions identical)
+        Note over CB: wT=140: B,A,C settle<br/>(end-of-stroke positions identical)
+    end
+
+    Note over CA,CB: 🟢 SUCCESS — initial sync held, cascade was deterministic for free
+
+    rect rgb(255, 230, 230)
+        Note over CA,CB: ⚠ FAILURE MODE — what happens if Phase 1 misses
+
+        Note right of CA: jitter spike: apply_tick=100 arrives at<br/>CA.worldTick=102 (lookahead under-sized)<br/>⇒ impulse applied LATE, ball B<br/>2 iters BEHIND on CA
+        Note right of CB: arrived on time: ball B at iter 10<br/>at wT=110 (on schedule)
+        Note over CA: wT=110: ball B at iter 8 (still 5px shy of A)<br/>NO collision triggered yet
+        Note over CB: wT=110: ball B at iter 10 → hits A → A.vel set
+        Note over CA: wT=112: ball B at iter 10 → hits A,<br/>but at slightly different geometry
+        Note over CB: wT=112: A already moving →<br/>A pushes C
+        Note over CA,CB: 🔴 cascade AMPLIFIES the 2-tick offset:<br/>ball A and C end at different (x,y) on CA vs CB
+    end

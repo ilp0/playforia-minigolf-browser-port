@@ -34,4 +34,17 @@ export class Seed {
     c.rnd = this.rnd;
     return c;
   }
+
+  /** Raw 48-bit internal state. Used by the snapshot-recovery protocol so a
+   *  diverged client can be snapped to the room's consensus seed mid-stroke. */
+  getState(): bigint {
+    return this.rnd;
+  }
+
+  /** Restore raw 48-bit internal state. Counterpart to {@link getState}.
+   *  Bypasses the constructor's `^ MULT` step so a round-trip via getState/
+   *  setState is identity. */
+  setState(rnd: bigint): void {
+    this.rnd = rnd & MASK48;
+  }
 }

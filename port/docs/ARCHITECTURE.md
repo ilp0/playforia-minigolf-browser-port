@@ -159,10 +159,24 @@ identical ball trajectories given identical initial conditions.
 6. **Server is scoreboard authority**: stroke counts and hole-in flags come
    from server `endstroke` broadcasts. Client just mirrors the numbers it gets
    back.
+7. **Desync recovery as a hardening layer**: the unfixable parts of lockstep
+   (cross-engine float drift, sub-lookahead jitter, late retransmits) can
+   leave clients with disagreeing ball positions at end-of-stroke. Every
+   client emits a `ballend` observation when their local sim transitions
+   any ball to rest; the server compares positions across observers and,
+   on disagreement beyond a 0.5 px epsilon, fires a `snapreq` cycle that
+   collects full snapshots from all clients, runs majority-vote resolution
+   (with self-reported late-appliers excluded), and broadcasts a `snapapply`
+   tagged with an apply_tick so every client snaps at the same logical
+   iteration. Detection at the natural quiescence boundary keeps corrections
+   visually invisible (the ball "settles" at the corrected position rather
+   than teleporting mid-flight). See PROTOCOL.md "Desync recovery".
 
 The 2-client smoke test `port/server/src/test-multi.ts` asserts that both
 clients receive identical seeds for each stroke and that the two stroke seeds
-are different from each other.
+are different from each other. The snapshot resolver has unit tests in
+`port/shared/src/snap-resolver.test.ts` covering majority voting, the
+late-applier exclusion rule, epsilon clustering, and the tiebreaker hook.
 
 ## Where things live
 

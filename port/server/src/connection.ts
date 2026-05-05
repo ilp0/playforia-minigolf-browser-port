@@ -44,6 +44,14 @@ const INITIAL_AVG_PING_MS = 60;
  */
 const PING_EWMA_ALPHA = 0.3;
 /**
+ * Number of recent pings retained for the rolling MAX (used to size krokkaus
+ * lookahead). At a 3-second probe interval that's a 24-second window: enough
+ * for the floor to react down quickly when a network blip clears, but slow
+ * enough that a single low sample can't shrink lookahead before peer-state
+ * jitter has actually settled.
+ */
+const RECENT_PING_SAMPLES = 8;
+/**
  * Sanity cap on a single RTT sample. Anything larger is treated as a glitch
  * (clock skew, paused process, dropped frame) and ignored rather than
  * dragging the EWMA into the seconds-range.
@@ -78,13 +86,19 @@ export class Connection {
      */
     private pingSentMs: number[] = [];
     /**
-     * EWMA of measured round-trip times in ms. Read by
-     * `GolfGame.getStrokeLookaheadTicks` to size krokkaus apply_tick
-     * lookahead per the worst-pinged player in the room. Initialized to a
-     * defensive default so a stroke fired right after login still has a
-     * reasonable lookahead before any pong has come back.
+     * EWMA of measured round-trip times in ms. Useful as a coarse signal
+     * for analytics; the lookahead computation uses {@link peakPingMs}
+     * instead because mean ping understates jitter.
      */
     public avgPingMs = INITIAL_AVG_PING_MS;
+    /**
+     * Rolling window of recent RTT samples (newest at the end). Used to
+     * compute `peakPingMs`, which sizes krokkaus apply_tick lookahead -
+     * picking the worst recent sample (rather than the mean) absorbs
+     * jitter that would otherwise put a beginstroke broadcast on the
+     * "in the past" side of apply_tick on the unluckiest client.
+     */
+    private recentPings: number[] = [];
 
     public readonly ws: WebSocket;
     public readonly server: GolfServer;
@@ -243,6 +257,25 @@ export class Connection {
         const rtt = Date.now() - sent;
         if (rtt < 0 || rtt > RTT_SAMPLE_CEILING_MS) return;
         this.avgPingMs = this.avgPingMs * (1 - PING_EWMA_ALPHA) + rtt * PING_EWMA_ALPHA;
+        this.recentPings.push(rtt);
+        if (this.recentPings.length > RECENT_PING_SAMPLES) {
+            this.recentPings.shift();
+        }
+    }
+
+    /**
+     * Worst (max) RTT in the rolling window of {@link RECENT_PING_SAMPLES}
+     * recent samples. Falls back to {@link avgPingMs} before any sample has
+     * been recorded. This is the input to krokkaus lookahead sizing - using
+     * the peak rather than the mean buys headroom against natural ping
+     * jitter, which is exactly what causes "near-miss looks like hit on
+     * one client" desyncs.
+     */
+    get peakPingMs(): number {
+        if (this.recentPings.length === 0) return this.avgPingMs;
+        let max = 0;
+        for (const p of this.recentPings) if (p > max) max = p;
+        return max;
     }
 
     private handleClose(): void {
