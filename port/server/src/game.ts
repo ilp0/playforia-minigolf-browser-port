@@ -1,4 +1,5 @@
 // Game base + GolfGame + TrainingGame. Ports Game.java / GolfGame.java / TrainingGame.java.
+import { performance } from "node:perf_hooks";
 import { tabularize, type Track } from "@minigolf/shared";
 import type { Player } from "./player.ts";
 import type { Lobby } from "./lobby.ts";
@@ -187,6 +188,15 @@ export abstract class Game {
     public broadcastExcept(player: Player, body: string): void {
         this.writeExcluding(player, body);
     }
+
+    /**
+     * Hook called by the server's reconnect path so a reattached player can
+     * resync any per-game clock state (e.g. GolfGame's worldTick anchor).
+     * Default no-op; subclasses override when relevant.
+     */
+    sendReconnectResync(_player: Player): void {
+        // no-op
+    }
 }
 
 export class GolfGame extends Game {
@@ -201,11 +211,14 @@ export class GolfGame extends Game {
      */
     protected strokeSeedCounter = 0;
     /**
-     * Wall-clock ms when the current track was started (broadcast). Used to
-     * compute every stroke's `apply_tick` so clients with different pings
-     * still apply the impulse at the same shared world tick. Set by
-     * `markTrackStart`; persisted unchanged when sending personal starttracks
-     * to late joiners (so their local worldTick aligns with peers').
+     * Monotonic ms (`performance.now()`) when the current track was started
+     * (broadcast). Used to compute every stroke's `apply_tick` so clients
+     * with different pings still apply the impulse at the same shared world
+     * tick. Set by `markTrackStart`; persisted unchanged when sending
+     * personal starttracks to late joiners (so their local worldTick aligns
+     * with peers'). We use `performance.now()` (not `Date.now()`) so an NTP
+     * correction can't shove every stroke's apply_tick into the past or
+     * future of where clients expect it.
      */
     protected trackStartedAtMs = 0;
     public playerStrokesThisTrack: number[];
@@ -360,18 +373,34 @@ export class GolfGame extends Game {
     }
 
     /**
-     * Ticks of lookahead added to `apply_tick`. Higher = more input lag but
-     * more resilient to ping jitter (clients won't apply the impulse late).
-     * Krokkaus / collision-on games need this so all clients evaluate
-     * ball-vs-ball collisions at the same world tick. Collision-off games
-     * keep it at 0 (each ball independent, no inter-ball deterministic gate).
+     * Ticks of lookahead added to `apply_tick`. The lookahead is what makes
+     * cross-client krokkaus collisions deterministic under ping jitter -
+     * every client buffers the impulse and applies it at the same world
+     * tick - but it adds visible input lag (~lookahead × 6 ms). We pay
+     * that cost ONLY when krokkaus can actually engage:
+     *
+     *   - `collision: 1` AND a peer who could realistically be hit.
+     *   - Single-player has no peer, so the cost is dead weight - subclasses
+     *     override to 0 (see `TrainingGame`).
+     *   - `collision: 0` games (daily, multi-collision-off) skip it: each
+     *     ball is independent, no inter-ball deterministic gate needed.
      */
     protected getStrokeLookaheadTicks(): number {
         return this.collision === COLLISION_YES ? STROKE_LOOKAHEAD_TICKS : 0;
     }
 
     /**
-     * Mark `Date.now()` as the start of the current track. Called on every
+     * Track elapsed since `markTrackStart`, monotonic. Reads as 0 if the
+     * track hasn't been started yet (defensive; every callsite should have
+     * gone through markTrackStart first).
+     */
+    protected trackElapsedMs(): number {
+        if (this.trackStartedAtMs === 0) return 0;
+        return Math.max(0, performance.now() - this.trackStartedAtMs);
+    }
+
+    /**
+     * Mark NOW (monotonic) as the start of the current track. Called on every
      * BROADCAST starttrack so all clients calibrate their local worldTick to
      * the same moment (their per-client receipt times differ only by ping,
      * which cancels in the apply_tick math). Personal starttracks to late
@@ -379,7 +408,26 @@ export class GolfGame extends Game {
      * already-running clock via the `E <elapsedMs>` field.
      */
     protected markTrackStart(): void {
-        this.trackStartedAtMs = Date.now();
+        this.trackStartedAtMs = performance.now();
+    }
+
+    /**
+     * Override of the base hook: send the reconnecting player a fresh
+     * `game tracktick <elapsedMs>` so their local `trackStartedAtMs`
+     * re-anchors to the server's clock. The client's `performance.now()`
+     * survives a WS reconnect, but if the OS suspended (laptop sleep)
+     * during the disconnect, the local clock paused and `worldTick` is
+     * now behind. Recalibrating closes that gap.
+     *
+     * No-op when the track hasn't started yet (defensive; the server
+     * doesn't grant grace mid-game today, but the hook is in place for the
+     * future mid-game-grace feature noted in KNOWN_ISSUES).
+     */
+    override sendReconnectResync(player: Player): void {
+        if (this.trackStartedAtMs === 0) return;
+        player.connection.sendDataRaw(
+            tabularize("game", "tracktick", Math.floor(this.trackElapsedMs())),
+        );
     }
 
     /**
@@ -389,14 +437,13 @@ export class GolfGame extends Game {
      * `E 0`; personal sends to a late joiner emit the actual elapsed.
      */
     protected formatStartTrack(buff: string, stats: TrackStats): string {
-        const elapsed = Math.max(0, Date.now() - this.trackStartedAtMs);
         return tabularize(
             "game",
             "starttrack",
             buff,
             this.gameId,
             networkSerialize(stats),
-            `E ${elapsed}`,
+            `E ${Math.floor(this.trackElapsedMs())}`,
         );
     }
 
@@ -420,8 +467,8 @@ export class GolfGame extends Game {
         // 32-bit composite - distinct per (game, stroke) so all clients pick
         // up a fresh independent random stream.
         const seed = ((this.gameId & 0xffff) << 16) | (this.strokeSeedCounter & 0xffff);
-        const elapsedMs = Math.max(0, Date.now() - this.trackStartedAtMs);
-        const applyTick = ((elapsedMs / PHYSICS_STEP_MS) | 0) + this.getStrokeLookaheadTicks();
+        const applyTick =
+            ((this.trackElapsedMs() / PHYSICS_STEP_MS) | 0) + this.getStrokeLookaheadTicks();
         this.writeAll(
             tabularize("game", "beginstroke", playerId, ballCoords, mouseCoords, seed, applyTick),
         );
@@ -886,6 +933,17 @@ export class DailyGame extends GolfGame {
 }
 
 export class TrainingGame extends GolfGame {
+    /**
+     * No peer to collide with in single-player, so don't pay the krokkaus
+     * lookahead. Apply impulse the same tick the broadcast arrives - every
+     * stroke feels as snappy as the network round-trip allows. (The base
+     * COLLISION_YES flag is preserved for Java parity in case any peer
+     * code reads it; the lookahead is what controls perceived input lag.)
+     */
+    protected override getStrokeLookaheadTicks(): number {
+        return 0;
+    }
+
     constructor(
         player: Player,
         gameId: number,

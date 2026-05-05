@@ -1241,6 +1241,28 @@ export class GamePanel implements Panel {
         this.dailyDateKey = f[2] ?? null;
         this.updateSkipButtonVisibility();
         break;
+      case "tracktick":
+        // Post-reconnect resync (port extension). Server resends current
+        // track-elapsed ms so the client can re-anchor `trackStartedAtMs`
+        // after a WS reconnect that may have spanned an OS sleep (in which
+        // case `performance.now()` paused locally and our worldTick would
+        // be behind the server's).
+        // wire: game tracktick <elapsedMs>
+        {
+          const elapsedRaw = parseInt(f[2] ?? "", 10);
+          if (Number.isFinite(elapsedRaw) && elapsedRaw >= 0) {
+            this.trackStartedAtMs = performance.now() - elapsedRaw;
+            this.worldTick = Math.floor(elapsedRaw / PHYSICS_STEP_MS);
+            // Pending impulses were keyed against the stale clock; their
+            // applyTicks could now be in the past or far future. Drop them
+            // - the server knows we're reconnecting and will retransmit
+            // anything that mattered (today this is theoretical: mid-game
+            // grace isn't supported, so on reconnect we're always in the
+            // lobby with no pending strokes).
+            this.pendingImpulses = [];
+          }
+        }
+        break;
       default:
         break;
     }

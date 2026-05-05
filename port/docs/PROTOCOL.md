@@ -277,12 +277,16 @@ deterministic across clients, the port adds a shared world-tick clock:
   same integer on every client at the same wall-clock moment (the per-client
   ping offsets cancel out in the math).
 
-- **apply_tick** (per stroke) is `(server_elapsedMs / 6) + lookahead_ticks`
-  where `lookahead_ticks` defaults to 30 (≈180 ms) for collision-on games and
-  0 otherwise. Every client buffers the impulse and applies it when its
-  local `worldTick` reaches `apply_tick`. The shooter and every watcher land
-  on the same iteration, so peer ball positions match at the moment of
-  overlap and the per-substep krokkaus check produces identical results.
+- **apply_tick** (per stroke) is `(server_elapsedMs / 6) + lookahead_ticks`.
+  The lookahead is paid only when krokkaus can actually engage -
+  multi-player rooms with `collision: 1` use 30 ticks (≈180 ms); single-
+  player and collision-off rooms use 0 (no peer to be deterministic *with*,
+  so apply on the next tick after broadcast - feels as snappy as the
+  network round-trip allows). Every client buffers the impulse and applies
+  it when its local `worldTick` reaches `apply_tick`. The shooter and every
+  watcher land on the same iteration, so peer ball positions match at the
+  moment of overlap and the per-substep krokkaus check produces identical
+  results.
 
 - **Catchup**: clients advance `worldTick` clock-based regardless of whether
   any ball is moving (the per-ball `step()` is still gated on motion). A tab
