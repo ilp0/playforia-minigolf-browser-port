@@ -1,4 +1,5 @@
 // Game base + GolfGame + TrainingGame. Ports Game.java / GolfGame.java / TrainingGame.java.
+import { performance } from "node:perf_hooks";
 import { tabularize, type Track } from "@minigolf/shared";
 import type { Player } from "./player.ts";
 import type { Lobby } from "./lobby.ts";
@@ -23,6 +24,33 @@ export const SCORING_WEIGHT_END_NONE = 0;
 export const PERM_EVERYONE = 0;
 export const PERM_REGISTERED = 1;
 export const PERM_VIP = 2;
+
+/**
+ * Wall-clock ms per physics iteration. Mirrors the client's `PHYSICS_STEP_MS`
+ * in `web/src/game/physics.ts` - 6ms = 166 Hz, matching Java GameCanvas.
+ * Used to map server elapsed-ms to a worldTick number (and back, on the client).
+ */
+export const PHYSICS_STEP_MS = 6;
+
+/**
+ * Adaptive `apply_tick` lookahead constants. Lookahead is what makes
+ * cross-client krokkaus collisions deterministic under ping jitter, but it
+ * also adds visible input lag - so we size it to the worst-pinged player in
+ * the room rather than picking a one-size-fits-all default.
+ *
+ * Formula (in `GolfGame.getStrokeLookaheadTicks`):
+ *   ms = max(player.connection.avgPingMs over players in this room) + LOOKAHEAD_SAFETY_MS
+ *   ticks = ceil(ms / PHYSICS_STEP_MS)
+ *   clamp(ticks, [MIN_LOOKAHEAD_TICKS, MAX_LOOKAHEAD_TICKS])
+ *
+ * The `+SAFETY_MS` covers natural WAN jitter on top of the steady-state RTT.
+ * The min keeps a couple of ticks even on a perfect-LAN room (so first-stroke
+ * tail-of-jitter doesn't slip through). The max caps the worst-case input
+ * lag - beyond ~360ms a player's connection is too laggy to play either way.
+ */
+export const LOOKAHEAD_SAFETY_MS = 20;
+export const MIN_LOOKAHEAD_TICKS = 3;
+export const MAX_LOOKAHEAD_TICKS = 60;
 
 export abstract class Game {
     protected players: Player[] = [];
@@ -171,6 +199,15 @@ export abstract class Game {
     public broadcastExcept(player: Player, body: string): void {
         this.writeExcluding(player, body);
     }
+
+    /**
+     * Hook called by the server's reconnect path so a reattached player can
+     * resync any per-game clock state (e.g. GolfGame's worldTick anchor).
+     * Default no-op; subclasses override when relevant.
+     */
+    sendReconnectResync(_player: Player): void {
+        // no-op
+    }
 }
 
 export class GolfGame extends Game {
@@ -184,6 +221,17 @@ export class GolfGame extends Game {
      * Seed instances and compute identical physics.
      */
     protected strokeSeedCounter = 0;
+    /**
+     * Monotonic ms (`performance.now()`) when the current track was started
+     * (broadcast). Used to compute every stroke's `apply_tick` so clients
+     * with different pings still apply the impulse at the same shared world
+     * tick. Set by `markTrackStart`; persisted unchanged when sending
+     * personal starttracks to late joiners (so their local worldTick aligns
+     * with peers'). We use `performance.now()` (not `Date.now()`) so an NTP
+     * correction can't shove every stroke's apply_tick into the past or
+     * future of where clients expect it.
+     */
+    protected trackStartedAtMs = 0;
     public playerStrokesThisTrack: number[];
     public playerStrokesTotal: number[];
 
@@ -269,12 +317,13 @@ export class GolfGame extends Game {
         const stats: TrackStats = this.trackManager.getStats(this.tracks[0]);
 
         this.writeAll(tabularize("game", "resetvoteskip"));
-        // game\tstarttrack\t<playStatus>\t<gameId>\t<networkSerialize>
+        // game\tstarttrack\t<playStatus>\t<gameId>\t<networkSerialize>\tE <elapsedMs>
         // Async play: no `startturn` follows; clients can shoot whenever their own
         // ball is at rest. The strokeSeedCounter resets per track so each new
         // track's strokes start from seed 0 (combined with gameId for entropy).
         this.strokeSeedCounter = 0;
-        this.writeAll(tabularize("game", "starttrack", buff, this.gameId, networkSerialize(stats)));
+        this.markTrackStart();
+        this.writeAll(this.formatStartTrack(buff, stats));
     }
 
     handlePacket(player: Player, fields: string[]): boolean {
@@ -335,12 +384,103 @@ export class GolfGame extends Game {
     }
 
     /**
-     * Server assigns a unique seed for THIS stroke and broadcasts to all clients
-     * (including the shooter). Each client constructs `Seed(seed)` and runs
-     * identical physics, guaranteeing every client sees the same trajectory.
+     * Ticks of lookahead added to `apply_tick`. The lookahead is what makes
+     * cross-client krokkaus collisions deterministic under ping jitter -
+     * every client buffers the impulse and applies it at the same world
+     * tick - but it adds visible input lag (~lookahead × 6 ms). We size it
+     * to the WORST-pinged player in the room (their ping + safety) so a
+     * LAN lobby gets snappy strokes (~3 ticks ≈ 18 ms) while a high-RTT
+     * lobby still tolerates the jitter on its slowest connection.
+     *
+     *   - `collision: 0` games skip it (each ball independent). Returns 0.
+     *   - Single-player has no peer; `TrainingGame` overrides to 0.
+     *   - `collision: 1` games: `ceil((maxPing + SAFETY_MS) / 6)` clamped to
+     *     `[MIN_LOOKAHEAD_TICKS, MAX_LOOKAHEAD_TICKS]`.
+     *
+     * Recomputed per-stroke so a player's improving (or degrading) ping
+     * during a session is reflected in the very next stroke they take.
+     */
+    protected getStrokeLookaheadTicks(): number {
+        if (this.collision !== COLLISION_YES) return 0;
+        let maxPingMs = 0;
+        for (const p of this.players) {
+            const ping = p.connection.avgPingMs;
+            if (ping > maxPingMs) maxPingMs = ping;
+        }
+        const ticks = Math.ceil((maxPingMs + LOOKAHEAD_SAFETY_MS) / PHYSICS_STEP_MS);
+        if (ticks < MIN_LOOKAHEAD_TICKS) return MIN_LOOKAHEAD_TICKS;
+        if (ticks > MAX_LOOKAHEAD_TICKS) return MAX_LOOKAHEAD_TICKS;
+        return ticks;
+    }
+
+    /**
+     * Track elapsed since `markTrackStart`, monotonic. Reads as 0 if the
+     * track hasn't been started yet (defensive; every callsite should have
+     * gone through markTrackStart first).
+     */
+    protected trackElapsedMs(): number {
+        if (this.trackStartedAtMs === 0) return 0;
+        return Math.max(0, performance.now() - this.trackStartedAtMs);
+    }
+
+    /**
+     * Mark NOW (monotonic) as the start of the current track. Called on every
+     * BROADCAST starttrack so all clients calibrate their local worldTick to
+     * the same moment (their per-client receipt times differ only by ping,
+     * which cancels in the apply_tick math). Personal starttracks to late
+     * joiners deliberately do NOT call this - the joiner picks up the
+     * already-running clock via the `E <elapsedMs>` field.
+     */
+    protected markTrackStart(): void {
+        this.trackStartedAtMs = performance.now();
+    }
+
+    /**
+     * Override of the base hook: send the reconnecting player a fresh
+     * `game tracktick <elapsedMs>` so their local `trackStartedAtMs`
+     * re-anchors to the server's clock. The client's `performance.now()`
+     * survives a WS reconnect, but if the OS suspended (laptop sleep)
+     * during the disconnect, the local clock paused and `worldTick` is
+     * now behind. Recalibrating closes that gap.
+     *
+     * No-op when the track hasn't started yet (defensive; the server
+     * doesn't grant grace mid-game today, but the hook is in place for the
+     * future mid-game-grace feature noted in KNOWN_ISSUES).
+     */
+    override sendReconnectResync(player: Player): void {
+        if (this.trackStartedAtMs === 0) return;
+        player.connection.sendDataRaw(
+            tabularize("game", "tracktick", Math.floor(this.trackElapsedMs())),
+        );
+    }
+
+    /**
+     * Build the starttrack body, appending the port-extension `E <elapsedMs>`
+     * field so clients can derive the shared `trackStartedAtMs`:
+     * `local_start = performance.now() - elapsedMs`. Fresh broadcasts emit
+     * `E 0`; personal sends to a late joiner emit the actual elapsed.
+     */
+    protected formatStartTrack(buff: string, stats: TrackStats): string {
+        return tabularize(
+            "game",
+            "starttrack",
+            buff,
+            this.gameId,
+            networkSerialize(stats),
+            `E ${Math.floor(this.trackElapsedMs())}`,
+        );
+    }
+
+    /**
+     * Server assigns a unique seed AND a future `apply_tick` for THIS stroke,
+     * then broadcasts both to all clients (including the shooter). The
+     * shared world tick (driven by `trackStartedAtMs`) lets every client land
+     * on the same iteration when applying the impulse, so ball-vs-ball
+     * collisions evaluate against identical peer state on every machine.
      *
      *   wire: client → server  : game beginstroke <ballCoords> <mouseCoords>
-     *         server → all     : game beginstroke <playerId> <ballCoords> <mouseCoords> <seed>
+     *         server → all     : game beginstroke <playerId> <ballCoords>
+     *                            <mouseCoords> <seed> <apply_tick>
      */
     protected beginStroke(p: Player, ballCoords: string, mouseCoords: string): void {
         const playerId = this.getPlayerId(p);
@@ -351,7 +491,11 @@ export class GolfGame extends Game {
         // 32-bit composite - distinct per (game, stroke) so all clients pick
         // up a fresh independent random stream.
         const seed = ((this.gameId & 0xffff) << 16) | (this.strokeSeedCounter & 0xffff);
-        this.writeAll(tabularize("game", "beginstroke", playerId, ballCoords, mouseCoords, seed));
+        const applyTick =
+            ((this.trackElapsedMs() / PHYSICS_STEP_MS) | 0) + this.getStrokeLookaheadTicks();
+        this.writeAll(
+            tabularize("game", "beginstroke", playerId, ballCoords, mouseCoords, seed, applyTick),
+        );
     }
 
     /**
@@ -569,7 +713,8 @@ export class GolfGame extends Game {
             this.playStatus = buff.replace(/t/g, "f");
             this.strokeSeedCounter = 0;
             this.writeAll(tabularize("game", "resetvoteskip"));
-            this.writeAll(tabularize("game", "starttrack", buff, this.gameId, networkSerialize(stats)));
+            this.markTrackStart();
+            this.writeAll(this.formatStartTrack(buff, stats));
         } else {
             this.endGame();
         }
@@ -693,14 +838,14 @@ export class DailyGame extends GolfGame {
         if (this.playStatus.length < idCapacity) {
             this.playStatus = this.playStatus.padEnd(idCapacity, "f");
         }
-        // Personal starttrack so the newcomer renders the map.
+        // Personal starttrack so the newcomer renders the map. Don't reset
+        // trackStartedAtMs - existing players are mid-track; the joiner
+        // calibrates via the `E <elapsedMs>` field in formatStartTrack.
         const stats = this.dailyTrackManager.getStats(this.tracks[0]);
         const buff = "f".repeat(this.players.length);
         player.connection.sendDataRaw(tabularize("game", "start"));
         player.connection.sendDataRaw(tabularize("game", "resetvoteskip"));
-        player.connection.sendDataRaw(
-            tabularize("game", "starttrack", buff, this.gameId, networkSerialize(stats)),
-        );
+        player.connection.sendDataRaw(this.formatStartTrack(buff, stats));
         // Tell the client to render this game in daily mode (ghosts, share
         // overlay on end, etc.). Sent after starttrack so the panel is ready.
         player.connection.sendDataRaw(tabularize("game", "dailymode", this.dateKey));
@@ -711,9 +856,8 @@ export class DailyGame extends GolfGame {
         const stats = this.dailyTrackManager.getStats(this.tracks[0]);
         const buff = "f".repeat(this.players.length);
         this.writeAll(tabularize("game", "resetvoteskip"));
-        this.writeAll(
-            tabularize("game", "starttrack", buff, this.gameId, networkSerialize(stats)),
-        );
+        this.markTrackStart();
+        this.writeAll(this.formatStartTrack(buff, stats));
     }
 
     /** Single track only - no auto-advance. */
@@ -813,6 +957,17 @@ export class DailyGame extends GolfGame {
 }
 
 export class TrainingGame extends GolfGame {
+    /**
+     * No peer to collide with in single-player, so don't pay the krokkaus
+     * lookahead. Apply impulse the same tick the broadcast arrives - every
+     * stroke feels as snappy as the network round-trip allows. (The base
+     * COLLISION_YES flag is preserved for Java parity in case any peer
+     * code reads it; the lookahead is what controls perceived input lag.)
+     */
+    protected override getStrokeLookaheadTicks(): number {
+        return 0;
+    }
+
     constructor(
         player: Player,
         gameId: number,
@@ -1030,9 +1185,9 @@ export class MultiGame extends GolfGame {
 
         player.connection.sendDataRaw(tabularize("game", "start"));
         player.connection.sendDataRaw(tabularize("game", "resetvoteskip"));
-        player.connection.sendDataRaw(
-            tabularize("game", "starttrack", buff, this.gameId, networkSerialize(stats)),
-        );
+        // Personal late-join: don't reset trackStartedAtMs - the joiner picks
+        // up the existing players' shared clock via `E <elapsedMs>`.
+        player.connection.sendDataRaw(this.formatStartTrack(buff, stats));
         // Tell the joiner which configured track this is so their HUD reads
         // "Track N/M" matching the room rather than "Track 1/M".
         player.connection.sendDataRaw(
@@ -1172,9 +1327,8 @@ export class MultiGame extends GolfGame {
         const stats = this.trackManager.getStats(this.practiceTrack);
         this.writeAll(tabularize("game", "start"));
         this.writeAll(tabularize("game", "resetvoteskip"));
-        this.writeAll(
-            tabularize("game", "starttrack", buff, this.gameId, networkSerialize(stats)),
-        );
+        this.markTrackStart();
+        this.writeAll(this.formatStartTrack(buff, stats));
         // Tell clients to render this as practice (HUD shows "Practice", no
         // per-hole columns). Sent after `starttrack` so the panel has the
         // track loaded by the time it flips into practice mode.
@@ -1208,9 +1362,8 @@ export class MultiGame extends GolfGame {
         const stats = this.trackManager.getStats(this.practiceTrack);
         player.connection.sendDataRaw(tabularize("game", "start"));
         player.connection.sendDataRaw(tabularize("game", "resetvoteskip"));
-        player.connection.sendDataRaw(
-            tabularize("game", "starttrack", buff, this.gameId, networkSerialize(stats)),
-        );
+        // Personal late-join: don't reset trackStartedAtMs.
+        player.connection.sendDataRaw(this.formatStartTrack(buff, stats));
         player.connection.sendDataRaw(tabularize("game", "practicemode", "t"));
 
         // Replay completion state for peers who already finished this track.
@@ -1340,9 +1493,8 @@ export class MultiGame extends GolfGame {
         this.playStatus = buff;
         const stats = this.trackManager.getStats(this.practiceTrack);
         this.writeAll(tabularize("game", "resetvoteskip"));
-        this.writeAll(
-            tabularize("game", "starttrack", buff, this.gameId, networkSerialize(stats)),
-        );
+        this.markTrackStart();
+        this.writeAll(this.formatStartTrack(buff, stats));
     }
 
     /** Real-game start. Wipes any practice residue (track ref + per-player

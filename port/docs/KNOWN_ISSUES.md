@@ -37,10 +37,6 @@ Likely candidates:
 
 Things we deferred for MVP that the original Java game has:
 
-- **Player-player ball collision.** Java has it gated on `collision: 1`; we
-  ignore the flag. Adding it has determinism implications - any per-iteration
-  call ordering must match between clients. The collision math is in
-  `GameCanvas.handlePlayerCollisions`.
 - **Sound playback.** All 8 .wav files are bundled in
   `port/web/public/sound/shared/` but the client never plays them. Need
   Web Audio integration: `gamemove` on stroke, `winner`/`loser` on game end,
@@ -133,6 +129,23 @@ A few non-obvious pitfalls when modifying things:
   `starttrack` (next hole) the map rebuilds from the original `T` line.
 
 ## Resolved (kept for posterity)
+
+- **Krokkaus / ball-vs-ball collision desyncs under ping jitter.** Initial
+  port applied each `beginstroke` impulse synchronously on packet receipt,
+  so each client's "iteration count of ball A at the moment ball B starts"
+  was tied to local wall-clock packet arrival - small ping deltas became
+  multi-iteration offsets, and the per-substep overlap check produced
+  different results on each client. Resolved by anchoring the world clock
+  to a shared `trackStartedAtMs` (calibrated via the new `E <elapsedMs>`
+  field on starttrack) and adding a server-issued `apply_tick` to every
+  beginstroke broadcast: each client buffers the impulse and applies it
+  when its local `worldTick` reaches `apply_tick`. Default lookahead is
+  30 ticks (180 ms) for collision-on games, 0 for collision-off. Files:
+  `port/server/src/game.ts` (`trackStartedAtMs`, `markTrackStart`,
+  `formatStartTrack`, `getStrokeLookaheadTicks`, `beginStroke`),
+  `port/web/src/panels/game.ts` (`trackStartedAtMs`, `worldTick`,
+  `pendingImpulses`, `applyBeginStroke`, `runWorldTick`).
+
 
 - **`test-fullflow.ts` and `test-handshake.ts` were stale (predated `lobby
   tagcounts`).** Both now drain frames via predicate matchers

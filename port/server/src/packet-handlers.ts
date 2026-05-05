@@ -39,8 +39,12 @@ register({
 register({
     type: PacketType.COMMAND,
     pattern: /^pong$/,
-    handle: () => {
-        // No-op; activity timestamp already updated by Connection.handleRawMessage.
+    handle: (_server, conn) => {
+        // Match the pong to the oldest in-flight ping we sent and fold the
+        // resulting RTT into the connection's avgPingMs EWMA, which feeds
+        // adaptive apply_tick lookahead for krokkaus games. Activity
+        // timestamp was already updated in Connection.handleRawMessage.
+        conn.recordPong();
     },
 });
 

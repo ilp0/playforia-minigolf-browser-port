@@ -58,14 +58,22 @@ turn-arbiter required. The server is now a thin relay for stroke events plus
 the authority for the per-stroke RNG seed.
 
 The determinism contract is now (see [Determinism](#determinism) below):
-1. Server picks a unique `seed: u32` for every `beginstroke`.
+1. Server picks a unique `seed: u32` for every `beginstroke`, AND picks an
+   absolute `apply_tick` (a future world-tick number) at which all clients
+   apply the impulse.
 2. Server broadcasts `game beginstroke <playerId> <ballCoords> <mouseCoords>
-   <seed>` to **all** clients (including the shooter).
-3. Each client constructs `Seed(seed)` and runs `applyStrokeImpulse` from
-   identical inputs. The physics is fully deterministic so every client
-   computes byte-identical trajectories.
+   <seed> <apply_tick>` to **all** clients (including the shooter).
+3. Each client buffers the impulse against `apply_tick` and constructs
+   `Seed(seed)` for `applyStrokeImpulse` when its local `worldTick` reaches
+   that value. The physics is fully deterministic so every client computes
+   byte-identical trajectories from the shared starting moment.
 4. Each ball has its **own** `PhysicsContext` with its **own** `Seed`, so two
    simultaneous strokes can't interleave random calls.
+5. The shared `worldTick` is derived from `performance.now() -
+   trackStartedAtMs`; clients calibrate `trackStartedAtMs` from the server's
+   `E <elapsedMs>` field on every `starttrack`. This anchors all clients to
+   the same iteration count regardless of ping, which is what makes
+   ball-vs-ball collision deterministic in async play.
 
 ### Tile rendering
 Java composites tiles pixel-by-pixel from three sprite atlases
@@ -107,9 +115,16 @@ A simplified-but-faithful port of `GameCanvas.run`'s inner loop, located in
   Java's `loopStuckCounter > 4000` threshold; per-ball stuck counters and the
   bouncy-block decay typically settle strokes well before this cap.
 
+- **Krokkaus / ball-vs-ball collision** (gated on `collision: 1`) - per-substep
+  overlap test in `physics.ts:step` against a shared `peers[]` array of live
+  `BallState` refs. On overlap, the normal-direction velocities are swapped
+  and both balls' velocities are scaled by 0.75 (Java damping). Cross-client
+  determinism is anchored by the shared `worldTick` + server-issued
+  `apply_tick` (see [Determinism](#determinism)).
+
 Not implemented: sand/ice surface special handling beyond the friction table,
 breakable block (40-43) visual decay (bounce works; the wall doesn't "break"
-visually), player-player ball collision (gated on `collision: 1` in Java).
+visually).
 
 ### Determinism
 The single most important invariant in the codebase. Every client must compute
@@ -132,7 +147,16 @@ identical ball trajectories given identical initial conditions.
    broadcast (which includes the seed). Then everyone - shooter and watchers -
    apply the impulse from identical inputs. This eliminates the "shooter ran
    ahead by one frame" desync class.
-5. **Server is scoreboard authority**: stroke counts and hole-in flags come
+5. **Shared world-tick + apply_tick**: server tags each `beginstroke` broadcast
+   with `apply_tick = floor(server_elapsedMs / 6) + lookahead`. Clients buffer
+   the impulse and apply when their local `worldTick` reaches `apply_tick`.
+   `worldTick` advances continuously at 166 Hz from the moment `starttrack`
+   was received (calibrated via the `E <elapsedMs>` field, port extension);
+   the per-client ping offset cancels in the math so all clients land on the
+   same iteration. **This is what makes async-mode ball-vs-ball collision
+   deterministic** - peer ball positions at the moment of overlap match
+   across clients with different pings.
+6. **Server is scoreboard authority**: stroke counts and hole-in flags come
    from server `endstroke` broadcasts. Client just mirrors the numbers it gets
    back.
 
@@ -251,11 +275,19 @@ will desync multiplayer. Specifically:
 - **Don't** apply impulse on the shooter's click. Wait for the server
   broadcast.
 - **Don't** make the physics frame-rate-dependent. The 166 Hz is fixed by
-  `PHYSICS_STEP_MS = 6` and an accumulator in `game.ts:startLoop`.
-- **Don't** add player-player collision without thinking carefully - Java
-  has it but it's gated on `collision: 1` and currently NOT ported. Adding
-  it requires care because both balls' state mutates, which can desync if
-  any per-iteration call differs.
+  `PHYSICS_STEP_MS = 6` and the clock-based `worldTick` advance in
+  `panels/game.ts:startLoop`.
+- **Don't** advance `worldTick` based on motion. It MUST run continuously
+  from `trackStartedAtMs` so server-issued `apply_tick`s line up across
+  clients regardless of which client had balls moving when. Per-ball
+  `step()` is still motion-gated; only the counter is unconditional.
+- **Don't** apply a `beginstroke` impulse synchronously in the packet
+  handler if `apply_tick` is set. Queue it in `pendingImpulses` and let
+  the tick loop drain it when `worldTick` reaches the apply tick.
+- **Don't** `markTrackStart()` on personal `starttrack` sends to a late
+  joiner. They MUST inherit the existing players' shared clock via the
+  `E <elapsedMs>` field, otherwise their `worldTick` runs ahead and every
+  apply_tick they see is "in the past" → applies late.
 
 ## Run / dev / deploy
 

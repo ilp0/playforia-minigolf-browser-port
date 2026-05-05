@@ -155,14 +155,31 @@ async function main(): Promise<void> {
             "B sees B's stroke broadcast",
         );
 
-        const seedAonA = aGotA.split("\t").pop();
-        const seedAonB = bGotA.split("\t").pop();
-        const seedBonA = aGotB.split("\t").pop();
-        const seedBonB = bGotB.split("\t").pop();
+        // Wire: `d <seq> game\tbeginstroke\t<id>\t<ball>\t<mouse>\t<seed>\t<apply_tick>`.
+        // After tab-split: [0]="d <seq> game", [1]="beginstroke", [2]=id,
+        // [3]=ball, [4]=mouse, [5]=seed, [6]=apply_tick. Indexed lookup
+        // (the trailing `apply_tick` field replaced the historical
+        // `.split("\t").pop()` shortcut).
+        const seedAonA = aGotA.split("\t")[5];
+        const seedAonB = bGotA.split("\t")[5];
+        const seedBonA = aGotB.split("\t")[5];
+        const seedBonB = bGotB.split("\t")[5];
         if (seedAonA !== seedAonB) throw new Error(`A's stroke seed differs across clients: ${seedAonA} vs ${seedAonB}`);
         if (seedBonA !== seedBonB) throw new Error(`B's stroke seed differs across clients: ${seedBonA} vs ${seedBonB}`);
         if (seedAonA === seedBonA) throw new Error(`A's stroke seed matches B's - should be unique per stroke`);
         console.log(`[OK] determinism: both clients agree A.seed=${seedAonA}, B.seed=${seedBonA}, and they differ`);
+
+        // Also confirm both clients see the SAME apply_tick for a given
+        // stroke (it's the cross-client world-tick anchor that makes
+        // ball-vs-ball collisions deterministic under varying pings).
+        const applyAonA = aGotA.split("\t")[6];
+        const applyAonB = bGotA.split("\t")[6];
+        const applyBonA = aGotB.split("\t")[6];
+        const applyBonB = bGotB.split("\t")[6];
+        if (applyAonA !== applyAonB) throw new Error(`A's apply_tick differs across clients: ${applyAonA} vs ${applyAonB}`);
+        if (applyBonA !== applyBonB) throw new Error(`B's apply_tick differs across clients: ${applyBonA} vs ${applyBonB}`);
+        if (!applyAonA || !applyBonA) throw new Error(`apply_tick field missing from beginstroke broadcast`);
+        console.log(`[OK] apply_tick: both clients agree A.apply=${applyAonA}, B.apply=${applyBonA}`);
 
         // Each player reports their own ball stopped (not in hole).
         a.sendData("game", "endstroke", 0, "ff");

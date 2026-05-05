@@ -139,18 +139,24 @@ server → d K+6 game<TAB>starttrack<TAB>{playStatus}<TAB>{gameId}<TAB>{trackDat
 ```
 V 1<TAB>A {author}<TAB>N {name}<TAB>T {map}<TAB>C {categories}<TAB>S {settings}
 <TAB>I {plays},{strokes},{bestPar},{numBestPar}<TAB>B {bestPlayer},{bestEpochMs}
-<TAB>R {r0},{r1},...,{r10}
+<TAB>R {r0},{r1},...,{r10}<TAB>E {elapsedMs}
 ```
-The `B` line is omitted if `bestPar < 0`. The `C` and `S` lines are OUR port
-extensions - Java doesn't include them. `S` carries the four-flag visibility
-string (`mines/magnets/teleports/illusion-shadows`, plus the legacy 2-digit
-player-range suffix); use `parseSettingsFlags` from `@minigolf/shared` to
-decode the first four chars. The `S` line is only shipped when the track file
-actually has one (~8% of stock tracks); when absent, the client falls back to
-`ALL_VISIBLE_FLAGS` so mines and magnets render the way they look in the
-editor. Use `extractField(fields, "C ")` / `extractField(fields, "S ")` on
-the client and treat a `null` return from the latter as "no settings - default
-visible".
+The `B` line is omitted if `bestPar < 0`. The `C`, `S` and `E` lines are OUR
+port extensions - Java doesn't include them. `S` carries the four-flag
+visibility string (`mines/magnets/teleports/illusion-shadows`, plus the legacy
+2-digit player-range suffix); use `parseSettingsFlags` from `@minigolf/shared`
+to decode the first four chars. The `S` line is only shipped when the track
+file actually has one (~8% of stock tracks); when absent, the client falls
+back to `ALL_VISIBLE_FLAGS` so mines and magnets render the way they look in
+the editor. Use `extractField(fields, "C ")` / `extractField(fields, "S ")`
+on the client and treat a `null` return from the latter as "no settings -
+default visible".
+
+The `E <elapsedMs>` field carries the server-side track elapsed time at the
+moment of broadcast - 0 for fresh broadcasts, nonzero for personal sends to a
+late joiner. Clients use it to set `trackStartedAtMs = performance.now() -
+elapsedMs`, anchoring the shared `worldTick` clock that drives `apply_tick`
+scheduling for strokes (see "World tick + apply_tick" below).
 
 ## Game info packet (15 fields)
 
@@ -206,10 +212,18 @@ Initiating a stroke:
 ```
 client → d N game<TAB>beginstroke<TAB>{ballCoords}<TAB>{mouseCoords}
    (client does NOT apply impulse - waits for the broadcast)
-server → d K game<TAB>beginstroke<TAB>{playerId}<TAB>{ballCoords}<TAB>{mouseCoords}<TAB>{seed}
+server → d K game<TAB>beginstroke<TAB>{playerId}<TAB>{ballCoords}<TAB>{mouseCoords}<TAB>{seed}<TAB>{apply_tick}
    (broadcast to ALL players including the shooter; seed is the server-assigned
-    32-bit per-stroke seed)
+    32-bit per-stroke seed; apply_tick is the world-tick number at which every
+    client applies the impulse - see "World tick + apply_tick" below)
 ```
+
+The `apply_tick` field is a **port extension** the original Java game lacks.
+Cross-client krokkaus collision determinism depends on it: every client buffers
+the impulse and applies it when its local `worldTick` reaches `apply_tick`, so
+ball-vs-ball overlap evaluates against identical peer state on every machine
+even when pings differ. Older clients that ignore the trailing field would
+fall back to "apply on receipt" (the legacy code path).
 
 `ballCoords` and `mouseCoords` are base-36 4-character encodings of
 `x * 1500 + y * 4 + mode`. The `mode` field carries the right-click
@@ -245,6 +259,53 @@ When the last track is done:
 server → d K game<TAB>end[<TAB>{p0Result}<TAB>{p1Result}...]
    (1 = winner, 0 = draw, -1 = loser; results omitted in single-player)
 ```
+
+## World tick + apply_tick (port-specific - krokkaus determinism)
+
+The original Java game evaluates ball-vs-ball collision (`collision: 1`)
+locally on each client at packet-receipt time. That works in turn-based mode
+because only one ball moves at a time. The async port lets every player shoot
+whenever their ball is at rest, so two balls can be in flight simultaneously
+on one client while a third stroke arrives - and the moment-of-overlap
+between any two balls is sensitive to ping jitter. To keep collisions
+deterministic across clients, the port adds a shared world-tick clock:
+
+- **trackStartedAtMs** (server) is set whenever a fresh `starttrack` is
+  broadcast. The `E <elapsedMs>` field on starttrack lets each client compute
+  `trackStartedAtMs_local = performance.now() - elapsedMs`. Under stable
+  ping, `worldTick(t) = (t - trackStartedAtMs_local) / 6 ms` evaluates to the
+  same integer on every client at the same wall-clock moment (the per-client
+  ping offsets cancel out in the math).
+
+- **apply_tick** (per stroke) is `(server_elapsedMs / 6) + lookahead_ticks`.
+  The lookahead is **adaptive**: the server picks
+  `ceil((max_player_ping_ms + 20) / 6)` clamped to `[3, 60]` ticks for
+  multi-player rooms with `collision: 1`, and 0 for single-player or
+  collision-off rooms. Each connection's `avgPingMs` is an EWMA over RTTs
+  measured from server-initiated `c ping`/`c pong` exchanges every 3 s,
+  so a LAN lobby gets ~18 ms of input lag while a 200 ms-ping lobby
+  tolerates ~220 ms - input lag tracks actual connection quality.
+  Every client buffers the impulse and applies it when its local
+  `worldTick` reaches `apply_tick`. The shooter and every watcher land
+  on the same iteration, so peer ball positions match at the moment of
+  overlap and the per-substep krokkaus check produces identical results.
+
+- **Catchup**: clients advance `worldTick` clock-based regardless of whether
+  any ball is moving (the per-ball `step()` is still gated on motion). A tab
+  returning from background catches up by running the missed iterations;
+  catchup is capped per RAF frame so the browser doesn't stall.
+
+- **Late packets** (`apply_tick < worldTick` at receipt) are applied on the
+  next available tick. This produces a small visible desync until the next
+  `starttrack` resets the world clock; ping spikes larger than the lookahead
+  (180 ms) are the primary trigger.
+
+The single-source-of-truth for the constants is `port/server/src/game.ts`:
+`PHYSICS_STEP_MS = 6`, `LOOKAHEAD_SAFETY_MS = 20`, `MIN_LOOKAHEAD_TICKS = 3`,
+`MAX_LOOKAHEAD_TICKS = 60`. The web client's `port/web/src/game/physics.ts`
+exports the same `PHYSICS_STEP_MS`. Per-connection ping is in
+`port/server/src/connection.ts` (`Connection.avgPingMs`, sampled every
+`RTT_PROBE_INTERVAL_MS = 3000` via the existing `c ping`/`c pong` flow).
 
 ## Live aim preview (cursor stream - port-specific)
 

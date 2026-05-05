@@ -15,8 +15,40 @@ import { logEvent } from "./log.ts";
 // even less). The original Java applet didn't have that problem, but our
 // WebSocket connection does - be generous with the idle window so a quick
 // alt-tab doesn't disconnect anyone mid-game.
-const PING_AFTER_MS = 15_000;
 const CLOSE_AFTER_MS = 60_000;
+/**
+ * How often the server sends a `c ping` regardless of inbound activity. The
+ * RTT it measures (via the matching `c pong`) feeds adaptive `apply_tick`
+ * lookahead in `GolfGame.getStrokeLookaheadTicks` - tighter probing means
+ * ping samples stay fresh during active play, so input lag tracks actual
+ * connection quality rather than a worst-case default.
+ */
+const RTT_PROBE_INTERVAL_MS = 3_000;
+/**
+ * Cap on outstanding (sent-but-not-pong'd) pings. If the queue ever reaches
+ * this size the oldest entry is discarded - prevents unbounded growth on a
+ * stalled or hostile peer that swallows pings.
+ */
+const MAX_PENDING_PINGS = 5;
+/**
+ * Default round-trip estimate for a connection that has yet to record any
+ * pong. Picked so the very first stroke after login uses a reasonable
+ * lookahead (~14 ticks at 60+20ms / 6) instead of either zero (desync risk)
+ * or the hard cap (laggy).
+ */
+const INITIAL_AVG_PING_MS = 60;
+/**
+ * EWMA weight for new RTT samples. Bigger = react faster to changing ping;
+ * smaller = smoother. 0.3 strikes a balance: a fresh sample contributes
+ * 30%, the running average 70%.
+ */
+const PING_EWMA_ALPHA = 0.3;
+/**
+ * Sanity cap on a single RTT sample. Anything larger is treated as a glitch
+ * (clock skew, paused process, dropped frame) and ignored rather than
+ * dragging the EWMA into the seconds-range.
+ */
+const RTT_SAMPLE_CEILING_MS = 30_000;
 /**
  * Defensive cap on the number of newline-separated frames a single WS message
  * may produce. Belt-and-suspenders alongside the WebSocketServer's maxPayload:
@@ -34,7 +66,25 @@ export class Connection {
     public player: Player | null = null;
     public lastActivity: number = Date.now();
     private heartbeatTimer: NodeJS.Timeout | null = null;
+    private rttProbeTimer: NodeJS.Timeout | null = null;
     private closed = false;
+    /**
+     * FIFO of `Date.now()` timestamps for each `c ping` we've sent that we
+     * haven't yet matched to an incoming `c pong`. Each pong pops the
+     * oldest entry; the difference is one RTT sample. The matching is
+     * order-based rather than id-based, which works because client always
+     * pongs in receipt order and we don't lose pongs in normal operation
+     * (TCP-ordered WebSocket).
+     */
+    private pingSentMs: number[] = [];
+    /**
+     * EWMA of measured round-trip times in ms. Read by
+     * `GolfGame.getStrokeLookaheadTicks` to size krokkaus apply_tick
+     * lookahead per the worst-pinged player in the room. Initialized to a
+     * defensive default so a stroke fired right after login still has a
+     * reasonable lookahead before any pong has come back.
+     */
+    public avgPingMs = INITIAL_AVG_PING_MS;
 
     public readonly ws: WebSocket;
     public readonly server: GolfServer;
@@ -87,6 +137,7 @@ export class Connection {
         });
 
         this.heartbeatTimer = setInterval(() => this.checkHeartbeat(), 1_000);
+        this.rttProbeTimer = setInterval(() => this.probeRtt(), RTT_PROBE_INTERVAL_MS);
 
         // Connection-level analytics ping. Fires for every WS upgrade, even
         // ones that abort before login - so we see "browser opened a socket"
@@ -161,9 +212,37 @@ export class Connection {
         const elapsed = Date.now() - this.lastActivity;
         if (elapsed > CLOSE_AFTER_MS) {
             this.close("idle-timeout");
-        } else if (elapsed > PING_AFTER_MS) {
-            this.sendRaw("c ping");
         }
+        // Keepalive pings are subsumed by `probeRtt` (every 3s regardless of
+        // activity), which doubles as both RTT probe and idle nudge.
+    }
+
+    /**
+     * Send a `c ping` and record the send timestamp so we can compute RTT
+     * when the matching `c pong` comes back. Bounded queue (drops oldest)
+     * keeps memory steady on a peer that's swallowing pongs.
+     */
+    private probeRtt(): void {
+        if (this.closed || this.ws.readyState !== this.ws.OPEN) return;
+        if (this.pingSentMs.length >= MAX_PENDING_PINGS) {
+            this.pingSentMs.shift();
+        }
+        this.pingSentMs.push(Date.now());
+        this.sendRaw("c ping");
+    }
+
+    /**
+     * Match the next inbound `c pong` to the oldest unanswered `c ping` and
+     * fold the resulting RTT into `avgPingMs` via EWMA. Called from the
+     * pong packet handler. Out-of-band pongs (no pending pings) and absurd
+     * RTTs are ignored.
+     */
+    recordPong(): void {
+        const sent = this.pingSentMs.shift();
+        if (sent === undefined) return;
+        const rtt = Date.now() - sent;
+        if (rtt < 0 || rtt > RTT_SAMPLE_CEILING_MS) return;
+        this.avgPingMs = this.avgPingMs * (1 - PING_EWMA_ALPHA) + rtt * PING_EWMA_ALPHA;
     }
 
     private handleClose(): void {
@@ -172,6 +251,10 @@ export class Connection {
         if (this.heartbeatTimer) {
             clearInterval(this.heartbeatTimer);
             this.heartbeatTimer = null;
+        }
+        if (this.rttProbeTimer) {
+            clearInterval(this.rttProbeTimer);
+            this.rttProbeTimer = null;
         }
         // Connection-level disconnect - pairs with `client_connect`. The
         // higher-level `player_disconnect` (emitted from server.ts) fires
