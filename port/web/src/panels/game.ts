@@ -1264,6 +1264,21 @@ export class GamePanel implements Panel {
       this.setStatus(t("Port_Game_NoTLine", "Could not load track (no T-line)."));
       return;
     }
+    // Calibrate the shared world clock. `E <elapsedMs>` is a port extension:
+    // 0 for fresh broadcasts (everyone sets trackStartedAtMs ≈ now), nonzero
+    // for personal late-joiner sends so their worldTick aligns with peers.
+    // Absent (older servers) → fall through to "now", same as the legacy
+    // immediate-apply path in handleBeginStroke.
+    const elapsedRaw = extractField(f, "E ");
+    const elapsedMs =
+      elapsedRaw !== null && Number.isFinite(parseInt(elapsedRaw, 10))
+        ? Math.max(0, parseInt(elapsedRaw, 10))
+        : 0;
+    this.trackStartedAtMs = performance.now() - elapsedMs;
+    this.worldTick = Math.floor(elapsedMs / PHYSICS_STEP_MS);
+    // Drop any leftover pending impulses from a previous track - their
+    // apply_ticks were on the prior track's clock and are meaningless now.
+    this.pendingImpulses = [];
     try {
       const parsed = buildMap(tLine, this.atlases);
       this.parsedMap = parsed;
@@ -1385,14 +1400,49 @@ export class GamePanel implements Panel {
 
   /**
    * Server-relayed beginstroke. Format:
-   *   game beginstroke <playerId> <ballCoords> <mouseCoords> <seed>
-   * EVERY client (including the shooter) gets this and applies the impulse here.
+   *   game beginstroke <playerId> <ballCoords> <mouseCoords> <seed> <apply_tick>
+   *
+   * EVERY client (including the shooter) gets this. We DO NOT apply the
+   * impulse immediately - we queue it against the server-issued `apply_tick`
+   * and the physics tick loop applies it when `worldTick` reaches that
+   * value. This is what lets ball-vs-ball collisions agree across clients
+   * with different pings: every client evaluates the impulse at the same
+   * shared world-iteration, so peer ball positions (which are deterministic
+   * functions of "iterations since their own impulse") match.
+   *
+   * The `apply_tick` field is a port extension; if a legacy server omits it
+   * we fall back to immediate application (the pre-port-extension behavior).
    */
   private handleBeginStroke(f: string[]): void {
     if (!this.parsedMap) {
       this.pendingBeginStrokes.push(f);
       return;
     }
+    const applyTickRaw = parseInt(f[6] ?? "", 10);
+    const validApplyTick =
+      Number.isFinite(applyTickRaw) && applyTickRaw >= 0 && this.trackStartedAtMs > 0;
+    if (!validApplyTick) {
+      // Legacy server (no apply_tick) or no track clock yet: apply now.
+      this.applyBeginStroke(f);
+      return;
+    }
+    // Insertion-sort by ascending applyTick so the head is always the
+    // earliest pending. Concurrent strokes with the same apply_tick keep
+    // FIFO order (the server already serializes packets, so wire order
+    // matches reception order).
+    let i = this.pendingImpulses.length;
+    while (i > 0 && this.pendingImpulses[i - 1].applyTick > applyTickRaw) i--;
+    this.pendingImpulses.splice(i, 0, { applyTick: applyTickRaw, fields: f });
+  }
+
+  /**
+   * Apply a stroke impulse: snapshot peers/otherPlayers for movable-block and
+   * krokkaus deterministic resolution, build per-slot PhysicsContexts, and
+   * fire `applyStrokeImpulse` on the shooter's ball. Called either directly
+   * (legacy / no apply_tick) or from the tick loop's drain step when
+   * `worldTick` reaches the queued apply_tick.
+   */
+  private applyBeginStroke(f: string[]): void {
     const id = parseInt(f[2] ?? "0", 10);
     const ballRaw = f[3] ?? "0000";
     const mouseRaw = f[4] ?? "0000";
@@ -1547,8 +1597,28 @@ export class GamePanel implements Panel {
 
   // ----- physics tick ---------------------------------------------------
 
-  private physicsAccumMs = 0;
-  private lastTickMs = 0;
+  /**
+   * Wall-clock `performance.now()` corresponding to worldTick=0 of the
+   * current track. Calibrated from the server's `E <elapsedMs>` field on
+   * starttrack, so every client's `worldTick(t) = (t - trackStartedAtMs) / 6`
+   * agrees on the same iteration regardless of ping. 0 means "no track
+   * loaded yet" - the tick loop skips world advancement until set.
+   */
+  private trackStartedAtMs = 0;
+  /**
+   * Most recent worldTick we drove physics through. Advances continuously
+   * with wall-clock (NOT gated on motion) so server-issued `apply_tick`s
+   * always reach a consistent moment on every client. Reset on starttrack.
+   */
+  private worldTick = 0;
+  /**
+   * Stroke impulses buffered against their server-issued `apply_tick`. The
+   * tick loop drains entries with `applyTick <= worldTick` before stepping
+   * balls, so all clients evaluate the impulse at the same iteration.
+   * Sorted ascending by applyTick on insert so the head is always the
+   * earliest pending. Cleared on starttrack.
+   */
+  private pendingImpulses: Array<{ applyTick: number; fields: string[] }> = [];
   /** Cursor-broadcast throttle: timestamp of last `game cursor` we sent. */
   private lastCursorSentMs = 0;
   private lastCursorSentX = -9999;
@@ -1598,99 +1668,133 @@ export class GamePanel implements Panel {
       this.maybeSendCursor(performance.now());
       this.draw();
 
-      // Step every ball that's currently moving. Each ball has its OWN
-      // PhysicsContext (with its OWN Seed), so concurrent strokes can't
-      // interfere with one another's randomness.
-      //
-      // Krokkaus extension: a ball with non-zero velocity but `simulating ===
-      // false` was just bumped by another ball's collision in this same tick
-      // (or an earlier substep within this tick's slot loop). We re-arm its
-      // physics state machine and step it like any active ball, so the
-      // bumped ball naturally rolls until it stops on its own.
-      const anyMoving = this.players.some(
-        (p) => p.simulating || p.ball.vx !== 0 || p.ball.vy !== 0,
-      );
-      if (anyMoving) {
-        const now = performance.now();
-        if (this.lastTickMs === 0) this.lastTickMs = now;
-        const elapsed = now - this.lastTickMs;
-        this.lastTickMs = now;
-        this.physicsAccumMs += Math.min(elapsed, 100);
-        let safety = 200;
-        while (this.physicsAccumMs >= PHYSICS_STEP_MS && safety-- > 0) {
-          this.physicsAccumMs -= PHYSICS_STEP_MS;
-          for (let i = 0; i < this.players.length; i++) {
-            const slot = this.players[i];
-            if (!slot.ctx) continue;
-            const ball = slot.ball;
-            if (ball.inHole) continue;
-            if (slot.holedThisTrack || slot.forfeitedThisTrack) continue;
-            // Step if we're already simulating, or if a peer's krokkaus
-            // collision just gave us velocity this tick.
-            const moving = slot.simulating || ball.vx !== 0 || ball.vy !== 0;
-            if (!moving) continue;
-            // Re-arm a previously-stopped ball that just got bumped. We do
-            // NOT reset strokeStartX/Y - Java's `tempCoordX/Y` is only set
-            // by a real stroke, so a krokkaus victim that lands in water
-            // (event 0) goes back to where they LAST shot from, not where
-            // they were when bumped. shoreX/Y reset is fine since Java's
-            // `tempCoord2X/Y` is initialized to playerX/Y at run() entry.
-            if (ball.stopped) {
-              ball.stopped = false;
-              ball.iterationsThisStroke = 0;
-              ball.downhillStuckCounter = 0;
-              ball.magnetStuckCounter = 0;
-              ball.spinningStuckCounter = 0;
-              ball.bounciness = 1.0;
-              ball.magnetMul = 1.0;
-              ball.onHole = false;
-              ball.onLiquidOrSwamp = false;
-              ball.liquidTimer = 0;
-              ball.teleported = false;
-              ball.shoreX = ball.x;
-              ball.shoreY = ball.y;
-              // Krokkaus push: not our own stroke. Suppresses the counter
-              // bump on endstroke (see below).
-              ball.causedByShot = false;
-            }
-            slot.simulating = true;
-            const r = step(ball, slot.ctx);
-            if (r.stopped) {
-              slot.simulating = false;
-              if (i === this.myPlayerId) {
-                if (ball.causedByShot) {
-                  // Real stroke ending: server bumps our stroke counter.
-                  this.app.connection.sendData(
-                    "game",
-                    "endstroke",
-                    String(i),
-                    this.myPlayStatus(),
-                    "s",
-                  );
-                  ball.causedByShot = false;
-                } else if (ball.inHole) {
-                  // Krokkaus pushed us into the hole - server marks us
-                  // "done" but does NOT bump our stroke counter.
-                  this.app.connection.sendData(
-                    "game",
-                    "endstroke",
-                    String(i),
-                    this.myPlayStatus(),
-                    "k",
-                  );
-                }
-                // If we got bumped onto solid ground, the server doesn't
-                // need to know - it tracks playStatus, not positions.
-              }
-            }
-          }
+      // Advance the world tick clock-based, NOT motion-gated. Driving the
+      // tick continuously is what makes server-issued `apply_tick`s line up
+      // across clients with different pings. The per-ball physics step()
+      // call is still skipped for at-rest balls inside `runWorldTick`.
+      if (this.trackStartedAtMs > 0) {
+        const targetTick = Math.floor(
+          (performance.now() - this.trackStartedAtMs) / PHYSICS_STEP_MS,
+        );
+        // Cap catchup per RAF frame so a tab returning from background
+        // doesn't stall the browser. 2000 iterations ≈ 12 seconds of
+        // physics; beyond that we snap forward and accept that any
+        // in-flight ball state is now visibly off until the next
+        // starttrack.
+        let safety = 2000;
+        while (this.worldTick < targetTick && safety-- > 0) {
+          this.worldTick++;
+          this.runWorldTick();
         }
-      } else {
-        this.lastTickMs = 0;
-        this.physicsAccumMs = 0;
+        if (this.worldTick < targetTick) {
+          if (DEV) {
+            console.warn(
+              "[game] catchup overflow: worldTick %d → %d (dropping %d ticks)",
+              this.worldTick,
+              targetTick,
+              targetTick - this.worldTick,
+            );
+          }
+          // Drain any impulses scheduled before the snap so we don't carry
+          // stale strokes into the new clock zone.
+          while (
+            this.pendingImpulses.length > 0 &&
+            this.pendingImpulses[0].applyTick <= targetTick
+          ) {
+            const item = this.pendingImpulses.shift()!;
+            this.applyBeginStroke(item.fields);
+          }
+          this.worldTick = targetTick;
+        }
       }
     };
     this.rafHandle = requestAnimationFrame(tick);
+  }
+
+  /**
+   * One world tick: drain any queued impulses whose apply_tick has come due,
+   * then advance every active ball by a single physics iteration. Mirrors
+   * the body of the previous accumulator loop, but driven by the shared
+   * `worldTick` instead of a per-client wall-clock accumulator.
+   *
+   * Krokkaus extension: a ball with non-zero velocity but `simulating ===
+   * false` was just bumped by another ball's collision in this same tick.
+   * We re-arm its physics state machine and step it like any active ball,
+   * so the bumped ball naturally rolls until it stops on its own.
+   */
+  private runWorldTick(): void {
+    while (
+      this.pendingImpulses.length > 0 &&
+      this.pendingImpulses[0].applyTick <= this.worldTick
+    ) {
+      const item = this.pendingImpulses.shift()!;
+      this.applyBeginStroke(item.fields);
+    }
+    for (let i = 0; i < this.players.length; i++) {
+      const slot = this.players[i];
+      if (!slot.ctx) continue;
+      const ball = slot.ball;
+      if (ball.inHole) continue;
+      if (slot.holedThisTrack || slot.forfeitedThisTrack) continue;
+      // Step if we're already simulating, or if a peer's krokkaus collision
+      // just gave us velocity this tick.
+      const moving = slot.simulating || ball.vx !== 0 || ball.vy !== 0;
+      if (!moving) continue;
+      // Re-arm a previously-stopped ball that just got bumped. We do NOT
+      // reset strokeStartX/Y - Java's `tempCoordX/Y` is only set by a real
+      // stroke, so a krokkaus victim that lands in water (event 0) goes
+      // back to where they LAST shot from, not where they were when bumped.
+      // shoreX/Y reset is fine since Java's `tempCoord2X/Y` is initialized
+      // to playerX/Y at run() entry.
+      if (ball.stopped) {
+        ball.stopped = false;
+        ball.iterationsThisStroke = 0;
+        ball.downhillStuckCounter = 0;
+        ball.magnetStuckCounter = 0;
+        ball.spinningStuckCounter = 0;
+        ball.bounciness = 1.0;
+        ball.magnetMul = 1.0;
+        ball.onHole = false;
+        ball.onLiquidOrSwamp = false;
+        ball.liquidTimer = 0;
+        ball.teleported = false;
+        ball.shoreX = ball.x;
+        ball.shoreY = ball.y;
+        // Krokkaus push: not our own stroke. Suppresses the counter bump on
+        // endstroke (see below).
+        ball.causedByShot = false;
+      }
+      slot.simulating = true;
+      const r = step(ball, slot.ctx);
+      if (r.stopped) {
+        slot.simulating = false;
+        if (i === this.myPlayerId) {
+          if (ball.causedByShot) {
+            // Real stroke ending: server bumps our stroke counter.
+            this.app.connection.sendData(
+              "game",
+              "endstroke",
+              String(i),
+              this.myPlayStatus(),
+              "s",
+            );
+            ball.causedByShot = false;
+          } else if (ball.inHole) {
+            // Krokkaus pushed us into the hole - server marks us "done"
+            // but does NOT bump our stroke counter.
+            this.app.connection.sendData(
+              "game",
+              "endstroke",
+              String(i),
+              this.myPlayStatus(),
+              "k",
+            );
+          }
+          // If we got bumped onto solid ground, the server doesn't need to
+          // know - it tracks playStatus, not positions.
+        }
+      }
+    }
   }
 
   /** Build a status string for OUR ball (we're authoritative for ourselves). */
