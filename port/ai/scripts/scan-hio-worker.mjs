@@ -16,6 +16,48 @@ const toUrl = (p) => pathToFileURL(resolve(aiRoot, p)).href;
 
 const { loadTrackHeadless } = await import(toUrl("headless/track-loader.ts"));
 const { searchHoleInOne } = await import(toUrl("src/hio.ts"));
+const { Episode } = await import(toUrl("src/env.ts"));
+
+// Tile values that count as walls (mirrors port/web/src/game/physics.ts:isWall).
+// We use this to validate HIO trajectories - the inside-corner-suppression
+// rule in handleWallCollision (faithful port of a Java quirk) lets balls
+// approaching from below an "L"-shaped wall pass straight through. Such
+// HIOs are physically valid in the original game but unreachable by any
+// human aim; we tag them as `wall_clip` so the dashboard can hide them.
+function isWallVal(v) {
+  return (v >= 16 && v <= 23 && v !== 19) || v === 27 || (v >= 40 && v <= 43) || v === 46;
+}
+
+/**
+ * Replay the HIO action and check if the ball's trajectory ever passes
+ * through wall pixels. Returns true if a wall-clip was detected.
+ *
+ * We replay because searchHoleInOne doesn't keep the trail. Re-running
+ * one shot is ~25ms, cheap relative to the search.
+ */
+function detectWallClip(track, action) {
+  const ep = new Episode(track, { maxStrokes: 1 });
+  ep.applyShot(action);
+  const W = 735;
+  let maxClip = 0;
+  let i = 0;
+  while (ep.state().status === "in_motion" && i < 5000) {
+    ep.tick(1);
+    const s = ep.state();
+    const x = s.ballX | 0;
+    const y = s.ballY | 0;
+    if (x >= 0 && x < W && y >= 0 && y < 375) {
+      const v = track.map.collision[y * W + x];
+      if (isWallVal(v)) maxClip++;
+    }
+    i++;
+  }
+  // A few "clipped" pixels can occur at hole entry if the hole tile is
+  // adjacent to wall pixels; require >5 consecutive wall samples to
+  // call it a true clip. In practice false-HIOs clip dozens of pixels
+  // (entire wall thicknesses), real HIOs clip 0.
+  return maxClip > 5;
+}
 
 parentPort.on("message", async (msg) => {
   if (msg === "exit") {
@@ -45,9 +87,13 @@ parentPort.on("message", async (msg) => {
       bestPlayer: meta?.bestPlayer ?? null,
     };
     if (hio) {
+      // Validate: did the ball actually fly through air, or did it
+      // exploit the inside-corner wall-collision quirk?
+      const wallClip = detectWallClip(track, hio.action);
       parentPort.postMessage({
         ...base,
         hio: true,
+        wall_clip: wallClip,
         action: hio.action,
         candidatesTried: hio.candidatesTried,
         secs,

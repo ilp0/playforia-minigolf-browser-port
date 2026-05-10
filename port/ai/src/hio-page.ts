@@ -17,6 +17,11 @@ interface ScanRow {
    *  .track I-line. -1 means no human record exists. */
   bestPar?: number;
   bestPlayer?: string | null;
+  /** True if the HIO trajectory passed through wall pixels - the
+   *  inside-corner-suppression rule in handleWallCollision (faithful
+   *  port of a Java quirk) lets some shots phase through walls. Such
+   *  HIOs aren't reachable by human aim and we hide them by default. */
+  wall_clip?: boolean;
 }
 
 interface ScanFile {
@@ -99,20 +104,26 @@ function renderStats(scan: ScanFile): void {
   const timeouts = scan.timeout_count ?? 0;
   const nonHio = completed - hio - errors - timeouts;
   const budget = scan.budget_secs ?? 0;
-  // Count "unknown HIO" - HIO-able by physics but no human ever
-  // recorded a 1-stroke completion. This is the candidate list of
-  // unknown shortcuts.
+  // Real HIO = HIO found AND no wall-clip. Wall-clips are physics
+  // quirks (handleWallCollision's inside-corner suppression lets the
+  // ball phase through walls), counted separately so the user knows
+  // why the "HIO-able" count is lower than the raw search hits.
+  const wallClip = scan.tracks.filter((r) => r.hio && r.wall_clip).length;
+  const realHio = hio - wallClip;
+  // "Unknown HIO" - real HIO AND no human ever recorded 1. Candidate
+  // list of human-playable but undiscovered 1-stroke routes.
   const unknownHio = scan.tracks.filter(
-    (r) => r.hio && (r.bestPar ?? -1) > 1,
+    (r) => r.hio && !r.wall_clip && (r.bestPar ?? -1) > 1,
   ).length;
   el.innerHTML = `
     <div class="stat"><div class="val">${total}</div><div class="lbl">total tracks</div><div class="sub">in port/server/tracks</div></div>
-    <div class="stat"><div class="val">${hio}</div><div class="lbl">HIO-able</div><div class="sub">${((hio / Math.max(1, completed)) * 100).toFixed(0)}% of scanned</div></div>
+    <div class="stat"><div class="val">${realHio}</div><div class="lbl">HIO-able (real)</div><div class="sub">${((realHio / Math.max(1, completed)) * 100).toFixed(0)}% of scanned · trajectory clears walls</div></div>
     <div class="stat" style="border-color:#d29922;">
       <div class="val" style="color:#d29922">${unknownHio}</div>
       <div class="lbl">unknown HIO</div>
-      <div class="sub">HIO-able but bestPar &gt; 1</div>
+      <div class="sub">real HIO but bestPar &gt; 1</div>
     </div>
+    <div class="stat"><div class="val">${wallClip}</div><div class="lbl">wall-clip</div><div class="sub">trajectory phased through walls</div></div>
     <div class="stat"><div class="val">${nonHio}</div><div class="lbl">grid exhausted</div><div class="sub">no HIO at this resolution</div></div>
     <div class="stat"><div class="val">${timeouts}</div><div class="lbl">timed out</div><div class="sub">${budget > 0 ? `budget ${budget}s` : "n/a"}</div></div>
     <div class="stat"><div class="val">${errors}</div><div class="lbl">errors</div></div>
@@ -123,11 +134,13 @@ function renderStats(scan: ScanFile): void {
 function rowHtml(r: ScanRow): string {
   const badge = r.error
     ? `<span class="badge fail">error</span>`
-    : r.hio
-      ? `<span class="badge">HIO</span>`
-      : r.timed_out
-        ? `<span class="badge fail" style="background:rgba(210,153,34,0.15);color:#d29922;">timeout</span>`
-        : `<span class="badge fail" style="background:rgba(139,148,158,0.15);color:var(--muted);">none</span>`;
+    : r.hio && r.wall_clip
+      ? `<span class="badge fail" style="background:rgba(210,153,34,0.15);color:#d29922;" title="The 'HIO' trajectory phased through walls due to the inside-corner-suppression quirk in handleWallCollision. Not actually playable.">wall-clip</span>`
+      : r.hio
+        ? `<span class="badge">HIO</span>`
+        : r.timed_out
+          ? `<span class="badge fail" style="background:rgba(210,153,34,0.15);color:#d29922;">timeout</span>`
+          : `<span class="badge fail" style="background:rgba(139,148,158,0.15);color:var(--muted);">none</span>`;
   const action = r.action
     ? `(${r.action.dx.toFixed(1)}, ${r.action.dy.toFixed(1)})`
     : "—";
@@ -163,9 +176,11 @@ function applyFilters(): ScanRow[] {
   const sort = $<HTMLSelectElement>("sort")?.value ?? "candidatesTried";
   let rows = cache.tracks.slice();
   // Filter by kind.
-  if (kind === "hio") rows = rows.filter((r) => r.hio);
+  if (kind === "hio") rows = rows.filter((r) => r.hio && !r.wall_clip);
   else if (kind === "hio-unknown")
-    rows = rows.filter((r) => r.hio && (r.bestPar ?? -1) > 1);
+    rows = rows.filter((r) => r.hio && !r.wall_clip && (r.bestPar ?? -1) > 1);
+  else if (kind === "wall-clip")
+    rows = rows.filter((r) => r.hio && !!r.wall_clip);
   else if (kind === "non-hio") rows = rows.filter((r) => !r.hio && !r.error);
   else if (kind === "timeout") rows = rows.filter((r) => !!r.timed_out);
   else if (kind === "errors") rows = rows.filter((r) => !!r.error);
