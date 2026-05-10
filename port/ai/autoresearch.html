@@ -12,6 +12,7 @@
         --text: #c9d1d9;
         --muted: #8b949e;
         --accent: #58a6ff;
+        --accent-2: #79c0ff;
         --good: #3fb950;
         --bad: #f85149;
         --warn: #d29922;
@@ -35,7 +36,9 @@
       header h1 { margin: 0; font-size: 14px; font-weight: 600; }
       header .live { font-size: 11px; color: var(--muted); }
       header .live.on { color: var(--good); }
-      header .controls { margin-left: auto; display: flex; gap: 8px; align-items: center; font-size: 11px; color: var(--muted); }
+      header .controls { margin-left: auto; display: flex; gap: 12px; align-items: center; font-size: 11px; color: var(--muted); }
+      header .nav-link { color: var(--accent); text-decoration: none; padding: 3px 8px; border: 1px solid var(--border); border-radius: 4px; }
+      header .nav-link:hover { color: var(--accent-2); border-color: var(--accent); }
       header select {
         background: var(--panel);
         color: var(--text);
@@ -115,6 +118,7 @@
           </select>
         </label>
         <span id="last-refresh"></span>
+        <a class="nav-link" id="report-link" href="/autoresearch-report.html">report →</a>
       </div>
     </header>
     <div class="grid">

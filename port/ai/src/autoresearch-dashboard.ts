@@ -380,6 +380,9 @@ async function refresh() {
   $("per-map")!.innerHTML = renderPerMap(rows);
   $("live-status")!.innerHTML = renderLiveStatus(status, loopStatus);
   $("last-refresh")!.textContent = new Date().toLocaleTimeString();
+  // Keep the report link pointing at the currently-selected log.
+  const reportLink = $<HTMLAnchorElement>("report-link");
+  if (reportLink) reportLink.href = `/autoresearch-report.html?log=${encodeURIComponent(path)}`;
 }
 
 async function init() {

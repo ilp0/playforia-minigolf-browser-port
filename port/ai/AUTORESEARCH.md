@@ -33,11 +33,20 @@ node --experimental-strip-types research_loop.ts \
   --agent-cmd 'claude --print'
 ```
 
+## Two browser views
+
+| Page | When to use |
+|---|---|
+| [`/autoresearch.html`](http://localhost:5180/autoresearch.html) | **Live dashboard.** Polls every 2 s while a loop or eval is running. Watch the score chart fill in, see which map/seed/phase is currently running. |
+| [`/autoresearch-report.html`](http://localhost:5180/autoresearch-report.html) | **Post-run report.** Static analysis of a completed loop run: verdict, score chart, per-knob trajectories, per-iteration cards with Claude's reasoning, baseline-vs-best config diff, recommendations. Pass `?log=research_log_NAME.jsonl` to view a specific experiment. |
+
+The dashboard has a **"report →"** link in its header that forwards
+the currently-selected log.
+
 ## Live dashboard
 
-While the loop or any eval is running, open
-**[/autoresearch.html](http://localhost:5180/autoresearch.html)** in
-the browser. The dashboard polls every 2 s and renders:
+While the loop or any eval is running, the live dashboard polls every
+2 s and renders:
 
 - **Score chart**: best-so-far line (green) plus per-iteration dots
   (filled green = kept, hollow red = reverted).

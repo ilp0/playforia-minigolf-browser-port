@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Autoresearch report</title>
+    <style>
+      :root {
+        --bg: #0e1116;
+        --bg-2: #0a0d12;
+        --panel: #161b22;
+        --panel-2: #1c2128;
+        --border: #30363d;
+        --border-soft: #21262d;
+        --text: #e6edf3;
+        --muted: #8b949e;
+        --muted-2: #6e7681;
+        --accent: #58a6ff;
+        --accent-2: #79c0ff;
+        --good: #3fb950;
+        --good-bg: rgba(63, 185, 80, 0.12);
+        --bad: #f85149;
+        --bad-bg: rgba(248, 81, 73, 0.12);
+        --warn: #d29922;
+        --warn-bg: rgba(210, 153, 34, 0.12);
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: ui-sans-serif, -apple-system, "Segoe UI", system-ui;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      .container { max-width: 1100px; margin: 0 auto; padding: 24px; }
+      header.top {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding-bottom: 16px;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 24px;
+      }
+      header.top h1 {
+        margin: 0;
+        font-size: 20px;
+        font-weight: 600;
+        flex: 1;
+      }
+      header.top .nav a {
+        color: var(--muted);
+        text-decoration: none;
+        font-size: 13px;
+        padding: 4px 10px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+      }
+      header.top .nav a:hover { color: var(--text); border-color: var(--accent); }
+
+      h2 {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        font-weight: 600;
+        margin: 32px 0 12px 0;
+      }
+      h3 { font-size: 16px; font-weight: 600; margin: 0 0 8px 0; }
+
+      .verdict {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 24px;
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 24px;
+        align-items: center;
+      }
+      .verdict.no-improvement { border-left: 4px solid var(--bad); }
+      .verdict.improvement { border-left: 4px solid var(--good); }
+      .verdict.partial { border-left: 4px solid var(--warn); }
+      .verdict .icon {
+        width: 64px; height: 64px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 28px;
+        font-weight: bold;
+      }
+      .verdict.no-improvement .icon { background: var(--bad-bg); color: var(--bad); }
+      .verdict.improvement .icon { background: var(--good-bg); color: var(--good); }
+      .verdict.partial .icon { background: var(--warn-bg); color: var(--warn); }
+      .verdict .headline { font-size: 22px; font-weight: 600; margin-bottom: 4px; }
+      .verdict .subhead { color: var(--muted); font-size: 13px; }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
+        margin-top: 16px;
+      }
+      .stat {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 12px 16px;
+      }
+      .stat .label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+      .stat .value {
+        font-size: 22px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+      .stat .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 18px;
+      }
+      .panel + .panel { margin-top: 12px; }
+
+      svg.chart { display: block; width: 100%; height: 240px; }
+      svg.knob-chart { display: block; width: 100%; height: 90px; }
+
+      .iter {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-left-width: 3px;
+        border-radius: 6px;
+        padding: 16px;
+        margin-bottom: 12px;
+      }
+      .iter.kept { border-left-color: var(--good); }
+      .iter.reverted { border-left-color: var(--bad); }
+      .iter .head {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+      .iter .head .num {
+        font-weight: 600;
+        font-size: 16px;
+        color: var(--muted);
+      }
+      .iter .head .badge {
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-weight: 500;
+      }
+      .iter .head .badge.kept { background: var(--good-bg); color: var(--good); }
+      .iter .head .badge.reverted { background: var(--bad-bg); color: var(--bad); }
+      .iter .head .meta {
+        margin-left: auto;
+        font-size: 13px;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .iter .head .delta { font-weight: 500; }
+      .iter .head .delta.positive { color: var(--good); }
+      .iter .head .delta.negative { color: var(--bad); }
+      .iter .changes {
+        margin: 8px 0;
+        padding: 8px 12px;
+        background: var(--bg-2);
+        border-radius: 4px;
+        font-family: ui-monospace, "Cascadia Code", monospace;
+        font-size: 13px;
+      }
+      .iter .changes .knob { color: var(--accent); font-weight: 500; }
+      .iter .changes .from { color: var(--muted-2); text-decoration: line-through; }
+      .iter .changes .arrow { color: var(--muted); margin: 0 4px; }
+      .iter .changes .to { color: var(--accent-2); }
+      .iter .narrative h4 {
+        margin: 12px 0 6px 0;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+      }
+      .iter .narrative p { margin: 0 0 6px 0; font-size: 13px; color: var(--text); }
+      .iter .narrative blockquote {
+        margin: 0;
+        padding: 8px 12px;
+        background: var(--bg-2);
+        border-left: 2px solid var(--border);
+        font-size: 12px;
+        color: var(--muted);
+        white-space: pre-wrap;
+        max-height: 200px;
+        overflow-y: auto;
+      }
+
+      .knobs-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 12px;
+      }
+      .knob-card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 12px 14px;
+      }
+      .knob-card .knob-name {
+        font-family: ui-monospace, monospace;
+        font-size: 13px;
+        color: var(--accent);
+        font-weight: 500;
+      }
+      .knob-card .knob-vals {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 2px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .config-side-by-side {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+      .config-col h3 { font-size: 13px; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.04em; }
+      .config-col table {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+      }
+      .config-col td {
+        padding: 4px 8px;
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .config-col td.k { color: var(--muted); }
+      .config-col td.v { text-align: right; }
+      .config-col td.diff { background: var(--warn-bg); }
+
+      .recommendation {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 18px;
+      }
+      .recommendation h3 { color: var(--warn); margin-bottom: 12px; }
+      .recommendation pre {
+        background: var(--bg-2);
+        padding: 10px 12px;
+        border-radius: 4px;
+        font-size: 12px;
+        overflow-x: auto;
+        margin: 8px 0;
+      }
+      .recommendation ul { padding-left: 20px; margin: 8px 0; }
+      .recommendation li { margin: 6px 0; font-size: 13px; }
+      .recommendation code {
+        background: var(--bg-2);
+        padding: 1px 6px;
+        border-radius: 3px;
+        font-size: 12px;
+      }
+
+      .empty { text-align: center; padding: 60px; color: var(--muted); }
+
+      .log-picker {
+        margin-bottom: 16px;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        font-size: 13px;
+      }
+      .log-picker select {
+        background: var(--panel);
+        color: var(--text);
+        border: 1px solid var(--border);
+        padding: 6px 10px;
+        border-radius: 4px;
+        font-size: 13px;
+      }
+      .log-picker .label { color: var(--muted); }
+
+      .footer {
+        margin-top: 48px;
+        padding: 16px 0;
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 12px;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <header class="top">
+        <h1 id="title">Autoresearch report</h1>
+        <div class="nav">
+          <a href="/autoresearch.html">live dashboard →</a>
+        </div>
+      </header>
+
+      <div class="log-picker">
+        <span class="label">experiment:</span>
+        <select id="log-select"></select>
+        <span id="meta-line" class="label"></span>
+      </div>
+
+      <div id="content"></div>
+
+      <div class="footer">
+        autoresearch report · generated <span id="generated-at"></span>
+      </div>
+    </div>
+    <script type="module" src="/src/autoresearch-report.ts"></script>
+  </body>
+</html>
