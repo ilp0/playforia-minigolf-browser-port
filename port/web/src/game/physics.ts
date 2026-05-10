@@ -516,20 +516,47 @@ function handleWallCollision(ball: BallState, ctx: PhysicsContext, n: Neighbors,
   if (bottom && n.b === 23) bottom = false;
   if (top && n.t === 23) top = false;
 
-  // Inside-corner suppression - match Java:1324-1362.
-  if (top && tr && right && (n.t < 20 || n.t > 23) && (n.tr < 20 || n.tr > 23) && (n.r < 20 || n.r > 23)) {
+  // Inside-corner suppression - match Java:1324-1362, with one
+  // correction: each suppression only fires when the ball is actually
+  // moving INTO that corner (both axes pointing toward it). The
+  // original rule fired purely on geometry, so a ball approaching a
+  // wall from below at vx=0 with another wall extending to its left
+  // would see (top, tl, left) all flagged as walls, the rule would
+  // clear `top`, and the ball would phase straight through. By
+  // requiring (vx<0, vy<0) for the TL corner we let the top-wall
+  // reflection fire normally when the ball isn't moving toward the
+  // corner along both axes. Also reproduces correctly for genuine
+  // wedge cases (vx>0, vy<0 into a TR corner) — the diagonal
+  // reflection block below handles those.
+  if (
+    top && tr && right &&
+    (n.t < 20 || n.t > 23) && (n.tr < 20 || n.tr > 23) && (n.r < 20 || n.r > 23) &&
+    ball.vx > 0 && ball.vy < 0
+  ) {
     right = false;
     top = false;
   }
-  if (right && br && bottom && (n.r < 20 || n.r > 23) && (n.br < 20 || n.br > 23) && (n.b < 20 || n.b > 23)) {
+  if (
+    right && br && bottom &&
+    (n.r < 20 || n.r > 23) && (n.br < 20 || n.br > 23) && (n.b < 20 || n.b > 23) &&
+    ball.vx > 0 && ball.vy > 0
+  ) {
     bottom = false;
     right = false;
   }
-  if (bottom && bl && left && (n.b < 20 || n.b > 23) && (n.bl < 20 || n.bl > 23) && (n.l < 20 || n.l > 23)) {
+  if (
+    bottom && bl && left &&
+    (n.b < 20 || n.b > 23) && (n.bl < 20 || n.bl > 23) && (n.l < 20 || n.l > 23) &&
+    ball.vx < 0 && ball.vy > 0
+  ) {
     left = false;
     bottom = false;
   }
-  if (left && tl && top && (n.l < 20 || n.l > 23) && (n.tl < 20 || n.tl > 23) && (n.t < 20 || n.t > 23)) {
+  if (
+    left && tl && top &&
+    (n.l < 20 || n.l > 23) && (n.tl < 20 || n.tl > 23) && (n.t < 20 || n.t > 23) &&
+    ball.vx < 0 && ball.vy < 0
+  ) {
     top = false;
     left = false;
   }

@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hole-in-one tracks</title>
+    <style>
+      :root {
+        --bg: #0e1116;
+        --panel: #161b22;
+        --border: #30363d;
+        --text: #e6edf3;
+        --muted: #8b949e;
+        --muted-2: #6e7681;
+        --accent: #58a6ff;
+        --good: #3fb950;
+        --bad: #f85149;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: ui-sans-serif, -apple-system, "Segoe UI", system-ui;
+        font-size: 14px;
+      }
+      .container { max-width: 1100px; margin: 0 auto; padding: 24px; }
+      header.top {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding-bottom: 16px;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 16px;
+      }
+      header.top h1 { margin: 0; font-size: 20px; font-weight: 600; flex: 1; }
+      header.top .nav a {
+        color: var(--muted);
+        text-decoration: none;
+        font-size: 13px;
+        padding: 4px 10px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+      }
+      header.top .nav a:hover { color: var(--text); border-color: var(--accent); }
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+      .stat {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 12px 16px;
+      }
+      .stat .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+      .stat .val { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+      .stat .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+      .controls {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+      }
+      .controls label { font-size: 12px; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+      .controls input[type="text"], .controls select {
+        background: var(--panel);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 5px 8px;
+        font-size: 12px;
+        font-family: ui-monospace, "Cascadia Code", monospace;
+      }
+      .controls .grow { flex: 1; min-width: 240px; }
+      .table-wrap {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      thead th {
+        background: rgba(255,255,255,0.03);
+        text-align: left;
+        padding: 10px 12px;
+        font-weight: 600;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        border-bottom: 1px solid var(--border);
+        cursor: pointer;
+        user-select: none;
+      }
+      thead th:hover { color: var(--text); }
+      thead th .sort-arrow { color: var(--accent); margin-left: 4px; }
+      tbody td {
+        padding: 8px 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.03);
+        font-variant-numeric: tabular-nums;
+      }
+      tbody tr:hover { background: rgba(255,255,255,0.02); }
+      .file-link {
+        color: var(--accent);
+        text-decoration: none;
+        font-family: ui-monospace, "Cascadia Code", monospace;
+        font-size: 12px;
+      }
+      .file-link:hover { text-decoration: underline; }
+      .badge {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 10px;
+        font-size: 10px;
+        font-weight: 600;
+        background: rgba(63, 185, 80, 0.15);
+        color: var(--good);
+      }
+      .badge.fail { background: rgba(248, 81, 73, 0.12); color: var(--bad); }
+      .empty { color: var(--muted); padding: 30px; text-align: center; font-size: 13px; }
+      .progress-banner {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 10px 14px;
+        margin-bottom: 12px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .progress-banner.scanning { border-left: 3px solid var(--accent); }
+      .footer {
+        margin-top: 24px;
+        padding: 12px 0;
+        color: var(--muted);
+        font-size: 11px;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <header class="top">
+        <h1>Hole-in-one tracks</h1>
+        <div class="nav">
+          <a href="/index.html">single-track viewer →</a>
+          <a href="/autoresearch.html">autoresearch →</a>
+        </div>
+      </header>
+
+      <div id="banner"></div>
+
+      <div class="stats" id="stats"></div>
+
+      <div class="controls">
+        <input type="text" id="filter" class="grow" placeholder="filter by name (e.g. 'curve', 'water')" />
+        <label>show
+          <select id="kind">
+            <option value="hio">HIO-able only (real, no wall-clips)</option>
+            <option value="hio-unknown">HIO-able but humans never got 1 (bestPar &gt; 1)</option>
+            <option value="wall-clip">wall-clip HIO (physics quirk, not playable)</option>
+            <option value="all">all tracks</option>
+            <option value="non-hio">no HIO found (incl. timed out)</option>
+            <option value="timeout">timed out only</option>
+            <option value="errors">errors</option>
+          </select>
+        </label>
+        <label>sort
+          <select id="sort">
+            <option value="candidatesTried">candidates tried (asc)</option>
+            <option value="secs">scan time (asc)</option>
+            <option value="name">name</option>
+            <option value="file">file</option>
+          </select>
+        </label>
+        <span id="count" style="margin-left:auto; font-size:12px; color:var(--muted);"></span>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>name</th>
+              <th>file</th>
+              <th>HIO?</th>
+              <th>best human</th>
+              <th>action (dx, dy)</th>
+              <th>candidates tried</th>
+              <th>scan secs</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+
+      <div class="footer" id="footer"></div>
+    </div>
+    <script type="module" src="/src/hio-page.ts"></script>
+  </body>
+</html>

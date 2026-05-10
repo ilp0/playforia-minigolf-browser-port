@@ -1,0 +1,28 @@
+{
+  "name": "@minigolf/ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "ai:sanity": "node --experimental-strip-types scripts/sanity-check.mjs",
+    "ai:eval": "node --experimental-strip-types research_eval.ts --mode eval --budget default",
+    "ai:eval:short": "node --experimental-strip-types research_eval.ts --mode eval --budget short",
+    "ai:eval:smoke": "node --experimental-strip-types research_eval.ts --mode smoke",
+    "ai:validate": "node --experimental-strip-types research_eval.ts --mode validate --budget default",
+    "ai:loop": "node --experimental-strip-types research_loop.ts",
+    "ai:loop:dry": "node --experimental-strip-types research_loop.ts --eval-mode smoke --dry-run",
+    "ai:analyze": "node --experimental-strip-types research_analyze.ts",
+    "ai:calibrate": "node --experimental-strip-types scripts/calibration-smoke.mjs"
+  },
+  "dependencies": {
+    "@minigolf/shared": "*"
+  },
+  "devDependencies": {
+    "omggif": "^1.0.10",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0"
+  }
+}

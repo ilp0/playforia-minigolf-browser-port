@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Autoresearch dashboard</title>
+    <style>
+      :root {
+        --bg: #0e1116;
+        --panel: #161b22;
+        --border: #30363d;
+        --text: #c9d1d9;
+        --muted: #8b949e;
+        --accent: #58a6ff;
+        --accent-2: #79c0ff;
+        --good: #3fb950;
+        --bad: #f85149;
+        --warn: #d29922;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: ui-sans-serif, -apple-system, "Segoe UI", system-ui;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+      header {
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+      header h1 { margin: 0; font-size: 14px; font-weight: 600; }
+      header .live { font-size: 11px; color: var(--muted); }
+      header .live.on { color: var(--good); }
+      header .controls { margin-left: auto; display: flex; gap: 12px; align-items: center; font-size: 11px; color: var(--muted); }
+      header .nav-link { color: var(--accent); text-decoration: none; padding: 3px 8px; border: 1px solid var(--border); border-radius: 4px; }
+      header .nav-link:hover { color: var(--accent-2); border-color: var(--accent); }
+      header select {
+        background: var(--panel);
+        color: var(--text);
+        border: 1px solid var(--border);
+        padding: 3px 6px;
+        font-size: 12px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 380px;
+        gap: 12px;
+        padding: 12px;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 12px;
+      }
+      .panel h2 { margin: 0 0 8px 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
+      .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+      .stat { padding: 8px; background: rgba(255,255,255,0.02); border-radius: 4px; }
+      .stat .num { font-size: 18px; font-weight: 600; }
+      .stat .lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+      svg { display: block; width: 100%; }
+      .iter-list { display: flex; flex-direction: column; gap: 6px; max-height: 70vh; overflow-y: auto; }
+      .iter {
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 8px;
+        background: rgba(255,255,255,0.01);
+      }
+      .iter.kept { border-left: 3px solid var(--good); }
+      .iter.reverted { border-left: 3px solid var(--bad); opacity: 0.7; }
+      .iter .head { display: flex; gap: 8px; align-items: center; font-size: 11px; }
+      .iter .head .num { font-weight: 600; }
+      .iter .head .badge {
+        font-size: 10px;
+        padding: 1px 6px;
+        border-radius: 10px;
+        background: rgba(255,255,255,0.05);
+      }
+      .iter .head .badge.kept { background: rgba(63, 185, 80, 0.2); color: var(--good); }
+      .iter .head .badge.reverted { background: rgba(248, 81, 73, 0.2); color: var(--bad); }
+      .iter .head .score { margin-left: auto; font-variant-numeric: tabular-nums; }
+      .iter .delta { color: var(--muted); font-size: 11px; }
+      .iter .delta.positive { color: var(--good); }
+      .iter .delta.negative { color: var(--bad); }
+      .iter .changes { margin-top: 6px; font-size: 11px; font-family: ui-monospace, "Cascadia Code", monospace; line-height: 1.3; }
+      .iter .changes .knob { color: var(--accent); }
+      .iter .changes .from { color: var(--muted); }
+      .iter .changes .to { color: var(--text); }
+      .iter .notes { margin-top: 6px; font-size: 11px; color: var(--muted); border-top: 1px dashed var(--border); padding-top: 6px; max-height: 100px; overflow-y: auto; }
+      .map-grid { display: grid; grid-template-columns: 1fr 60px 60px; gap: 4px; font-size: 11px; }
+      .map-grid .map-row { display: contents; }
+      .map-grid .map-row > * { padding: 4px 6px; background: rgba(255,255,255,0.02); }
+      .map-grid .h { color: var(--muted); font-weight: 600; font-size: 10px; text-transform: uppercase; }
+      .bar { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+      .bar > .fill { height: 100%; background: var(--accent); transition: width 0.3s; }
+      .bar.success > .fill { background: var(--good); }
+      .empty { color: var(--muted); text-align: center; padding: 24px; font-size: 12px; }
+      pre { margin: 0; font-family: ui-monospace, monospace; font-size: 11px; line-height: 1.4; white-space: pre-wrap; }
+      .log-line { padding: 2px 0; border-bottom: 1px dashed rgba(255,255,255,0.04); }
+      .log-line.train { color: var(--accent); }
+      .log-line.eval { color: var(--warn); }
+      .log-line.done { color: var(--good); }
+      .control-panel { display: flex; flex-direction: column; gap: 12px; }
+      .control-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+      .control-row label { font-size: 11px; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+      .control-row input { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px; font-size: 12px; font-family: ui-monospace, monospace; }
+      .control-row input.short { width: 80px; }
+      .control-row input.medium { width: 220px; }
+      .btn {
+        background: var(--accent);
+        color: #061a2c;
+        border: 0;
+        border-radius: 4px;
+        padding: 7px 16px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .btn:hover { filter: brightness(1.1); }
+      .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+      .btn.danger { background: var(--bad); color: #fff; }
+      .btn.success { background: var(--good); color: #061a2c; }
+      .loop-state { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
+      .loop-state .pill { padding: 2px 10px; border-radius: 10px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+      .loop-state .pill.running { background: rgba(63, 185, 80, 0.2); color: var(--good); }
+      .loop-state .pill.stopped { background: rgba(139, 148, 158, 0.2); color: var(--muted); }
+      .loop-state .pill.starting { background: rgba(210, 153, 34, 0.2); color: var(--warn); }
+      .events { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; font-family: ui-monospace, "Cascadia Code", monospace; font-size: 11px; }
+      .event-line { padding: 3px 6px; border-radius: 3px; line-height: 1.4; }
+      .event-line.iteration_start { background: rgba(88, 166, 255, 0.08); border-left: 2px solid var(--accent); }
+      .event-line.iteration_done { background: rgba(63, 185, 80, 0.08); border-left: 2px solid var(--good); }
+      .event-line.iteration_done.reverted { background: rgba(248, 81, 73, 0.06); border-left-color: var(--bad); }
+      .event-line.agent_call_start, .event-line.agent_call_done { color: #b392f0; }
+      .event-line.eval_start { color: var(--warn); }
+      .event-line .ts { color: var(--muted-2); margin-right: 6px; }
+      .event-line .ev { color: var(--muted); margin-right: 6px; min-width: 90px; display: inline-block; }
+      .progress-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+      .progress-bar-wrap { flex: 1; min-width: 200px; height: 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 7px; overflow: hidden; position: relative; }
+      .progress-bar-wrap .progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width 0.4s; }
+      .progress-bar-wrap.running .progress-fill {
+        background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      }
+      .progress-bar-wrap .progress-text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: #fff; mix-blend-mode: difference; }
+      :root { --muted-2: #6e7681; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>autoresearch</h1>
+      <span class="live" id="live">disconnected</span>
+      <div class="controls">
+        <label>log
+          <select id="log-select">
+            <option value="research_log.jsonl">research_log.jsonl (default eval)</option>
+          </select>
+        </label>
+        <span id="last-refresh"></span>
+        <a class="nav-link" id="report-link" href="/autoresearch-report.html">report →</a>
+        <a class="nav-link" href="/hio.html">HIO list →</a>
+      </div>
+    </header>
+    <div class="grid">
+      <div>
+        <div class="panel">
+          <h2>loop control</h2>
+          <div class="control-panel">
+            <div class="control-row">
+              <span class="loop-state">
+                <span class="pill stopped" id="loop-state-pill">stopped</span>
+                <span id="loop-state-text">no loop running</span>
+              </span>
+              <span style="margin-left:auto;">
+                <button class="btn success" id="btn-start">▶ Start</button>
+                <button class="btn danger" id="btn-stop" disabled>■ Stop</button>
+              </span>
+            </div>
+            <div class="control-row">
+              <label>train secs / seed
+                <input type="number" id="cfg-train-secs" class="short" value="300" min="5" max="3600" step="15" />
+              </label>
+              <label>maps (CSV)
+                <input type="text" id="cfg-maps" class="medium" placeholder="Watertankrun.track" />
+              </label>
+              <label>log file
+                <input type="text" id="cfg-log-path" class="medium" placeholder="research_log_singlemap.jsonl" />
+              </label>
+              <label>max iters
+                <input type="number" id="cfg-max-iters" class="short" value="1000" min="1" max="10000" />
+              </label>
+            </div>
+            <div class="progress-row" id="progress-row" style="display:none;">
+              <span style="font-size:11px;color:var(--muted);min-width:160px;" id="progress-label"></span>
+              <div class="progress-bar-wrap" id="progress-wrap">
+                <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+                <div class="progress-text" id="progress-text"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="panel" style="margin-top:12px">
+          <h2>score over iterations</h2>
+          <div id="chart"></div>
+        </div>
+        <div class="panel" style="margin-top:12px">
+          <h2>summary</h2>
+          <div class="stats" id="stats"></div>
+        </div>
+        <div class="panel" style="margin-top:12px">
+          <h2>events (newest at bottom)</h2>
+          <div class="events" id="events"></div>
+        </div>
+        <div class="panel" style="margin-top:12px">
+          <h2>per-map (latest iteration)</h2>
+          <div id="per-map"></div>
+        </div>
+      </div>
+      <div>
+        <div class="panel">
+          <h2>iterations (newest first)</h2>
+          <div class="iter-list" id="iter-list"></div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/autoresearch-dashboard.ts"></script>
+  </body>
+</html>
