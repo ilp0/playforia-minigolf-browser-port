@@ -1,9 +1,33 @@
 # Autoresearch handoff plan
 
+> **Status (2026-05-10): IMPLEMENTED.** This document is the original
+> design rationale, kept for historical context. The as-built system
+> is documented in [`HOW_IT_WORKS.md`](./HOW_IT_WORKS.md) §10 (the
+> autoresearch loop) and [`AUTORESEARCH.md`](./AUTORESEARCH.md) (CLI
+> quick reference). The numbered sections below trace cleanly to the
+> code:
+>
+> | Plan section | Implementation |
+> |---|---|
+> | §1 Six principles | Encoded in the structure of `research_loop.ts` + `headless/autoresearch-bounds.ts` |
+> | §2 Mutable vs frozen | `research_program.ts` is the only mutable file; everything else under `headless/` and `src/` is frozen |
+> | §3 Scalar metric | `research_eval.ts:medianBySeed` — mean success rate across maps, median across seeds |
+> | §4 Eval harness | `headless/harness.ts`, `headless/maps.ts`, `headless/track-loader.ts`, `headless/atlases.ts` |
+> | §5 program.md | [`program.md`](./program.md) — read by the loop every iteration |
+> | §6 The loop | `research_loop.ts` |
+> | §7 Implementation tasks | All seven tasks delivered (Node sanity-check, headless harness, eval set, program.ts/md, loop runner, analysis script). Plus the four browser pages and the HIO scanner that grew out of it. |
+> | §8 Failure modes | Each "do not do" is enforced: `autoresearch-bounds.ts` clamps gameable knobs, the harness loads research_program.ts via dynamic import only, every iteration trains from scratch. |
+> | §11 Stop conditions | Implemented as `--keep-rate-floor` and `--plateau-window` in `research_loop.ts` |
+>
+> Read the rest of this file when designing extensions to the loop.
+> For day-to-day usage, [`HOW_IT_WORKS.md`](./HOW_IT_WORKS.md) §10 is
+> what you want.
+
+---
+
 A plan for applying the *principles* of Karpathy's
 [autoresearch](https://github.com/karpathy/autoresearch) to this RL trainer
-(`port/ai`). **This is a design doc — no code yet.** The next agent
-implements it.
+(`port/ai`).
 
 The previous context window built a lot of mechanism (HIO search, safety
 filter, pathfinder, navigation channel, ~27 tunable knobs, etc.). What
