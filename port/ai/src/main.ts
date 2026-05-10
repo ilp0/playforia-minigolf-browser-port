@@ -9,7 +9,12 @@
 
 import { PICKER, DEFAULT_TRACK_FILE, loadTrackByFile, listAllTracks } from "./tracks.ts";
 import { loadTrack, type LoadedTrack } from "./loader.ts";
-import { Episode, episodeReturn, discountedPerStepReturns } from "./env.ts";
+import {
+  Episode,
+  episodeReturn,
+  discountedPerStepReturns,
+  isConverged,
+} from "./env.ts";
 import { MLPAgent, type PolicyStep } from "./agent.ts";
 import { createRenderer, type AIRenderer } from "./render.ts";
 import { RewardChart } from "./chart.ts";
@@ -19,6 +24,16 @@ import {
   POLICY_VERSION,
   type SavedPolicy,
 } from "./storage.ts";
+import {
+  loadConfig,
+  saveConfig,
+  DEFAULTS as CONFIG_DEFAULTS,
+  BOUNDS as CONFIG_BOUNDS,
+  ARCHITECTURE_KEYS,
+  type TrainingConfig,
+} from "./config.ts";
+import { extractRoute } from "./path.ts";
+import { searchHoleInOne } from "./hio.ts";
 
 const stage = document.getElementById("stage") as HTMLCanvasElement | null;
 const chartCanvas = document.getElementById("chart") as HTMLCanvasElement | null;
@@ -36,12 +51,6 @@ const evalIndicator = document.getElementById("eval-indicator");
 
 if (!stage) throw new Error("missing #stage canvas");
 
-/** How many parallel rollouts share the network. Each gets its own ball
- *  on the canvas + its own trace. The agent batches `batchSize` finished
- *  episodes before stepping the weights, which is naturally synchronous
- *  with NUM_PARALLEL = batchSize. */
-const NUM_PARALLEL = 4;
-
 let track: LoadedTrack;
 let renderer: AIRenderer;
 let agent: MLPAgent;
@@ -49,6 +58,11 @@ let episodes: Episode[] = [];
 let traces: PolicyStep[][] = [];
 let episodeIndex = 0;
 let chart: RewardChart | null = null;
+/** The training config currently driving the agent. Loaded per-map from
+ *  localStorage (defaults if no save). When the user edits a knob in the
+ *  UI it goes here, then either applies live to the agent (most knobs)
+ *  or rebuilds the agent (architectural knobs). */
+let cfg: TrainingConfig = { ...CONFIG_DEFAULTS };
 
 const RECENT_WINDOW = 50;
 const recentReturns: number[] = [];
@@ -71,6 +85,93 @@ let perfected = false;
 
 /** Filename of the .track currently loaded - used as the persistence key. */
 let currentMapFile = "";
+
+/** Toggle for the pathfinder-route overlay on the canvas. Bound to the
+ *  `#show-route` checkbox in the controls section. */
+let showRoute = false;
+
+/** Generation counter for the HIO pre-search. Bumped on every map load;
+ *  in-flight searches check this against their captured value and bail
+ *  early if it changed - prevents a slow search on map A from
+ *  accidentally writing its result onto map B if the user switched
+ *  maps mid-search. */
+let hioSearchGeneration = 0;
+/** Set true while an HIO search is running for the current map. The
+ *  frame loop short-circuits training while this is true so the agent
+ *  doesn't burn cycles on a map we're about to confirm-perfect. */
+let hioSearchInProgress = false;
+
+/** Persistent canvas the HIO search paints into as it tries each
+ *  candidate. The frame loop composites this layer onto the stage so
+ *  the user sees the search building up live - a fan of dashed lines
+ *  fanning out from the start position, colour-coded by outcome.
+ *  Allocated lazily; cleared when a new search starts. */
+let hioOverlayCanvas: HTMLCanvasElement | null = null;
+let hioOverlayCtx: CanvasRenderingContext2D | null = null;
+function ensureHioOverlay(): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } {
+  if (hioOverlayCanvas && hioOverlayCtx) return { canvas: hioOverlayCanvas, ctx: hioOverlayCtx };
+  const c = document.createElement("canvas");
+  c.width = 735;
+  c.height = 375;
+  const x = c.getContext("2d");
+  if (!x) throw new Error("HIO overlay 2d context unavailable");
+  hioOverlayCanvas = c;
+  hioOverlayCtx = x;
+  return { canvas: c, ctx: x };
+}
+function clearHioOverlay(): void {
+  if (hioOverlayCtx && hioOverlayCanvas) {
+    hioOverlayCtx.clearRect(0, 0, hioOverlayCanvas.width, hioOverlayCanvas.height);
+  }
+}
+
+/** Paint one HIO-search candidate onto the overlay: a faint line from
+ *  the ball's start position to where the shot ended up, plus a small
+ *  dot at the resting position. Colour-coded by outcome so the user
+ *  can read the search at a glance:
+ *    - holed → bright gold (the winning shot, drawn last on success)
+ *    - water → cyan/blue
+ *    - acid  → orange/red
+ *    - normal (rolled-and-stopped on grass) → green
+ *  Lines use very low alpha so 35 000 of them accumulate into a
+ *  density "fan" of where the ball can reach. Dots are slightly more
+ *  opaque so the resting points stand out. */
+function paintHioCandidate(
+  ctx: CanvasRenderingContext2D,
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+  outcome: "normal" | "water" | "acid" | "holed",
+): void {
+  let line: string;
+  let dot: string;
+  switch (outcome) {
+    case "holed":
+      line = "rgba(255,215,0,0.95)";
+      dot = "rgba(255,215,0,1)";
+      break;
+    case "water":
+      line = "rgba(80,180,255,0.05)";
+      dot = "rgba(80,180,255,0.4)";
+      break;
+    case "acid":
+      line = "rgba(255,120,80,0.05)";
+      dot = "rgba(255,120,80,0.4)";
+      break;
+    default:
+      line = "rgba(120,255,150,0.04)";
+      dot = "rgba(120,255,150,0.5)";
+  }
+  ctx.strokeStyle = line;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(startX, startY);
+  ctx.lineTo(endX, endY);
+  ctx.stroke();
+  ctx.fillStyle = dot;
+  ctx.fillRect(endX - 1, endY - 1, 2, 2);
+}
 
 /** UI mode: training (stochastic + weight updates), eval (deterministic
  *  policy mean, weights frozen), best (replay the recorded best route).
@@ -188,6 +289,19 @@ async function main() {
     updateSpeedLabel();
   }
 
+  // Pathfinder-route overlay toggle. Persisted to localStorage so the
+  // user's choice survives a refresh (it's a UI preference, not a
+  // per-map setting).
+  const routeToggle = document.getElementById("show-route") as HTMLInputElement | null;
+  if (routeToggle) {
+    showRoute = localStorage.getItem("minigolf-ai:show-route") === "1";
+    routeToggle.checked = showRoute;
+    routeToggle.addEventListener("change", () => {
+      showRoute = routeToggle.checked;
+      localStorage.setItem("minigolf-ai:show-route", showRoute ? "1" : "0");
+    });
+  }
+
   requestAnimationFrame(frame);
 }
 
@@ -197,6 +311,19 @@ async function loadMap(filename: string, resetAgent: boolean): Promise<void> {
   track = await loadTrack(text);
   renderer = createRenderer(track);
   if (statMap) statMap.textContent = track.name || "(unnamed)";
+
+  // Each map has its own training config. Load it before creating the
+  // agent so architectural knobs (gridSize, raySamples, hiddenSize) take
+  // effect immediately. Auto-tune maxStrokes from the human community's
+  // average strokes per play: floor of 30 (the static default), but
+  // bump to 10× avg on harder maps where the human average exceeds 3.
+  // The 10× headroom lets the agent recover from a few bad strokes
+  // without immediately timing out. User-saved overrides still win.
+  const meta = track.meta;
+  const avgStrokes =
+    meta.plays > 0 && meta.strokes > 0 ? meta.strokes / meta.plays : 0;
+  const autoMaxStrokes = Math.max(30, Math.ceil(avgStrokes * 10));
+  cfg = loadConfig(filename, { maxStrokes: autoMaxStrokes });
 
   recentReturns.length = 0;
   recentSuccesses.length = 0;
@@ -212,20 +339,22 @@ async function loadMap(filename: string, resetAgent: boolean): Promise<void> {
   if (perfEl) perfEl.style.display = "none";
 
   if (resetAgent || !agent) {
-    agent = new MLPAgent({
-      lr: 1e-4,
-      gamma: 0.99,
-      batchSize: NUM_PARALLEL,
-    });
+    agent = new MLPAgent(cfg);
     console.log(
-      `Actor-critic agent: ${agent.net.paramCount + agent.Wv.length + agent.bv.length} parameters, batchSize=${agent.batchSize}, γ=${agent.gamma}`,
+      `Actor-critic agent: ${agent.net.paramCount + agent.Wv.length + agent.bv.length} parameters, batchSize=${agent.batchSize}, γ=${agent.gamma}, gridSize=${cfg.gridSize}, raySamples=${cfg.raySamples}, hiddenSize=${cfg.hiddenSize}`,
     );
     setMode("training");
+  } else {
+    // Map switch without agent reset (rare path: only when the explicit
+    // resetAgent flag is false). Apply non-architectural cfg fields live
+    // so reward magnitudes / lr / γ track the new map's config.
+    agent.updateLiveConfig(cfg);
   }
   // Reset bestActions for the new map; if a saved policy below has them,
   // they get restored after agent.loadSerialized.
   bestActions = null;
   agent.setMap(track.map);
+  agent.setNavMap(track.pathDistMap.dist);
 
   // Try to restore a previously saved policy for this map. Loading happens
   // BEFORE setMap took effect on `agent.encodeState`, so we just call
@@ -259,21 +388,141 @@ async function loadMap(filename: string, resetAgent: boolean): Promise<void> {
       setMode(bestActions ? "best" : "eval");
       if (perfEl) perfEl.style.display = "";
     } else if (saved.status === "CONVERGED") {
-      // Loaded converged → eval mode by default (no recorded best route
-      // worth replaying yet, just clean policy playback).
-      setMode("eval");
+      // Loaded converged → eval mode by default. Re-check against the
+      // current convergence rule first, though: older saves were made
+      // under a looser rule (success rate only, no par check), and an
+      // old "CONVERGED" save may not meet the current bar. Loading
+      // those into eval mode would freeze a sub-optimal policy
+      // permanently. If the loaded state doesn't pass today's check,
+      // fall back to training mode so the agent keeps improving.
+      const loadedSuccess =
+        recentSuccesses.length > 0
+          ? recentSuccesses.reduce((a, b) => a + b, 0) / recentSuccesses.length
+          : 0;
+      const stillConverged = isConverged({
+        success: loadedSuccess,
+        lifetimeReturnsCount,
+        recentSuccessCount: recentSuccesses.length,
+        bestStrokes,
+        par: track?.meta.bestPar ?? 0,
+      });
+      if (stillConverged) setMode("eval");
+      else setMode("training");
     }
   }
 
   episodes = [];
   traces = [];
-  for (let i = 0; i < NUM_PARALLEL; i++) {
-    episodes.push(new Episode(track, { maxStrokes: 30, seed: i + 1 }));
+  for (let i = 0; i < cfg.numParallel; i++) {
+    episodes.push(new Episode(track, { maxStrokes: cfg.maxStrokes, seed: i + 1 }));
     traces.push([]);
   }
   updateStatsPanel();
   updateMapStats();
   updateMetaPanel();
+  refreshConfigPanel();
+
+  // HIO pre-search: brute-force every shot on a polar grid and check
+  // for a one-stroke hole. If found, we PERFECT immediately and skip
+  // RL entirely - much faster than training a network on solvable maps.
+  // Skipped when a saved policy already exists (we trust the user-
+  // accumulated training over a re-search).
+  if (
+    cfg.searchHIOFirst > 0 &&
+    !perfected &&
+    !saved
+  ) {
+    void runHIOPreSearch(filename);
+  }
+}
+
+/** Background HIO search. Captures the current `hioSearchGeneration` so
+ *  if the user switches maps mid-search we discard the result. On
+ *  success: persist as PERFECTED with the single-stroke route, flip the
+ *  agent into "best" mode, show the perfect badge. On failure: nothing
+ *  changes and RL keeps running. */
+async function runHIOPreSearch(filename: string): Promise<void> {
+  const myGen = ++hioSearchGeneration;
+  hioSearchInProgress = true;
+  if (statLast) statLast.textContent = "searching for hole-in-one...";
+  // Reset and capture the overlay so each candidate can paint into it.
+  // Cleared at the start of every search; rendered as a layer on the
+  // stage canvas while the search is in flight.
+  const overlay = ensureHioOverlay();
+  clearHioOverlay();
+  // Capture the start position once - all candidate shots fan from
+  // the same ball position.
+  const startBallX = track.startX;
+  const startBallY = track.startY;
+  const t0 = performance.now();
+  const result = await searchHoleInOne(track, {
+    onProgress: (done, total) => {
+      if (myGen !== hioSearchGeneration) return; // user switched maps
+      if (statLast) {
+        const pct = ((done / total) * 100).toFixed(0);
+        statLast.textContent = `HIO search ${pct}% (${done}/${total})`;
+      }
+    },
+    onCandidate: (action, finalX, finalY, outcome) => {
+      if (myGen !== hioSearchGeneration) return;
+      paintHioCandidate(overlay.ctx, startBallX, startBallY, finalX, finalY, outcome);
+    },
+    isCancelled: () => myGen !== hioSearchGeneration,
+  });
+  const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
+  if (myGen !== hioSearchGeneration) {
+    // A different map is loaded now; bail.
+    return;
+  }
+  hioSearchInProgress = false;
+  if (!result) {
+    if (statLast) statLast.textContent = `no HIO found (${elapsed}s) — RL`;
+    console.log(`HIO search exhausted on ${filename} in ${elapsed}s; RL takes over`);
+    return;
+  }
+  console.log(
+    `HIO found on ${filename} in ${elapsed}s: dx=${result.action.dx.toFixed(2)}, dy=${result.action.dy.toFixed(2)} (after ${result.candidatesTried} candidates)`,
+  );
+  // Adopt the HIO as the perfected route.
+  bestStrokes = 1;
+  bestActions = [result.action];
+  perfected = true;
+  setMode("best");
+  const perfEl = document.getElementById("map-stat-perfected");
+  if (perfEl) perfEl.style.display = "";
+
+  // Persist as a PERFECTED save so a refresh skips the search next time.
+  // We store the agent's current (untrained) weights - they're not the
+  // source of the route, but the storage shape requires them.
+  const data = agent.toSerialized();
+  savePolicy({
+    version: POLICY_VERSION,
+    filename,
+    bestStrokes: 1,
+    status: "PERFECTED",
+    episodesTrained: 0,
+    savedAt: Date.now(),
+    lifetimeReturnsSum: 0,
+    recentSuccesses: [],
+    recentReturns: [],
+    bestActions: [result.action],
+    ...data,
+  });
+  lastSavedStatus = "PERFECTED";
+  lastSavedBest = 1;
+  if (statLast) {
+    statLast.textContent = `HIO found in ${elapsed}s 🏆`;
+  }
+  // Replace the in-flight episodes so they pick up the route on
+  // their next stroke.
+  episodes = [];
+  traces = [];
+  for (let i = 0; i < cfg.numParallel; i++) {
+    episodes.push(new Episode(track, { maxStrokes: cfg.maxStrokes, seed: i + 1 }));
+    traces.push([]);
+  }
+  updateStatsPanel();
+  updateMapStats();
 }
 
 /**
@@ -298,7 +547,15 @@ function maybePersistPolicy(holed: boolean): void {
       : 0;
   let tier: SavedPolicy["status"] | null = null;
   if (perfected) tier = "PERFECTED";
-  else if (lifetimeReturnsCount >= 30 && recentSuccesses.length >= 50 && success >= 0.9) tier = "CONVERGED";
+  else if (
+    isConverged({
+      success,
+      lifetimeReturnsCount,
+      recentSuccessCount: recentSuccesses.length,
+      bestStrokes,
+      par: track?.meta.bestPar ?? 0,
+    })
+  ) tier = "CONVERGED";
   else if (holed && bestStrokes < lastSavedBest) tier = "BEST_IMPROVED";
 
   if (!tier) return;
@@ -342,12 +599,61 @@ function maybePersistPolicy(holed: boolean): void {
   );
 }
 
+/**
+ * Sample an action from the agent and (when `safetyRetries > 0`)
+ * sandbox-simulate it before committing. If the simulation says the
+ * ball would drown in water/acid, draw a fresh sample. After
+ * `safetyRetries` rejections we give up and use the last sample - we'd
+ * rather make a bad shot than burn unbounded compute.
+ *
+ * Eval mode is skipped: there's nothing to re-sample (the policy is
+ * deterministic), so retrying would just produce the same action.
+ */
+function pickSafeAction(
+  state: ReturnType<Episode["state"]>,
+  ep: Episode,
+  trace: PolicyStep[],
+): { dx: number; dy: number } {
+  const retries = cfg.safetyRetries;
+  if (retries <= 0 || agent.evalMode) {
+    return agent.actAndTrace(state, trace);
+  }
+  const learnFromRejected = cfg.learnFromRejectedShots > 0 && !agent.evalMode;
+  let last = agent.sampleAction(state);
+  for (let r = 0; r < retries; r++) {
+    const outcome = ep.simulateShot(last.action);
+    if (outcome !== "water" && outcome !== "acid") {
+      agent.commitTraceStep(trace, last.step);
+      return last.action;
+    }
+    // Rejected: feed it back as a single-sample policy gradient with
+    // the synthetic water/acid penalty as the reward. This way the
+    // policy actually learns "don't aim there", instead of relying on
+    // the filter to censor those samples forever.
+    if (learnFromRejected) {
+      const syntheticReward =
+        cfg.strokePenalty + (outcome === "acid" ? cfg.acidPenalty : cfg.waterPenalty);
+      // Scale 1/safetyRetries: total rejection contribution per stroke
+      // ≈ one accepted-step's gradient, regardless of how many retries
+      // landed in water. Otherwise hard maps spam the gradient buffer
+      // with rejection signal and destabilise training.
+      const gradScale = 1.0 / Math.max(1, cfg.safetyRetries);
+      agent.trainPolicyOnSample(last.step, syntheticReward, gradScale);
+    }
+    last = agent.sampleAction(state);
+  }
+  // All retries hit water/acid - commit the last try anyway so the
+  // policy gets gradient signal from the resulting penalty.
+  agent.commitTraceStep(trace, last.step);
+  return last.action;
+}
+
 /** End episode i (credit it, push stats, train) and start a fresh one in
  *  its slot. Used both on natural termination and on btn-reset. */
 function endAndReset(i: number) {
   const ep = episodes[i];
   if (!ep) return;
-  const ret = episodeReturn(ep);
+  const ret = episodeReturn(ep, cfg);
 
   // Only train in "training" mode. Eval and best modes pause the
   // weight updates entirely so switching is non-destructive.
@@ -355,7 +661,7 @@ function endAndReset(i: number) {
     const stepReturns =
       agent.gamma >= 1
         ? new Array<number>(ep.strokes).fill(ret)
-        : discountedPerStepReturns(ep, agent.gamma);
+        : discountedPerStepReturns(ep, agent.gamma, cfg);
     agent.train(traces[i], stepReturns);
   }
 
@@ -400,7 +706,7 @@ function endAndReset(i: number) {
   maybePersistPolicy(holed);
 
   episodeIndex++;
-  episodes[i] = new Episode(track, { maxStrokes: 30, seed: episodeIndex + i });
+  episodes[i] = new Episode(track, { maxStrokes: cfg.maxStrokes, seed: episodeIndex + i });
   traces[i] = [];
 }
 
@@ -505,7 +811,15 @@ function updateMapStats() {
     if (perfected) {
       label = "PERFECTED";
       cls = "perfected";
-    } else if (lifetimeReturnsCount >= 30 && recentSuccesses.length >= 50 && success >= 0.9) {
+    } else if (
+      isConverged({
+        success,
+        lifetimeReturnsCount,
+        recentSuccessCount: recentSuccesses.length,
+        bestStrokes,
+        par: track?.meta.bestPar ?? 0,
+      })
+    ) {
       label = "CONVERGED";
       cls = "converged";
     } else if (success >= 0.5) {
@@ -544,6 +858,16 @@ function frame(_time: number) {
     requestAnimationFrame(frame);
     return;
   }
+  // Pause sim while the HIO pre-search is in progress. Otherwise the
+  // agent burns cycles on a map we're about to confirm-perfect, and
+  // its trace fills with rejected actions that don't match the eventual
+  // policy. Render still runs so the user sees the map AND the live
+  // overlay of attempted shots in `hioOverlayCanvas`.
+  if (hioSearchInProgress) {
+    renderer.render(stage!, episodes, { underlay: hioOverlayCanvas });
+    requestAnimationFrame(frame);
+    return;
+  }
 
   // Single sim pass per rAF: each episode advances by `physicsPerFrame`
   // ticks, then we render. Higher slider = balls travel further between
@@ -567,7 +891,7 @@ function frame(_time: number) {
       ) {
         action = bestActions[ep.strokes];
       } else {
-        action = agent.actAndTrace(state, traces[i]);
+        action = pickSafeAction(state, ep, traces[i]);
       }
       ep.applyShot(action);
     } else {
@@ -591,9 +915,206 @@ function frame(_time: number) {
     const { sx, sy } = agent.currentMeanStd(episodes[0].state());
     elSigma.textContent = ((sx + sy) / 2).toFixed(1);
   }
-  renderer.render(stage!, episodes, { intents });
+  // Pathfinder route overlay: extract from ball-0's current position to
+  // the hole. Recomputed every frame because the ball moves; cost is a
+  // ~50-step downhill walk through a Int16Array - negligible.
+  let route: Array<{ x: number; y: number }> | null = null;
+  if (showRoute && track) {
+    const s0 = episodes[0].state();
+    route = extractRoute(track.pathDistMap, s0.ballX, s0.ballY);
+  }
+  renderer.render(stage!, episodes, { intents, route });
   requestAnimationFrame(frame);
 }
+
+// ---------------------------------------------------------------------------
+// Training-config UI.
+//
+// One <input> per knob, generated from the config schema. Architectural
+// knobs (gridSize, raySamples, hiddenSize) trigger an agent rebuild for
+// the current map - the network's input/weight shape depends on them, so
+// we can't keep the saved policy. Live knobs apply to the running agent
+// and are saved to localStorage immediately.
+//
+// Each row also shows the default in light text so the user knows what
+// they're deviating from. A "reset to defaults" button restores all knobs
+// for the current map in one click.
+//
+// Defined BEFORE `main()` is called so the async `loadMap` chain can call
+// `refreshConfigPanel` without hitting a temporal-dead-zone error on the
+// `cfgInputs` const.
+
+interface ConfigRow {
+  key: keyof TrainingConfig;
+  label: string;
+  /** Optional formatter (defaults to the raw number). Used for `lr` so
+   *  scientific notation displays cleanly. */
+  fmt?: (v: number) => string;
+}
+
+const CONFIG_GROUPS: Array<{ title: string; rows: ConfigRow[]; note?: string }> = [
+  {
+    title: "architecture",
+    note: "changing these resets the agent for this map",
+    rows: [
+      { key: "gridSize",            label: "grid size (tiles)" },
+      { key: "raySamples",          label: "ball→hole ray samples" },
+      { key: "radialRays",          label: "radial rays (count)" },
+      { key: "radialSamplesPerRay", label: "samples per radial ray" },
+      { key: "useNavigation",       label: "navigation channel (0/1)" },
+      { key: "hiddenSize",          label: "hidden neurons" },
+    ],
+  },
+  {
+    title: "spatial / safety",
+    rows: [
+      { key: "radialRayMaxDist",        label: "radial ray reach (px)" },
+      { key: "safetyRetries",           label: "water/acid retry sample" },
+      { key: "learnFromRejectedShots",  label: "learn from rejected shots (0/1)" },
+      { key: "searchHIOFirst",          label: "brute-force HIO search (0/1)" },
+    ],
+  },
+  {
+    title: "optimizer",
+    rows: [
+      { key: "lr",        label: "learning rate", fmt: (v) => v.toExponential(2) },
+      { key: "gamma",     label: "γ (discount)" },
+      { key: "batchSize", label: "batch size (episodes)" },
+      { key: "valueCoef", label: "value loss coef" },
+      { key: "gradClip",  label: "gradient clip" },
+    ],
+  },
+  {
+    title: "action distribution",
+    rows: [
+      { key: "meanScale",  label: "mean scale (px)" },
+      { key: "initLogStd", label: "initial log σ" },
+      { key: "logStdMin",  label: "log σ min (clamp)" },
+      { key: "logStdMax",  label: "log σ max (clamp)" },
+    ],
+  },
+  {
+    title: "reward",
+    rows: [
+      { key: "strokePenalty", label: "stroke penalty" },
+      { key: "holeBonus",     label: "hole bonus" },
+      { key: "waterPenalty",  label: "water penalty" },
+      { key: "acidPenalty",   label: "acid penalty" },
+      { key: "progressBonus",    label: "progress bonus (per px closer)" },
+      { key: "explorationBonus", label: "exploration bonus (per px from start)" },
+    ],
+  },
+  {
+    title: "episode / runtime",
+    rows: [
+      { key: "maxStrokes",  label: "max strokes / episode" },
+      { key: "numParallel", label: "parallel rollouts" },
+    ],
+  },
+];
+
+const cfgPanel = document.getElementById("training-config");
+const cfgInputs = new Map<keyof TrainingConfig, HTMLInputElement>();
+
+function renderConfigPanel(): void {
+  if (!cfgPanel) return;
+  cfgPanel.innerHTML = "";
+  for (const group of CONFIG_GROUPS) {
+    const wrap = document.createElement("div");
+    wrap.className = "cfg-group";
+    const h = document.createElement("h3");
+    h.textContent = group.title;
+    wrap.appendChild(h);
+    if (group.note) {
+      const note = document.createElement("p");
+      note.className = "cfg-note";
+      note.textContent = group.note;
+      wrap.appendChild(note);
+    }
+    for (const row of group.rows) {
+      const r = document.createElement("label");
+      r.className = "cfg-row";
+      const lbl = document.createElement("span");
+      lbl.className = "cfg-label";
+      lbl.textContent = row.label;
+      const input = document.createElement("input");
+      input.type = "number";
+      const b = CONFIG_BOUNDS[row.key];
+      input.min = String(b.min);
+      input.max = String(b.max);
+      input.step = String(b.step);
+      input.dataset.key = row.key;
+      input.value = String(cfg[row.key]);
+      input.addEventListener("change", () => onConfigInputChange(row.key, input));
+      const def = document.createElement("span");
+      def.className = "cfg-default";
+      const formatted = row.fmt ? row.fmt(CONFIG_DEFAULTS[row.key]) : String(CONFIG_DEFAULTS[row.key]);
+      def.textContent = `default ${formatted}`;
+      r.appendChild(lbl);
+      r.appendChild(input);
+      r.appendChild(def);
+      wrap.appendChild(r);
+      cfgInputs.set(row.key, input);
+    }
+    cfgPanel.appendChild(wrap);
+  }
+  const buttons = document.createElement("div");
+  buttons.className = "cfg-buttons";
+  const resetBtn = document.createElement("button");
+  resetBtn.type = "button";
+  resetBtn.textContent = "reset to defaults";
+  resetBtn.addEventListener("click", () => {
+    cfg = { ...CONFIG_DEFAULTS };
+    saveConfig(currentMapFile, cfg);
+    void loadMap(currentMapFile, /*resetAgent=*/ true);
+  });
+  buttons.appendChild(resetBtn);
+  cfgPanel.appendChild(buttons);
+}
+
+function refreshConfigPanel(): void {
+  if (cfgInputs.size === 0) return;
+  for (const [key, input] of cfgInputs) {
+    if (document.activeElement !== input) input.value = String(cfg[key]);
+  }
+}
+
+function onConfigInputChange(key: keyof TrainingConfig, input: HTMLInputElement): void {
+  const next = parseFloat(input.value);
+  if (!Number.isFinite(next)) {
+    input.value = String(cfg[key]);
+    return;
+  }
+  const prev = cfg[key];
+  cfg = { ...cfg, [key]: next };
+  // Reflect any clamping (e.g. forcing odd grid sizes) back to the input.
+  saveConfig(currentMapFile, cfg);
+  // Reload to read back the clamped value into `cfg`.
+  cfg = loadConfig(currentMapFile);
+  if (document.activeElement !== input) input.value = String(cfg[key]);
+  if (cfg[key] === prev) return; // no-op after clamping
+
+  if ((ARCHITECTURE_KEYS as ReadonlyArray<keyof TrainingConfig>).includes(key)) {
+    // Network shape changed - any loaded weights are now incompatible.
+    void loadMap(currentMapFile, /*resetAgent=*/ true);
+    return;
+  }
+  // Live knob: just push the new values into the running agent. The
+  // next training batch picks them up.
+  agent.updateLiveConfig(cfg);
+  // numParallel and maxStrokes affect the rollout shape too. Easiest
+  // way to apply them cleanly is to recreate the in-flight episodes.
+  if (key === "numParallel" || key === "maxStrokes") {
+    episodes = [];
+    traces = [];
+    for (let i = 0; i < cfg.numParallel; i++) {
+      episodes.push(new Episode(track, { maxStrokes: cfg.maxStrokes, seed: episodeIndex + i + 1 }));
+      traces.push([]);
+    }
+  }
+}
+
+renderConfigPanel();
 
 main().catch((err) => {
   console.error("AI client failed to start:", err);

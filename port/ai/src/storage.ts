@@ -9,8 +9,16 @@
 // without crashing on legacy entries (loadPolicy returns null if the
 // version doesn't match — caller falls back to a fresh agent).
 
-export const POLICY_VERSION = 1;
-const PREFIX = "minigolf-ai:policy:v1:";
+// v1 → v2: input layer grew from 79 to 111 features (added 16-sample
+// ball→hole ray). Reward now includes per-stroke water/acid penalties so
+// the value head's old learning is also stale.
+// v2 → v3: default config now adds radial rays (8 dirs × 4 samples = 64
+// features), navigation channel (gridSize² extra features), and the
+// default gridSize bumped 5→9. Net inputSize default jumped 111 → 343 →
+// 424. Bumped so the handful of v2 trained policies don't silently
+// orphan; they're reachable for inspection but loadPolicy returns null.
+export const POLICY_VERSION = 3;
+const PREFIX = "minigolf-ai:policy:v3:";
 
 export interface SavedPolicy {
   version: typeof POLICY_VERSION;

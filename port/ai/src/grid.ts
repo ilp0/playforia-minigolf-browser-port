@@ -9,8 +9,9 @@
 
 import { PICKER, loadTrackByFile, listAllTracks } from "./tracks.ts";
 import { loadTrack, type LoadedTrack } from "./loader.ts";
-import { Episode, episodeReturn } from "./env.ts";
+import { Episode, episodeReturn, isConverged } from "./env.ts";
 import { MLPAgent, type PolicyStep } from "./agent.ts";
+import { loadConfig, type TrainingConfig } from "./config.ts";
 import { createRenderer, type AIRenderer } from "./render.ts";
 import {
   savePolicy,
@@ -48,6 +49,9 @@ interface Cell {
    *  best-known route, not the deterministic policy mean (which is
    *  rarely the best individual attempt). */
   bestActions: Array<{ dx: number; dy: number }> | null;
+  /** This cell's per-map training config snapshot. Used to size new
+   *  Episodes (maxStrokes) and to compute reward magnitudes. */
+  cfg: TrainingConfig;
   // DOM
   canvas: HTMLCanvasElement;
   statusEl: HTMLElement;
@@ -187,8 +191,13 @@ async function init() {
     if (!confirm("Delete ALL saved policies? Each cell will reset to a random network.")) return;
     for (const c of cells) {
       deletePolicy(c.file);
-      c.agent = newAgent();
+      // Reload the per-map config in case the user has tweaked it; the
+      // grid view doesn't expose UI to edit but it should pick up edits
+      // made in the single-map view.
+      c.cfg = loadConfig(c.file);
+      c.agent = newAgent(c.cfg);
       c.agent.setMap(c.track.map);
+      c.agent.setNavMap(c.track.pathDistMap.dist);
       c.bestStrokes = Infinity;
       c.recentSuccesses = [];
       c.lifetimeReturnsSum = 0;
@@ -197,7 +206,7 @@ async function init() {
       c.lastSavedStatus = "";
       c.lastSavedBest = Infinity;
       c.episodeIndex = 0;
-      c.episode = new Episode(c.track, { maxStrokes: 30, seed: 1 });
+      c.episode = new Episode(c.track, { maxStrokes: c.cfg.maxStrokes, seed: 1 });
       c.trace = [];
       c.bestActions = null;
       updateCellUI(c);
@@ -231,8 +240,8 @@ function removeAllCells(): void {
   cells.length = 0;
 }
 
-function newAgent(): MLPAgent {
-  return new MLPAgent({ lr: 1e-4, gamma: 0.99, batchSize: 4 });
+function newAgent(cfg: TrainingConfig): MLPAgent {
+  return new MLPAgent(cfg);
 }
 
 /** Compact "YYYY-MM" date for the cramped grid cell. Same epoch handling
@@ -249,8 +258,15 @@ function formatEpochShort(ms: number): string {
 async function createCell(file: string, label: string): Promise<Cell> {
   const text = await loadTrackByFile(file);
   const track = await loadTrack(text);
-  const agent = newAgent();
+  // Same auto-default as the single-map view: maxStrokes = max(30,
+  // 10 × map avg strokes per play). User-saved overrides still win.
+  const m = track.meta;
+  const avg = m.plays > 0 && m.strokes > 0 ? m.strokes / m.plays : 0;
+  const autoMax = Math.max(30, Math.ceil(avg * 10));
+  const cellCfg = loadConfig(file, { maxStrokes: autoMax });
+  const agent = newAgent(cellCfg);
   agent.setMap(track.map);
+  agent.setNavMap(track.pathDistMap.dist);
 
   // Try to restore a previously trained policy.
   const saved = loadPolicy(file);
@@ -280,12 +296,30 @@ async function createCell(file: string, label: string): Promise<Cell> {
       // Same demo treatment for converged cells: deterministic playback,
       // no further training. The user explicitly asked for this -
       // "no need to run the simulation when perfected or converged".
-      agent.evalMode = true;
+      // BUT older saves were made under a looser rule (success only).
+      // Re-check against today's rule; if the loaded state doesn't pass,
+      // keep training (otherwise the cell freezes at a sub-optimal policy).
+      const loadedSuccessCount = initialRecentSuccesses.length;
+      const loadedSuccess =
+        loadedSuccessCount > 0
+          ? initialRecentSuccesses.reduce((a, b) => a + b, 0) / loadedSuccessCount
+          : 0;
+      if (
+        isConverged({
+          success: loadedSuccess,
+          lifetimeReturnsCount: initialEpisodeIndex,
+          recentSuccessCount: loadedSuccessCount,
+          bestStrokes: initialBest,
+          par: track.meta.bestPar,
+        })
+      ) {
+        agent.evalMode = true;
+      }
     }
   }
 
   const renderer = createRenderer(track);
-  const episode = new Episode(track, { maxStrokes: 30, seed: 1 });
+  const episode = new Episode(track, { maxStrokes: cellCfg.maxStrokes, seed: 1 });
 
   // DOM scaffold for this cell.
   const dom = document.createElement("div");
@@ -353,6 +387,7 @@ async function createCell(file: string, label: string): Promise<Cell> {
     lastSavedStatus: initialStatus,
     lastSavedBest: initialBest,
     bestActions: initialBestActions,
+    cfg: cellCfg,
     canvas: dom.querySelector("canvas") as HTMLCanvasElement,
     statusEl: dom.querySelector(".status") as HTMLElement,
     epEl: dom.querySelector(".ep") as HTMLElement,
@@ -388,7 +423,7 @@ function refreshOverallCounts() {
 }
 
 function endAndReset(cell: Cell) {
-  const ret = episodeReturn(cell.episode);
+  const ret = episodeReturn(cell.episode, cell.cfg);
   if (!cell.agent.evalMode && cell.trace.length > 0) {
     // Constant-return-per-step (γ=1 effective for the train signal); the
     // agent's V baseline still uses γ=0.99 internally for the per-step
@@ -429,7 +464,10 @@ function endAndReset(cell: Cell) {
   }
 
   cell.episodeIndex++;
-  cell.episode = new Episode(cell.track, { maxStrokes: 30, seed: cell.episodeIndex + 1 });
+  cell.episode = new Episode(cell.track, {
+    maxStrokes: cell.cfg.maxStrokes,
+    seed: cell.episodeIndex + 1,
+  });
   cell.trace = [];
 
   maybePersist(cell, holed);
@@ -446,9 +484,13 @@ function statusOf(cell: Cell): {
       ? cell.recentSuccesses.reduce((a, b) => a + b, 0) / cell.recentSuccesses.length
       : 0;
   if (
-    cell.lifetimeReturnsCount >= 30 &&
-    cell.recentSuccesses.length >= 50 &&
-    success >= 0.9
+    isConverged({
+      success,
+      lifetimeReturnsCount: cell.lifetimeReturnsCount,
+      recentSuccessCount: cell.recentSuccesses.length,
+      bestStrokes: cell.bestStrokes,
+      par: cell.track.meta.bestPar,
+    })
   ) {
     return { cls: "converged", label: "CONVERGED" };
   }
@@ -487,9 +529,13 @@ function maybePersist(cell: Cell, holed: boolean) {
   let tier: SavedPolicy["status"] | null = null;
   if (cell.perfected) tier = "PERFECTED";
   else if (
-    cell.lifetimeReturnsCount >= 30 &&
-    cell.recentSuccesses.length >= 50 &&
-    success >= 0.9
+    isConverged({
+      success,
+      lifetimeReturnsCount: cell.lifetimeReturnsCount,
+      recentSuccessCount: cell.recentSuccesses.length,
+      bestStrokes: cell.bestStrokes,
+      par: cell.track.meta.bestPar,
+    })
   ) tier = "CONVERGED";
   else if (holed && cell.bestStrokes < cell.lastSavedBest) tier = "BEST_IMPROVED";
 
@@ -530,6 +576,41 @@ function maybePersist(cell: Cell, holed: boolean) {
   refreshOverallCounts();
 }
 
+/**
+ * Sample an action and (when `safetyRetries > 0`) sandbox-simulate it
+ * before committing. Mirrors the single-map view's `pickSafeAction`.
+ * Eval-mode cells skip the filter - their policy is deterministic so
+ * resampling would just produce the same action.
+ */
+function pickSafeAction(
+  cell: Cell,
+  state: ReturnType<Episode["state"]>,
+): { dx: number; dy: number } {
+  const retries = cell.cfg.safetyRetries;
+  if (retries <= 0 || cell.agent.evalMode) {
+    return cell.agent.actAndTrace(state, cell.trace);
+  }
+  const learnFromRejected = cell.cfg.learnFromRejectedShots > 0 && !cell.agent.evalMode;
+  let last = cell.agent.sampleAction(state);
+  for (let r = 0; r < retries; r++) {
+    const outcome = cell.episode.simulateShot(last.action);
+    if (outcome !== "water" && outcome !== "acid") {
+      cell.agent.commitTraceStep(cell.trace, last.step);
+      return last.action;
+    }
+    if (learnFromRejected) {
+      const syntheticReward =
+        cell.cfg.strokePenalty +
+        (outcome === "acid" ? cell.cfg.acidPenalty : cell.cfg.waterPenalty);
+      const gradScale = 1.0 / Math.max(1, cell.cfg.safetyRetries);
+      cell.agent.trainPolicyOnSample(last.step, syntheticReward, gradScale);
+    }
+    last = cell.agent.sampleAction(state);
+  }
+  cell.agent.commitTraceStep(cell.trace, last.step);
+  return last.action;
+}
+
 let lastCountsUpdate = 0;
 function frame(_time: number) {
   if (cells.length === 0) {
@@ -557,7 +638,7 @@ function frame(_time: number) {
       if (isDemo && cell.bestActions && stroke < cell.bestActions.length) {
         action = cell.bestActions[stroke];
       } else {
-        action = cell.agent.actAndTrace(state, cell.trace);
+        action = pickSafeAction(cell, state);
       }
       cell.episode.applyShot(action);
     } else {

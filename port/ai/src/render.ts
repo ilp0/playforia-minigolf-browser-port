@@ -29,6 +29,13 @@ export interface RenderOpts {
    *  from the matching ball; usually only set for episode 0 to keep
    *  multi-env visuals from getting busy. */
   intents?: Array<{ dx: number; dy: number } | null>;
+  /** Optional pathfinder route to render as an overlay - one polyline of
+   *  pixel positions from ball to hole. Null skips the overlay. */
+  route?: Array<{ x: number; y: number }> | null;
+  /** Optional offscreen canvas drawn underneath everything (between the
+   *  map and the trails). Used during HIO search to show the fan of
+   *  attempted shots accumulating live. */
+  underlay?: HTMLCanvasElement | null;
 }
 
 export function createRenderer(track: LoadedTrack): AIRenderer {
@@ -86,6 +93,19 @@ export function createRenderer(track: LoadedTrack): AIRenderer {
 
       trackRenderer.drawFrame(ctx, balls, localAim, peerAims);
 
+      // HIO-search underlay: drawn directly on top of the rendered map
+      // (and under trails / route / intent / balls). Built up incrementally
+      // by the search itself; we just composite it once per frame.
+      if (opts.underlay) {
+        ctx.drawImage(opts.underlay, 0, 0);
+      }
+
+      // Pathfinder route overlay - drawn under trails so the trails
+      // stay readable on top.
+      if (opts.route && opts.route.length >= 2) {
+        drawRoute(ctx, opts.route);
+      }
+
       // Trails per episode - colour-keyed by episode index so users can
       // distinguish which trail belongs to which ball.
       for (let i = 0; i < episodes.length; i++) {
@@ -132,6 +152,35 @@ function drawIntentArrow(
   ctx.lineTo(tipX - HEAD * Math.cos(ang + Math.PI / 6), tipY - HEAD * Math.sin(ang + Math.PI / 6));
   ctx.closePath();
   ctx.fill();
+  ctx.restore();
+}
+
+/** Pathfinder route overlay: a magenta dashed polyline with small dot
+ *  markers at each tile-step waypoint. Distinguishable from the trail
+ *  (which is solid) and the intent arrow (which is cyan). */
+function drawRoute(
+  ctx: CanvasRenderingContext2D,
+  route: Array<{ x: number; y: number }>,
+): void {
+  ctx.save();
+  ctx.strokeStyle = "rgba(255, 80, 220, 0.8)";
+  ctx.fillStyle = "rgba(255, 80, 220, 0.8)";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  ctx.moveTo(route[0].x, route[0].y);
+  for (let i = 1; i < route.length; i++) {
+    ctx.lineTo(route[i].x, route[i].y);
+  }
+  ctx.stroke();
+  // Waypoint markers at each tile-step (skip the ball pixel and hole
+  // pixel - those already have their own markers).
+  ctx.setLineDash([]);
+  for (let i = 1; i < route.length - 1; i++) {
+    ctx.beginPath();
+    ctx.arc(route[i].x, route[i].y, 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.restore();
 }
 

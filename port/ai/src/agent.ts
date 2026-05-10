@@ -25,6 +25,13 @@ import { TILE_WIDTH, TILE_HEIGHT, MAP_PIXEL_WIDTH, PIXEL_PER_TILE } from "@minig
 import type { ParsedMap } from "../../web/src/game/map.ts";
 import type { Action, EpisodeState } from "./env.ts";
 import { MLP, randn } from "./nn.ts";
+import { DEFAULTS, ARCHITECTURE_KEYS, type TrainingConfig } from "./config.ts";
+import { UNREACHABLE_DIST } from "./path.ts";
+
+/** Tile-step distance at which the navigation channel saturates to 1.0.
+ *  Same constant the env-side reward shaping uses (kept here so the
+ *  encoder doesn't depend on path.ts internals beyond UNREACHABLE_DIST). */
+const NAV_NORMALISE_BY = 60;
 
 export interface Agent {
   act(state: EpisodeState): Action;
@@ -44,16 +51,30 @@ export class RandomAgent implements Agent {
 
 // --- Network shape ----------------------------------------------------------
 
-const GRID_SIZE = 5;
+/** Per-tile channels: (is_wall, is_hole, is_hazard). */
 const GRID_CHANNELS = 3;
-const INPUT_SIZE = 4 + GRID_SIZE * GRID_SIZE * GRID_CHANNELS;
-const HIDDEN_SIZE = 32;
+/** Per-ray-sample channels: (is_wall, is_hazard). The hole channel is
+ *  redundant on the ray (the hole is always at the ray endpoint) so we
+ *  drop it. */
+const RAY_CHANNELS = 2;
 /** Policy outputs: 2 means + 2 log_stds. Value head is separate W_v / b_v. */
 const POLICY_OUTPUT_SIZE = 4;
 
-const INIT_LOG_STD = 3.55;
-const LOG_STD_MIN = 1.6;
-const LOG_STD_MAX = 4.4;
+/** Compute the network's input size from the architectural knobs. Used
+ *  by both the agent constructor and the persistence-version check.
+ *  When `useNavigation` is on, the grid gets a 4th channel for the
+ *  pathfinder distance, so per-tile feature count is GRID_CHANNELS + 1. */
+export function inputSizeFor(
+  cfg: Pick<TrainingConfig, "gridSize" | "raySamples" | "radialRays" | "radialSamplesPerRay" | "useNavigation">,
+): number {
+  const gridChans = GRID_CHANNELS + (cfg.useNavigation ? 1 : 0);
+  return (
+    4 +
+    cfg.gridSize * cfg.gridSize * gridChans +
+    cfg.raySamples * RAY_CHANNELS +
+    cfg.radialRays * cfg.radialSamplesPerRay * RAY_CHANNELS
+  );
+}
 
 // --- Trace data -------------------------------------------------------------
 
@@ -73,13 +94,20 @@ export interface PolicyStep {
 
 // --- Tile encoding ----------------------------------------------------------
 
-function tileFeatures(map: ParsedMap, tx: number, ty: number): [number, number, number] {
-  if (tx < 0 || tx >= TILE_WIDTH || ty < 0 || ty >= TILE_HEIGHT) {
-    return [1, 0, 0];
-  }
-  const px = tx * PIXEL_PER_TILE + 7;
-  const py = ty * PIXEL_PER_TILE + 7;
-  const cid = map.collision[py * MAP_PIXEL_WIDTH + px];
+/** Classify a collision-id into the (is_wall, is_hole, is_hazard) triple
+ *  used by both the fine tile grid and the ball→hole ray. Out-of-map
+ *  positions count as walls (the ball can't enter them).
+ *
+ *  Tile id buckets (matching physics.ts):
+ *    walls  : 1..3, 16..23
+ *    hole   : 25
+ *    water  : 12, 14
+ *    acid   : 13, 15
+ *    mines  : 28, 30 - flagged as hazard for the encoding (ball gets
+ *             redirected unpredictably) even though the reward shaping
+ *             only penalises water/acid (mines have no "death" state).
+ */
+function classifyCid(cid: number): [number, number, number] {
   let isWall = 0;
   let isHole = 0;
   let isHazard = 0;
@@ -88,6 +116,30 @@ function tileFeatures(map: ParsedMap, tx: number, ty: number): [number, number, 
   else if (cid >= 12 && cid <= 15) isHazard = 1;
   else if (cid === 28 || cid === 30) isHazard = 1;
   return [isWall, isHole, isHazard];
+}
+
+function tileFeatures(map: ParsedMap, tx: number, ty: number): [number, number, number] {
+  if (tx < 0 || tx >= TILE_WIDTH || ty < 0 || ty >= TILE_HEIGHT) {
+    return [1, 0, 0];
+  }
+  const px = tx * PIXEL_PER_TILE + 7;
+  const py = ty * PIXEL_PER_TILE + 7;
+  return classifyCid(map.collision[py * MAP_PIXEL_WIDTH + px]);
+}
+
+/** Sample the tile under an exact pixel position. Used by ray sampling
+ *  where the sample points don't fall on tile centres. */
+function pixelFeatures(map: ParsedMap, x: number, y: number): [number, number, number] {
+  const ix = x | 0;
+  const iy = y | 0;
+  const tx = (ix / PIXEL_PER_TILE) | 0;
+  const ty = (iy / PIXEL_PER_TILE) | 0;
+  if (tx < 0 || tx >= TILE_WIDTH || ty < 0 || ty >= TILE_HEIGHT) {
+    return [1, 0, 0];
+  }
+  const px = tx * PIXEL_PER_TILE + 7;
+  const py = ty * PIXEL_PER_TILE + 7;
+  return classifyCid(map.collision[py * MAP_PIXEL_WIDTH + px]);
 }
 
 // --- Agent ------------------------------------------------------------------
@@ -128,26 +180,39 @@ export class MLPAgent implements Agent {
   private episodesAccumulated = 0;
 
   private map: ParsedMap | null = null;
+  /** Pre-computed tile-step distance to the hole, keyed by `ty * TILE_WIDTH
+   *  + tx`. Set by {@link setNavMap} on map load. Read per-tile by
+   *  encodeState's 4th-channel loop when `cfg.useNavigation` is on. */
+  private navDistMap: Int16Array | null = null;
 
-  constructor(opts: {
-    meanScale?: number;
-    lr?: number;
-    valueCoef?: number;
-    gradClip?: number;
-    gamma?: number;
-    batchSize?: number;
-  } = {}) {
+  /** The full config the agent was built from. Architectural fields
+   *  (gridSize, raySamples, hiddenSize) determine the network shape and
+   *  must NOT be mutated on a live agent - the caller rebuilds the agent
+   *  instead. Live fields (lr, gamma, reward magnitudes etc.) are
+   *  free to mutate via {@link updateLiveConfig}. */
+  cfg: TrainingConfig;
+  /** Cached network input length, derived from cfg.gridSize / raySamples.
+   *  Exposed so the persistence layer can sanity-check loaded weights. */
+  readonly inputSize: number;
+  /** Half-extent of the ball-centred grid. Cached because every encode
+   *  needs it. */
+  readonly gridHalf: number;
+
+  constructor(cfg: Partial<TrainingConfig> = {}) {
+    this.cfg = { ...DEFAULTS, ...cfg };
+    this.inputSize = inputSizeFor(this.cfg);
+    this.gridHalf = (this.cfg.gridSize - 1) >> 1;
     this.net = new MLP({
-      inputSize: INPUT_SIZE,
-      hiddenSize: HIDDEN_SIZE,
+      inputSize: this.inputSize,
+      hiddenSize: this.cfg.hiddenSize,
       outputSize: POLICY_OUTPUT_SIZE,
     });
-    this.net.b2[2] = INIT_LOG_STD;
-    this.net.b2[3] = INIT_LOG_STD;
+    this.net.b2[2] = this.cfg.initLogStd;
+    this.net.b2[3] = this.cfg.initLogStd;
 
     // Value head - small Xavier init to match the network's Layer 2 scale.
-    const sV = Math.sqrt(2 / (HIDDEN_SIZE + 1));
-    this.Wv = new Float32Array(HIDDEN_SIZE);
+    const sV = Math.sqrt(2 / (this.cfg.hiddenSize + 1));
+    this.Wv = new Float32Array(this.cfg.hiddenSize);
     this.bv = new Float32Array(1);
     for (let i = 0; i < this.Wv.length; i++) this.Wv[i] = randn() * sV;
 
@@ -158,39 +223,138 @@ export class MLPAgent implements Agent {
     this.gWv = new Float32Array(this.Wv.length);
     this.gbv = new Float32Array(this.bv.length);
 
-    this.meanScale = opts.meanScale ?? 80;
-    this.lr = opts.lr ?? 1e-4;
-    this.valueCoef = opts.valueCoef ?? 0.5;
+    // Mirror live-tunable fields onto the agent so backprop's hot path
+    // doesn't dereference cfg every iteration.
+    this.meanScale = this.cfg.meanScale;
+    this.lr = this.cfg.lr;
+    this.valueCoef = this.cfg.valueCoef;
     this.baselineLR = 0.05;
     this.baseline = 0;
-    this.gradClip = opts.gradClip ?? 100;
-    this.gamma = opts.gamma ?? 0.99;
-    this.batchSize = opts.batchSize ?? 4;
+    this.gradClip = this.cfg.gradClip;
+    this.gamma = this.cfg.gamma;
+    this.batchSize = this.cfg.batchSize;
+  }
+
+  /** Apply a non-architectural config change to a running agent. Returns
+   *  false (and refuses to apply) if any architectural field changed -
+   *  the caller must rebuild the agent in that case. */
+  updateLiveConfig(next: TrainingConfig): boolean {
+    for (const k of ARCHITECTURE_KEYS) {
+      if (next[k] !== this.cfg[k]) return false;
+    }
+    this.cfg = { ...next };
+    this.meanScale = next.meanScale;
+    this.lr = next.lr;
+    this.valueCoef = next.valueCoef;
+    this.gradClip = next.gradClip;
+    this.gamma = next.gamma;
+    this.batchSize = next.batchSize;
+    // initLogStd intentionally NOT applied retroactively - it's an
+    // initial-condition for new agents, not a live policy parameter.
+    // logStdMin/Max ARE live: they clamp on every forward pass.
+    return true;
   }
 
   setMap(map: ParsedMap): void {
     this.map = map;
   }
 
+  /** Install the pathfinder distance map. Pass `null` to clear. The
+   *  encoder reads this only when `cfg.useNavigation` is on. */
+  setNavMap(distMap: Int16Array | null): void {
+    this.navDistMap = distMap;
+  }
+
   encodeState(state: EpisodeState): Float32Array {
-    const arr = new Float32Array(INPUT_SIZE);
+    const arr = new Float32Array(this.inputSize);
     arr[0] = state.ballX / 367.5 - 1;
     arr[1] = state.ballY / 187.5 - 1;
     arr[2] = state.holeX / 367.5 - 1;
     arr[3] = state.holeY / 187.5 - 1;
+    let off = 4;
     if (this.map) {
+      // Ball-centred fine tile grid (immediate surroundings). Out-of-map
+      // cells encode as walls in `tileFeatures`, so any grid size from 3
+      // up to 2*TILE_WIDTH-1 is safe near the edges - the padding just
+      // tells the network "you can't go that way".
       const tx0 = Math.floor(state.ballX / PIXEL_PER_TILE);
       const ty0 = Math.floor(state.ballY / PIXEL_PER_TILE);
-      const HALF = (GRID_SIZE - 1) >> 1;
-      let off = 4;
-      for (let dy = -HALF; dy <= HALF; dy++) {
-        for (let dx = -HALF; dx <= HALF; dx++) {
+      const half = this.gridHalf;
+      const navOn = this.cfg.useNavigation > 0 && this.navDistMap !== null;
+      const distMap = this.navDistMap;
+      for (let dy = -half; dy <= half; dy++) {
+        for (let dx = -half; dx <= half; dx++) {
           const f = tileFeatures(this.map, tx0 + dx, ty0 + dy);
           arr[off++] = f[0];
           arr[off++] = f[1];
           arr[off++] = f[2];
+          if (navOn) {
+            // 4th channel: pathfinder distance to hole, normalised.
+            // Out-of-map / unreachable tiles read as 1.0 ("stay away");
+            // tiles closer to the hole read as smaller numbers, so the
+            // policy can follow the gradient downhill.
+            const tx = tx0 + dx;
+            const ty = ty0 + dy;
+            let nv = 1.0;
+            if (tx >= 0 && tx < TILE_WIDTH && ty >= 0 && ty < TILE_HEIGHT) {
+              const d = distMap![ty * TILE_WIDTH + tx];
+              if (d < UNREACHABLE_DIST) {
+                nv = d >= NAV_NORMALISE_BY ? 1.0 : d / NAV_NORMALISE_BY;
+              }
+            }
+            arr[off++] = nv;
+          }
         }
       }
+      // Ball→hole ray. Samples evenly between ball and hole (excluding the
+      // endpoints) and reports (is_wall, is_hazard) per sample. Lets the
+      // policy answer "is there water/wall in the straight-line path I'd
+      // take if I aimed at the hole?" - the single most relevant question
+      // for "should I aim at full power towards the hole".
+      const rayCount = this.cfg.raySamples;
+      if (rayCount > 0) {
+        const dx = state.holeX - state.ballX;
+        const dy = state.holeY - state.ballY;
+        for (let s = 0; s < rayCount; s++) {
+          const t = (s + 1) / (rayCount + 1);
+          const f = pixelFeatures(
+            this.map,
+            state.ballX + dx * t,
+            state.ballY + dy * t,
+          );
+          arr[off++] = f[0]; // is_wall
+          arr[off++] = f[2]; // is_hazard
+        }
+      }
+      // Radial rays: fixed compass directions from the ball, with N
+      // samples per ray. Lets the policy see "this direction is clear,
+      // that direction is water" without committing to ball→hole as the
+      // only path. Crucial when water sits between the ball and the hole.
+      const ringCount = this.cfg.radialRays;
+      if (ringCount > 0) {
+        const samplesPerRay = this.cfg.radialSamplesPerRay;
+        const maxDist = this.cfg.radialRayMaxDist;
+        for (let r = 0; r < ringCount; r++) {
+          const angle = (r * 2 * Math.PI) / ringCount;
+          const dirX = Math.cos(angle);
+          const dirY = Math.sin(angle);
+          for (let s = 0; s < samplesPerRay; s++) {
+            const dist = ((s + 1) / samplesPerRay) * maxDist;
+            const f = pixelFeatures(
+              this.map,
+              state.ballX + dirX * dist,
+              state.ballY + dirY * dist,
+            );
+            arr[off++] = f[0]; // is_wall
+            arr[off++] = f[2]; // is_hazard
+          }
+        }
+      }
+    } else {
+      const gridChans = GRID_CHANNELS + (this.cfg.useNavigation > 0 ? 1 : 0);
+      off += this.cfg.gridSize * this.cfg.gridSize * gridChans +
+             this.cfg.raySamples * RAY_CHANNELS +
+             this.cfg.radialRays * this.cfg.radialSamplesPerRay * RAY_CHANNELS;
     }
     return arr;
   }
@@ -204,7 +368,7 @@ export class MLPAgent implements Agent {
   } {
     const { hidden, output } = this.net.forward(input);
     let v = this.bv[0];
-    for (let j = 0; j < HIDDEN_SIZE; j++) v += hidden[j] * this.Wv[j];
+    for (let j = 0; j < this.cfg.hiddenSize; j++) v += hidden[j] * this.Wv[j];
     return { hidden, policy: output, value: v };
   }
 
@@ -216,9 +380,129 @@ export class MLPAgent implements Agent {
     const meanX = policy[0] * this.meanScale;
     const meanY = policy[1] * this.meanScale;
     if (this.evalMode) return { dx: meanX, dy: meanY };
-    const stdX = Math.exp(clamp(policy[2], LOG_STD_MIN, LOG_STD_MAX));
-    const stdY = Math.exp(clamp(policy[3], LOG_STD_MIN, LOG_STD_MAX));
+    const stdX = Math.exp(clamp(policy[2], this.cfg.logStdMin, this.cfg.logStdMax));
+    const stdY = Math.exp(clamp(policy[3], this.cfg.logStdMin, this.cfg.logStdMax));
     return { dx: meanX + stdX * randn(), dy: meanY + stdY * randn() };
+  }
+
+  /** Sample an action and produce the trace step that WOULD be appended
+   *  if this sample is accepted. Used by the safety filter to draw and
+   *  sandbox-simulate multiple candidates per stroke without polluting
+   *  the trace with rejected samples. The caller calls
+   *  {@link commitTraceStep} once it picks one. */
+  sampleAction(state: EpisodeState): { action: Action; step: PolicyStep } {
+    const input = this.encodeState(state);
+    const { hidden, policy, value } = this.forward(input);
+    const meanX = policy[0] * this.meanScale;
+    const meanY = policy[1] * this.meanScale;
+    const logStdX = clamp(policy[2], this.cfg.logStdMin, this.cfg.logStdMax);
+    const logStdY = clamp(policy[3], this.cfg.logStdMin, this.cfg.logStdMax);
+
+    if (this.evalMode) {
+      // Eval mode uses zero noise.
+      return {
+        action: { dx: meanX, dy: meanY },
+        step: {
+          input, hidden,
+          meanX, meanY, logStdX, logStdY,
+          actionX: meanX, actionY: meanY,
+          value,
+        },
+      };
+    }
+
+    const stdX = Math.exp(logStdX);
+    const stdY = Math.exp(logStdY);
+    const actionX = meanX + stdX * randn();
+    const actionY = meanY + stdY * randn();
+    return {
+      action: { dx: actionX, dy: actionY },
+      step: {
+        input, hidden,
+        meanX, meanY, logStdX, logStdY,
+        actionX, actionY,
+        value,
+      },
+    };
+  }
+
+  /** Append a previously-sampled step to a trace buffer. */
+  commitTraceStep(trace: PolicyStep[], step: PolicyStep): void {
+    trace.push(step);
+  }
+
+  /**
+   * Apply a single-sample policy gradient with a synthetic reward,
+   * bypassing the value-head update and the batch counter. Used by the
+   * safety filter to teach the policy "don't sample like that" without
+   * wasting the simulated knowledge.
+   *
+   * The math: the action `step.actionX/Y` was actually drawn from
+   * π(s; θ), so its log-prob has a real gradient ∇θ log π. We score it
+   * with the *would-have-been* reward (water/acid penalty) instead of
+   * the actual return. That pushes π away from sampling there in the
+   * future - exactly the correction we'd get from REINFORCE if we'd
+   * really taken the shot, except we don't pay for it in real episode
+   * strokes.
+   *
+   * What we DON'T do here:
+   *   - Update V(s). V tracks the expected return *under the filtered
+   *     policy* (the rollouts we actually run). Synthetic samples
+   *     would bias it downward toward the unfiltered estimate.
+   *   - Increment `episodesAccumulated`. These are sub-episode
+   *     samples; they shouldn't trigger an early batch-apply.
+   *
+   * The accumulated gradients ride along with the next real episode's
+   * `train()` call, applied together by `applyBatch()`.
+   */
+  trainPolicyOnSample(
+    step: PolicyStep,
+    syntheticReward: number,
+    gradScale: number = 1.0,
+  ): void {
+    const { inputSize, hiddenSize, outputSize } = this.net.spec;
+    // gradScale lets the caller dilute the gradient so a stroke with
+    // many rejected samples doesn't outweigh a single accepted episode
+    // step. With safetyRetries=10 and gradScale=1/10, all rejections
+    // for a stroke together contribute about as much as one real step.
+    const advantage = (syntheticReward - step.value) * gradScale;
+
+    const stdX = Math.exp(step.logStdX);
+    const stdY = Math.exp(step.logStdY);
+    const sigma2X = stdX * stdX;
+    const sigma2Y = stdY * stdY;
+    const dx = step.actionX - step.meanX;
+    const dy = step.actionY - step.meanY;
+
+    const dLdPolicy: [number, number, number, number] = [
+      (dx * this.meanScale) / sigma2X,
+      (dy * this.meanScale) / sigma2Y,
+      (dx * dx) / sigma2X - 1,
+      (dy * dy) / sigma2Y - 1,
+    ];
+
+    const dLdHidden = new Float32Array(hiddenSize);
+    for (let k = 0; k < outputSize; k++) {
+      const w = advantage * dLdPolicy[k];
+      this.gb2[k] += w;
+      for (let j = 0; j < hiddenSize; j++) {
+        this.gW2[j * outputSize + k] += w * step.hidden[j];
+        dLdHidden[j] +=
+          dLdPolicy[k] * this.net.W2[j * outputSize + k] * advantage;
+      }
+    }
+    // Through tanh.
+    for (let j = 0; j < hiddenSize; j++) {
+      const h = step.hidden[j];
+      dLdHidden[j] *= 1 - h * h;
+    }
+    // Layer 1.
+    for (let j = 0; j < hiddenSize; j++) {
+      this.gb1[j] += dLdHidden[j];
+      for (let i = 0; i < inputSize; i++) {
+        this.gW1[i * hiddenSize + j] += dLdHidden[j] * step.input[i];
+      }
+    }
   }
 
   /** Same as act() but ALSO appends a PolicyStep to `trace` so the caller
@@ -226,35 +510,9 @@ export class MLPAgent implements Agent {
    *  trace state - the caller owns the buffer, which lets multiple
    *  parallel episodes track separate histories. */
   actAndTrace(state: EpisodeState, trace: PolicyStep[]): Action {
-    const input = this.encodeState(state);
-    const { hidden, policy, value } = this.forward(input);
-    const meanX = policy[0] * this.meanScale;
-    const meanY = policy[1] * this.meanScale;
-    const logStdX = clamp(policy[2], LOG_STD_MIN, LOG_STD_MAX);
-    const logStdY = clamp(policy[3], LOG_STD_MIN, LOG_STD_MAX);
-
-    if (this.evalMode) {
-      // Eval mode still records (for diagnostics) but uses zero noise.
-      trace.push({
-        input, hidden,
-        meanX, meanY, logStdX, logStdY,
-        actionX: meanX, actionY: meanY,
-        value,
-      });
-      return { dx: meanX, dy: meanY };
-    }
-
-    const stdX = Math.exp(logStdX);
-    const stdY = Math.exp(logStdY);
-    const actionX = meanX + stdX * randn();
-    const actionY = meanY + stdY * randn();
-    trace.push({
-      input, hidden,
-      meanX, meanY, logStdX, logStdY,
-      actionX, actionY,
-      value,
-    });
-    return { dx: actionX, dy: actionY };
+    const { action, step } = this.sampleAction(state);
+    this.commitTraceStep(trace, step);
+    return action;
   }
 
   mean(state: EpisodeState): { dx: number; dy: number } {
@@ -270,8 +528,8 @@ export class MLPAgent implements Agent {
     const input = this.encodeState(state);
     const { policy } = this.forward(input);
     return {
-      sx: Math.exp(clamp(policy[2], LOG_STD_MIN, LOG_STD_MAX)),
-      sy: Math.exp(clamp(policy[3], LOG_STD_MIN, LOG_STD_MAX)),
+      sx: Math.exp(clamp(policy[2], this.cfg.logStdMin, this.cfg.logStdMax)),
+      sy: Math.exp(clamp(policy[3], this.cfg.logStdMin, this.cfg.logStdMax)),
     };
   }
 

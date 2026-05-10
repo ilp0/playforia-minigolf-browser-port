@@ -47,16 +47,22 @@ where to aim. That's it.
 
 ## 3. What the agent actually sees and does
 
-### State (input to the network) — 79 numbers
+### State (input to the network) — 111 numbers
 
 - 4 numbers describing position: ball x, ball y, hole x, hole y
   (normalized to roughly -1 to 1).
 - 75 numbers describing a **5×5 grid of tiles around the ball**, with 3
   flags per tile: "is this a wall?", "is this the hole?", "is this a
   hazard (water, mine, acid)?".
+- 32 numbers describing a **ball→hole ray**: 16 evenly-spaced sample
+  points along the straight line between ball and hole, with 2 flags
+  per sample ("is wall here?", "is hazard here?"). Answers the question
+  "is there water in my path if I aim at the hole?" — the 5×5 grid is
+  blind past the ball's immediate neighbourhood.
 
-The grid lets the network see its immediate surroundings — without it,
-the network would have to memorize positions from scratch on each map.
+The grid lets the network see its immediate surroundings; the ray gives
+it a long-range path view. Without either, the network would have to
+memorize positions from scratch on each map.
 
 ### Action (output of the network) — 4 numbers
 
@@ -82,12 +88,12 @@ near the ball and the ball flies in that direction with that much force.
 
 It's a small "multi-layer perceptron" (MLP). Three layers of math:
 
-1. **79 inputs → 32 hidden neurons** (with a "tanh" squash that keeps
+1. **111 inputs → 32 hidden neurons** (with a "tanh" squash that keeps
    numbers between -1 and +1)
 2. **32 hidden → 4 policy outputs** (the means + uncertainties above)
 3. **32 hidden → 1 value output** (the *critic*; explained below)
 
-That's about 2,700 numbers ("weights") that get tuned during training.
+That's about 3,700 numbers ("weights") that get tuned during training.
 A serious modern AI has billions of weights — this is tiny. The whole
 network fits comfortably in 100 KB of localStorage.
 
@@ -128,16 +134,24 @@ hundreds of times per second on a normal computer.
 
 ### The reward
 
-Simple recipe:
+Per-stroke recipe:
 
-- **−1 for every stroke** (so the network is encouraged to use fewer
-  strokes).
-- **+20 if you eventually hole it**, 0 if you fail.
+- **−1 for every stroke** (encourages using fewer strokes).
+- **+20 on the holing stroke** (encourages reaching the hole).
+- **−3 extra if a stroke ends in water** (water teleports the ball back
+  to where you shot from, so without this term water-shots and
+  grass-shots produce identical state/reward and the policy has no
+  gradient pulling it off "full speed at water").
+- **−6 extra if a stroke ends in acid** (acid teleports back to the
+  *track* start, undoing prior progress — strictly worse than water).
+
+Mines are not penalised (they bump the ball randomly but don't kill it).
 
 Examples:
 - Holed in 1 stroke → reward = −1 + 20 = **+19** (great)
-- Holed in 5 strokes → reward = −5 + 20 = **+15** (good)
-- Failed at 30 strokes → reward = −30 (bad)
+- Holed in 5 strokes, no hazards → reward = −5 + 20 = **+15** (good)
+- Holed in 5 strokes, one water bath → reward = −5 + 20 − 3 = **+12**
+- Failed at 30 strokes, four water baths → reward = −30 − 12 = **−42** (bad)
 
 ### What "adjust the weights" means
 
@@ -192,12 +206,19 @@ agent is:
 |---|---|---|
 | **TRAINING** (gray) | Early, success rate < 50% over recent episodes | The agent is still figuring it out. |
 | **CONVERGING** (amber) | Success rate ≥ 50% | Holes more often than not. Getting there. |
-| **CONVERGED** (green) | Success ≥ 90% over the last 50 episodes, plus 30+ lifetime | Reliably solves the map. Auto-saved. |
+| **CONVERGED** (green) | Success ≥ 90% over the last 50 episodes, 30+ lifetime, AND best stroke count ≤ the human record (when known) | Reliably solves the map AT a near-optimal stroke count. Auto-saved. |
 | **PERFECTED** (bright green) | Hole-in-1 achieved in eval mode | The optimal possible. Training auto-stops. |
 | **LOADED** (blue) | Loaded a CONVERGED save without enough fresh runs to confirm | "We trust the save but haven't seen 50 fresh runs yet." |
 
 The "fully solved for our purposes" line is **CONVERGED**. PERFECTED is
 a bonus — only some maps allow hole-in-1.
+
+The par-strokes check in CONVERGED is what stops the badge firing on
+maps where the policy settles in a mediocre local minimum (e.g. always
+holes in 3 strokes when 1 or 2 is provably possible). The agent must
+have found at least one trajectory matching the human record before we
+call it done. When the track has no par on file (`bestPar = 0`), we
+fall back to the success-rate-only check.
 
 ---
 
@@ -238,7 +259,7 @@ no point fast-forwarding.
 ## 10. Persistence (saving across reloads)
 
 Trained networks save themselves to your browser's **localStorage**.
-One key per map, like `minigolf-ai:policy:v1:CurveI.track`. Each save
+One key per map, like `minigolf-ai:policy:v2:CurveI.track`. Each save
 is about 100 KB and contains:
 
 - All 2,700+ network weights

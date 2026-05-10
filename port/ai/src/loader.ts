@@ -18,6 +18,7 @@ import {
 } from "@minigolf/shared";
 import { buildMap, type ParsedMap } from "../../web/src/game/map.ts";
 import { loadAtlases, type Atlases } from "../../web/src/game/sprites.ts";
+import { buildDistanceMap, type DistanceResult } from "./path.ts";
 
 let cachedAtlases: Atlases | null = null;
 
@@ -43,6 +44,14 @@ export interface LoadedTrack {
   /** Pixel-center hole position (centroid of all hole-collision pixels). */
   holeX: number;
   holeY: number;
+  /** Tile-step distances from each tile to the hole + parent pointers
+   *  for route reconstruction, computed once at load time. Walls / water
+   *  / acid / mines block the BFS; teleporters create same-distance
+   *  edges between START and EXIT tiles. The agent's encoder reads
+   *  `dist` for the "navigation" channel; the reward shaping uses
+   *  `dist` for the "got closer" delta; the route renderer walks
+   *  `parent` to reconstruct the polyline. */
+  pathDistMap: DistanceResult;
 }
 
 export async function loadTrack(trackText: string): Promise<LoadedTrack> {
@@ -79,6 +88,11 @@ export async function loadTrack(trackText: string): Promise<LoadedTrack> {
     hy /= count;
   }
 
+  // Pre-compute the tile-step distance map (and parent pointers, for
+  // route reconstruction) for navigation features and reward shaping.
+  // <1ms; cached on the track so we don't redo it on every encode.
+  const pathDistMap: DistanceResult = buildDistanceMap(map, hx, hy);
+
   return {
     name: track.name,
     map,
@@ -89,5 +103,6 @@ export async function loadTrack(trackText: string): Promise<LoadedTrack> {
     startY,
     holeX: hx,
     holeY: hy,
+    pathDistMap,
   };
 }
