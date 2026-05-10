@@ -18,14 +18,20 @@ const { loadTrackHeadless } = await import(toUrl("headless/track-loader.ts"));
 const { searchHoleInOne } = await import(toUrl("src/hio.ts"));
 const { Episode } = await import(toUrl("src/env.ts"));
 
-// Tile values that count as walls (mirrors port/web/src/game/physics.ts:isWall).
-// We use this to validate HIO trajectories - the inside-corner-suppression
-// rule in handleWallCollision (faithful port of a Java quirk) lets balls
-// approaching from below an "L"-shaped wall pass straight through. Such
-// HIOs are physically valid in the original game but unreachable by any
-// human aim; we tag them as `wall_clip` so the dashboard can hide them.
+// Tile values that count as SOLID walls for the wall-clip safety check.
+// This is intentionally NARROWER than physics' isWall(): we exclude
+// one-way walls (20-23) because those are passable in their allowed
+// direction by design, and excluding 19 (illusion wall) which physics
+// also treats as passable. Bricks (40-43) and movable/sunkable blocks
+// (27, 46) are solid until they break/sink, so we keep them but accept
+// some false positives if a HIO breaks a brick on the way through.
 function isWallVal(v) {
-  return (v >= 16 && v <= 23 && v !== 19) || v === 27 || (v >= 40 && v <= 43) || v === 46;
+  // Solid wall variants: 16, 17, 18 (normal/weak/bouncy walls).
+  if (v === 16 || v === 17 || v === 18) return true;
+  // Bricks and movable blocks - solid initially.
+  if (v === 27 || v === 46) return true;
+  if (v >= 40 && v <= 43) return true;
+  return false;
 }
 
 /**
