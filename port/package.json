@@ -2,7 +2,7 @@
   "name": "playforia-minigolf-port",
   "private": true,
   "version": "0.1.0",
-  "workspaces": ["shared", "server", "web"],
+  "workspaces": ["shared", "server", "web", "ai"],
   "scripts": {
     "build:shared": "npm -w shared run build",
     "build:server": "npm -w server run build",

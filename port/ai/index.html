@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Minigolf RL</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: #111;
+        color: #ddd;
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+      }
+      header {
+        padding: 8px 16px;
+        background: #1a1a1a;
+        border-bottom: 1px solid #2a2a2a;
+        display: flex;
+        gap: 16px;
+        align-items: center;
+        font-size: 13px;
+        flex-wrap: wrap;
+      }
+      header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+      header .stat { color: #9aa; }
+      header .stat b {
+        color: #fff;
+        font-variant-numeric: tabular-nums;
+        /* Lock the value's width so the rest of the header doesn't shuffle
+         * when a counter goes from 1 → 2 → 3 digits (the flicker the user
+         * reported). 2.5ch covers 0-99; longer-value stats override below. */
+        display: inline-block;
+        min-width: 2.5ch;
+        text-align: left;
+      }
+      header .stat.wide b { min-width: 9ch; }
+      header .stat.xwide b { min-width: 18ch; }
+      header #eval-indicator {
+        margin-left: auto;
+        font-weight: 600;
+        font-size: 11px;
+        letter-spacing: 0.5px;
+      }
+      main { flex: 1; padding: 16px; display: flex; gap: 16px; }
+      .left { display: flex; flex-direction: column; gap: 10px; }
+      .map-stats {
+        background: #1a1a1a;
+        border: 1px solid #2a2a2a;
+        padding: 8px 12px;
+        font-size: 12px;
+        display: flex;
+        gap: 24px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .map-stats .label { color: #9aa; margin-right: 6px; }
+      .map-stats b {
+        color: #fff;
+        font-variant-numeric: tabular-nums;
+        display: inline-block;
+        min-width: 3ch;
+        text-align: left;
+      }
+      .map-stats .perfected {
+        color: #7fffaa;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+      }
+      .map-stats .status {
+        padding: 2px 8px;
+        border-radius: 3px;
+        font-weight: 600;
+        font-size: 11px;
+        letter-spacing: 0.5px;
+      }
+      .map-stats .status.training  { background: #2a2a2a; color: #888; }
+      .map-stats .status.converging { background: #3a3015; color: #ffd24f; }
+      .map-stats .status.converged { background: #15301f; color: #7fffaa; }
+      .map-stats .status.perfected { background: #15301f; color: #7fffaa; }
+
+      .meta-panel {
+        background: #15151a;
+        border: 1px solid #2a2a2a;
+        padding: 10px 14px;
+        font-size: 12px;
+      }
+      .meta-panel h3 {
+        margin: 0 0 8px;
+        font-size: 12px;
+        color: #fff;
+        font-weight: 600;
+      }
+      .meta-panel .meta-sub { color: #777; font-weight: 400; margin-left: 6px; }
+      .meta-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 4px 14px;
+        margin-bottom: 10px;
+      }
+      .meta-grid > div { color: #aab; }
+      .meta-grid .label { color: #788; margin-right: 6px; }
+      .meta-grid b {
+        color: #fff;
+        font-variant-numeric: tabular-nums;
+      }
+      .ratings-block .label { color: #788; display: block; margin-bottom: 4px; }
+      .rating-bars {
+        display: grid;
+        grid-template-columns: repeat(11, 1fr);
+        gap: 2px;
+        align-items: end;
+        height: 32px;
+      }
+      .rating-bars .bar {
+        background: #2a4a3a;
+        position: relative;
+        min-height: 2px;
+      }
+      .rating-bars .bar::after {
+        content: attr(data-count);
+        position: absolute;
+        bottom: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 9px;
+        color: #788;
+        white-space: nowrap;
+        margin-bottom: 1px;
+      }
+      .rating-bars .bar:hover::after { color: #fff; }
+      #stage {
+        background: #000;
+        border: 1px solid #2a2a2a;
+        image-rendering: pixelated;
+        /* Lock the canvas to its native 735×375 buffer regardless of the
+         * window size; flex layout's default align-items: stretch would
+         * otherwise grow the canvas vertically. */
+        width: 735px;
+        height: 375px;
+        flex-shrink: 0;
+      }
+      #chart {
+        background: #0e0e10;
+        border: 1px solid #2a2a2a;
+        width: 735px;
+        height: 120px;
+        flex-shrink: 0;
+      }
+      aside {
+        width: 300px;
+        font-size: 12px;
+        line-height: 1.5;
+        color: #aab;
+      }
+      aside h2 { font-size: 12px; color: #fff; margin: 0 0 6px; }
+      aside section { margin-bottom: 14px; }
+      aside label { display: block; margin-bottom: 4px; }
+      aside select, aside input[type="range"] {
+        width: 100%;
+        background: #1a1a1a;
+        color: #ddd;
+        border: 1px solid #3a3a3a;
+        padding: 4px;
+        font-family: inherit;
+        font-size: 12px;
+      }
+      aside .muted { font-size: 11px; opacity: 0.7; margin-top: 4px; }
+      button {
+        background: #2a2a2a;
+        color: #fff;
+        border: 1px solid #3a3a3a;
+        padding: 6px 12px;
+        font-family: inherit;
+        font-size: 12px;
+        cursor: pointer;
+        border-radius: 3px;
+        margin-right: 4px;
+      }
+      button:hover { background: #3a3a3a; }
+      .toggle-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        font-size: 11px;
+      }
+      .legend .swatch {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        margin-right: 4px;
+        vertical-align: middle;
+        border-radius: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>minigolf · RL</h1>
+      <a href="/grid.html" style="color:#6cf;text-decoration:none;font-size:12px;">grid view →</a>
+      <div class="stat wide">map: <b id="stat-map">—</b></div>
+      <div class="stat">episode: <b id="stat-episode">0</b></div>
+      <div class="stat">strokes: <b id="stat-strokes">0</b></div>
+      <div class="stat xwide">last: <b id="stat-last">—</b></div>
+      <div class="stat">mean R(50): <b id="stat-mean">—</b></div>
+      <div class="stat">baseline: <b id="stat-baseline">—</b></div>
+      <div class="stat">success: <b id="stat-success">—</b></div>
+      <div class="stat">best: <b id="stat-best">—</b></div>
+      <div class="stat">σ: <b id="stat-sigma">—</b></div>
+      <div id="eval-indicator" style="color:#ffd24f;">TRAIN</div>
+    </header>
+    <main>
+      <div class="left">
+        <canvas id="stage" width="735" height="375"></canvas>
+        <canvas id="chart" width="735" height="120"></canvas>
+        <div class="map-stats">
+          <span><span class="label">map:</span><b id="map-stat-name">—</b></span>
+          <span><span class="label">lifetime episodes:</span><b id="map-stat-count">0</b></span>
+          <span><span class="label">avg R:</span><b id="map-stat-avg">—</b></span>
+          <span><span class="label">best:</span><b id="map-stat-best">—</b> strokes</span>
+          <span class="status training" id="map-stat-status">TRAINING</span>
+          <span class="perfected" id="map-stat-perfected" style="display:none;">🏆 PERFECTED — training frozen</span>
+        </div>
+        <div class="meta-panel" id="meta-panel">
+          <h3>track metadata <span class="meta-sub">(from the original Playforia database)</span></h3>
+          <div class="meta-grid">
+            <div><span class="label">author</span><b id="meta-author">—</b></div>
+            <div><span class="label">plays</span><b id="meta-plays">—</b></div>
+            <div><span class="label">total strokes</span><b id="meta-strokes">—</b></div>
+            <div><span class="label">avg strokes / play</span><b id="meta-avg-strokes">—</b></div>
+            <div><span class="label">par (best score)</span><b id="meta-par">—</b></div>
+            <div><span class="label">par achieved by</span><b id="meta-par-count">—</b> players</div>
+            <div><span class="label">record holder</span><b id="meta-record-holder">—</b></div>
+            <div><span class="label">record set</span><b id="meta-record-date">—</b></div>
+            <div><span class="label">last record by</span><b id="meta-last-holder">—</b></div>
+            <div><span class="label">last record date</span><b id="meta-last-date">—</b></div>
+            <div><span class="label">categories</span><b id="meta-cats">—</b></div>
+            <div><span class="label">settings</span><b id="meta-settings">—</b></div>
+          </div>
+          <div class="ratings-block">
+            <span class="label">ratings (1 → 11 difficulty buckets):</span>
+            <div class="rating-bars" id="meta-ratings"></div>
+          </div>
+        </div>
+      </div>
+      <aside>
+        <section>
+          <h2>map</h2>
+          <select id="map-select"></select>
+          <p class="muted">Curated maps grouped at the top; every other .track file (≈2 000) is in the second group. Tap a letter on the keyboard to jump to that section. Switching maps resets the network — each map is its own learning problem. If a saved policy exists for the picked map it auto-loads.</p>
+        </section>
+
+        <section>
+          <h2>mode</h2>
+          <select id="mode-select">
+            <option value="training">training (stochastic, weights update)</option>
+            <option value="eval">eval (deterministic policy mean, frozen)</option>
+            <option value="best">best (replay recorded best route)</option>
+          </select>
+          <p class="muted">Switching modes pauses or resumes training without resetting weights or stats. <b>training</b> = explore + learn. <b>eval</b> = play the policy's average best action with no noise. <b>best</b> = replay the exact noisy action sequence from your best-ever episode (often shorter than the policy mean's deterministic line).</p>
+        </section>
+
+        <section>
+          <h2>speed</h2>
+          <label for="speed-slider"><b id="speed-label">30 steps/frame</b></label>
+          <input type="range" id="speed-slider" min="3" max="5000" value="30" />
+          <p class="muted">3 = real game speed. Animation always renders — higher slider = balls travel further between frames, so motion smoothly accelerates without an abrupt cutoff. fps drops naturally at very high values.</p>
+        </section>
+
+        <section>
+          <h2>controls</h2>
+          <button id="btn-reset">end episode</button>
+          <button id="btn-reset-agent">reset agent</button>
+        </section>
+
+        <section>
+          <h2>legend</h2>
+          <div class="legend">
+            <span><span class="swatch" style="background:#7fffaa;"></span>rolling mean R</span>
+            <span><span class="swatch" style="background:rgba(140,180,255,0.55);"></span>per-episode R</span>
+            <span><span class="swatch" style="background:rgba(120,230,255,0.85);"></span>policy intent</span>
+            <span><span class="swatch" style="background:#000;border:1px solid #555;"></span>last shot</span>
+          </div>
+        </section>
+
+        <section>
+          <h2>how it works</h2>
+          <p>State: <code>(ball_x, ball_y, hole_x, hole_y)</code> normalized. Net: 4 → 16 (tanh) → 2. Output is the mean of a Gaussian over (Δx, Δy) mouse offset; we sample, send to physics, repeat until holed or 30 strokes.</p>
+          <p>After each episode: <code>R = -strokes + 20·holed</code>; advantage = R − running baseline; weights += lr × advantage × ∇<sub>θ</sub> log π(a|s).</p>
+        </section>
+      </aside>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
