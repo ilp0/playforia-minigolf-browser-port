@@ -20,6 +20,7 @@ import {
     type TrackStats,
 } from "./tracks.ts";
 import { logEvent } from "./log.ts";
+import type { DailyRecord } from "./portal.ts";
 
 export const STROKES_UNLIMITED = 0;
 export const STROKETIMEOUT_INFINITE = 0;
@@ -1253,6 +1254,8 @@ const DAILY_MAX_SPARSE_IDS = 256;
 
 export class DailyGame extends GolfGame {
     public dateKey: string;
+    /** Called once per finished run (holed or forfeited). */
+    public onFinish: ((player: Player, record: DailyRecord) => void) | null = null;
     private dailyTrackManager: TrackManager;
 
     constructor(gameId: number, trackManager: TrackManager, dateKey: string) {
@@ -1422,6 +1425,12 @@ export class DailyGame extends GolfGame {
                 holed: resolvedStatus === "t",
                 forfeited: resolvedStatus === "p",
             });
+            this.onFinish?.(player, {
+                date: this.dateKey,
+                strokes: this.playerStrokesThisTrack[id],
+                holed: resolvedStatus === "t",
+                track: this.tracks[0]?.name ?? "",
+            });
         }
     }
 
@@ -1446,6 +1455,7 @@ export class DailyGame extends GolfGame {
             holed: false,
             forfeited: true,
         });
+        this.onFinish?.(player, { date: this.dateKey, strokes: cap, holed: false, track: this.tracks[0]?.name ?? "" });
     }
 
     override handlePacket(player: Player, fields: string[]): boolean {

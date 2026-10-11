@@ -7,6 +7,7 @@ import type { TrackManager } from "./tracks.ts";
 import { DailyGame } from "./game.ts";
 import { dispatchPacket } from "./packet-handlers.ts";
 import { logEvent } from "./log.ts";
+import { type DailyRecord, type PortalConfig, recordDailyResult } from "./portal.ts";
 
 /** Grace window during which a player can re-attach a fresh WebSocket via
  *  `c old <id>`. Mirrors the value advertised in the connect-handshake banner
@@ -23,6 +24,8 @@ export interface GolfServerOptions {
     /** When false, lobby/game say + sayp packets are dropped server-side and
      *  the sender gets a one-shot system whisper. Defaults to true. */
     chatEnabled?: boolean;
+    /** Aapeli portal integration; null/absent keeps the standalone behaviour. */
+    portal?: PortalConfig | null;
 }
 
 export class GolfServer {
@@ -38,10 +41,12 @@ export class GolfServer {
 
     public readonly trackManager: TrackManager;
     public readonly chatEnabled: boolean;
+    public readonly portal: PortalConfig | null;
 
     constructor(trackManager: TrackManager, options: GolfServerOptions = {}) {
         this.trackManager = trackManager;
         this.chatEnabled = options.chatEnabled ?? true;
+        this.portal = options.portal ?? null;
         this.lobbies.set(LobbyType.SINGLE, new Lobby(LobbyType.SINGLE));
         this.lobbies.set(LobbyType.DUAL, new Lobby(LobbyType.DUAL));
         this.lobbies.set(LobbyType.MULTI, new Lobby(LobbyType.MULTI));
@@ -58,6 +63,7 @@ export class GolfServer {
         if (!this.dailyGame) {
             const id = this.getNextGameId();
             this.dailyGame = new DailyGame(id, this.trackManager, today);
+            if (this.portal) this.dailyGame.onFinish = (player, record) => this.reportDaily(player, record);
         } else {
             this.dailyGame.rotateIfNewDay(today);
         }
@@ -70,6 +76,18 @@ export class GolfServer {
         // display. `addGame` is idempotent (no-op if already registered).
         this.getLobby(LobbyType.DAILY).addGame(this.dailyGame);
         return this.dailyGame;
+    }
+
+    /** Save a finished daily run to the player's portal account and tell
+     *  the client the outcome (`game dailyrecord <status>`). */
+    private reportDaily(player: Player, record: DailyRecord): void {
+        const portal = this.portal;
+        const identity = player.portalIdentity;
+        if (!portal || !identity) return;
+        void recordDailyResult(portal, identity, record).then((status) => {
+            logEvent("daily_record", { date: record.date, id: player.id, status });
+            if (player.disconnectedAt === null) player.connection.sendData("game", "dailyrecord", status);
+        });
     }
 
     getNextPlayerId(): number {
@@ -208,6 +226,11 @@ export class GolfServer {
     handleReconnect(conn: Connection, id: number): boolean {
         const player = this.players.get(id);
         if (!player || player.disconnectedAt === null) return false;
+        // With the portal enabled, only the same portal profile may adopt a
+        // seat; otherwise any client could guess an id and take it over.
+        if (player.portalIdentity && conn.portalIdentity?.profileId !== player.portalIdentity.profileId) {
+            return false;
+        }
         const timer = this.reconnectTimers.get(id);
         if (timer) {
             clearTimeout(timer);

@@ -2,6 +2,7 @@ import { App } from "./app.ts";
 import { fetchReplayById, readReplayFromHash, readReplayIdFromQuery, type DailyReplay } from "./daily.ts";
 import { ReplayPanel } from "./panels/replay.ts";
 import { i18n, loadSavedLang } from "./i18n.ts";
+import { loadPortal } from "./portal.ts";
 
 const root = document.getElementById("app");
 if (!root) {
@@ -218,7 +219,8 @@ async function boot(): Promise<void> {
     if (embedded) {
       mountReplay(embedded);
     } else {
-      new App(root).start();
+      const portal = await loadPortal();
+      if (root) new App(root, portal).start();
     }
   }
 }

@@ -87,6 +87,7 @@ export class LoginPanel implements Panel {
   private connectBtn: HTMLButtonElement | null = null;
   private statusEl: HTMLElement | null = null;
   private submitting = false;
+  private portalMode = false;
   private submitHandler: ((ev: SubmitEvent) => void) | null = null;
   private langChangeHandler: ((ev: Event) => void) | null = null;
 
@@ -118,6 +119,21 @@ export class LoginPanel implements Panel {
     nameRow.appendChild(nameLabel);
     nameRow.appendChild(nameInput);
     form.appendChild(nameRow);
+
+    // Portal sessions play under their Aapeli nickname; the server ignores
+    // any client-sent nick, so the field is display-only.
+    const portal = this.app.portal;
+    if (portal) {
+      this.portalMode = true;
+      nameInput.value = portal.profile?.nickname ?? "";
+      nameInput.readOnly = true;
+      const note = document.createElement("div");
+      note.className = "form-row portal-note";
+      note.textContent = portal.registered
+        ? t("Port_Portal_SignedIn", "Signed in to Aapeli - Daily Cup results are saved to your account.")
+        : t("Port_Portal_Guest", "Playing as an Aapeli guest. Sign in on Aapeli to save Daily Cup wins.");
+      form.appendChild(note);
+    }
 
     const langRow = document.createElement("div");
     langRow.className = "form-row";
@@ -263,8 +279,8 @@ export class LoginPanel implements Panel {
     const rawNick = (this.nameInput?.value ?? "").trim();
     // Server-side sanitiser will accept/reject; we only strip our own framing
     // chars here so we never split the packet on the wire.
-    const nick = rawNick.replace(/[\r\n\t]+/g, " ").slice(0, 20);
-    saveNick(nick);
+    const nick = this.portalMode ? "" : rawNick.replace(/[\r\n\t]+/g, " ").slice(0, 20);
+    if (!this.portalMode) saveNick(nick);
 
     // Full guest-login handshake. The server processes these in order; the
     // final `login` is what triggers basicinfo + status\tlobbyselect.
@@ -288,7 +304,7 @@ export class LoginPanel implements Panel {
 
   private setEnabled(enabled: boolean): void {
     if (this.connectBtn) this.connectBtn.disabled = !enabled;
-    if (this.nameInput) this.nameInput.disabled = !enabled;
+    if (this.nameInput) this.nameInput.disabled = !enabled || this.portalMode;
     if (this.langSelect) this.langSelect.disabled = !enabled;
   }
 

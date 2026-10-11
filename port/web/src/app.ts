@@ -8,6 +8,7 @@ import { LobbyPanel } from "./panels/lobby.ts";
 import { LobbyMultiPanel } from "./panels/lobby-multi.ts";
 import { GamePanel } from "./panels/game.ts";
 import { t } from "./i18n.ts";
+import type { PortalClient } from "./portal.ts";
 
 const DEV = Boolean(import.meta.env?.DEV);
 
@@ -41,10 +42,14 @@ export class App {
    *  to decide whether to render the chat input row. */
   chatEnabled = true;
 
-  constructor(root: HTMLElement) {
+  /** Aapeli portal session when the server enables the integration. */
+  readonly portal: PortalClient | null;
+
+  constructor(root: HTMLElement, portal: PortalClient | null = null) {
     this.root = root;
+    this.portal = portal;
     const url = this.resolveWsUrl();
-    this.connection = new Connection(url);
+    this.connection = new Connection(url, portal ? (base) => portal.socketUrl(base) : null);
 
     this.connection.addEventListener("packet", (ev) => {
       const pkt = ev.detail;

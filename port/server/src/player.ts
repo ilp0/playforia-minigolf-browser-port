@@ -3,6 +3,7 @@ import { triangelize } from "@minigolf/shared";
 import type { Connection } from "./connection.ts";
 import type { Lobby } from "./lobby.ts";
 import type { Game } from "./game.ts";
+import type { PortalIdentity } from "./portal.ts";
 
 export const ACCESSLEVEL_NORMAL = 0;
 export const ACCESSLEVEL_SHERIFF = 1;
@@ -45,6 +46,9 @@ export class Player {
      *  within the window will adopt this player. Cleared on reconnect.
      *  Owned by `GolfServer.handleDisconnect` / `handleReconnect`. */
     disconnectedAt: number | null = null;
+
+    /** Portal identity bound at login (portal integration only). */
+    portalIdentity: PortalIdentity | null = null;
 
     constructor(connection: Connection, id: number) {
         this.connection = connection;

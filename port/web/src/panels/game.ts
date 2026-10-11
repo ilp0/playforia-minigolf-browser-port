@@ -455,6 +455,9 @@ export class GamePanel implements Panel {
   private trackName = "";
   /** Set once we have shown the daily share screen, to avoid double-saving. */
   private dailyResultRecorded = false;
+  /** Portal save outcome for this run (`game dailyrecord <status>`). */
+  private dailyRecordStatus: string | null = null;
+  private dailyRecordEl: HTMLElement | null = null;
   /**
    * Per-stroke recording of the local player's daily run. Captured from the
    * server's `beginstroke` broadcasts (which carry the deterministic inputs)
@@ -1259,6 +1262,10 @@ export class GamePanel implements Panel {
       case "end":
         this.showEndOverlay(f);
         break;
+      case "dailyrecord":
+        this.dailyRecordStatus = f[2] ?? "error";
+        this.renderDailyRecordStatus();
+        break;
       case "dailymode":
         // Server tagging this room as the daily challenge. f[2] is the UTC
         // date key the server picked the track for. The packet arrives AFTER
@@ -1415,6 +1422,7 @@ export class GamePanel implements Panel {
       this.dailyTLine = tLine;
       this.dailyReplayStrokes = [];
       this.dailyResultRecorded = false;
+      this.dailyRecordStatus = null;
 
       this.setStatus(t("Port_Game_ClickToShoot", "Click to shoot when you're ready."));
       this.removeOverlay();
@@ -2702,6 +2710,21 @@ export class GamePanel implements Panel {
    * result to localStorage to gate tomorrow's button, render the score
    * relative to the track average, and offer a copy-to-clipboard share.
    */
+  private renderDailyRecordStatus(): void {
+    const el = this.dailyRecordEl;
+    if (!el?.isConnected || !this.app.portal) return;
+    const status = this.dailyRecordStatus ?? (this.app.portal.registered ? "pending" : "guest");
+    const messages: Record<string, [string, string]> = {
+      pending: ["Port_Portal_DailySaving", "Saving result to your Aapeli account…"],
+      saved: ["Port_Portal_DailySaved", "Result saved to your Aapeli account."],
+      duplicate: ["Port_Portal_DailyDuplicate", "Today's first result is already saved; this run does not count."],
+      guest: ["Port_Portal_DailyGuest", "Sign in on Aapeli to save Daily Cup results and wins."],
+      error: ["Port_Portal_DailyError", "Could not save the result to Aapeli."],
+    };
+    const [key, fallback] = messages[status] ?? messages.error;
+    el.textContent = t(key, fallback);
+  }
+
   private showDailyShareOverlay(): void {
     if (!this.root) return;
     const me = this.players[this.myPlayerId];
@@ -2769,6 +2792,14 @@ export class GamePanel implements Panel {
     verdictRow.style.marginTop = "4px";
     verdictRow.textContent = verdict;
     lines.appendChild(verdictRow);
+    if (this.app.portal) {
+      const recordRow = document.createElement("div");
+      recordRow.className = "daily-record-status";
+      recordRow.style.marginTop = "4px";
+      lines.appendChild(recordRow);
+      this.dailyRecordEl = recordRow;
+      this.renderDailyRecordStatus();
+    }
     ov.appendChild(lines);
 
     const btnRow = document.createElement("div");

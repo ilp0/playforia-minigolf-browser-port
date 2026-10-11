@@ -10,6 +10,7 @@ import { decode, type Packet, PacketType, buildCommand, buildData } from "@minig
 import type { Player } from "./player.ts";
 import type { GolfServer } from "./server.ts";
 import { logEvent } from "./log.ts";
+import type { PortalIdentity } from "./portal.ts";
 
 // Browsers throttle JS in background tabs (Chrome down to ~1Hz, sometimes
 // even less). The original Java applet didn't have that problem, but our
@@ -125,6 +126,9 @@ export class Connection {
      *  - which fire pre-login and post-player-removal respectively - can
      *  still surface it. */
     public clientId: string | null = null;
+    /** Verified Aapeli portal ticket from the WS upgrade; null when the
+     *  portal integration is disabled. */
+    public portalIdentity: PortalIdentity | null = null;
 
     constructor(
         ws: WebSocket,

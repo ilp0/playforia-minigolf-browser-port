@@ -162,6 +162,8 @@ register({
     handle: (_server, conn, match) => {
         const player = conn.player;
         if (!player) return;
+        // Portal sessions are named by their signed ticket, not the client.
+        if (conn.portalIdentity) return;
         // Strip both wire-framing chars (\r\n\t) and the structured-field
         // separators (^, :) that Player.toString triangelizes - a nick with `^`
         // or `:` would corrupt the lobby/owninfo lines for everyone.
@@ -183,11 +185,15 @@ register({
         // to the random placeholder if they didn't send one (or it sanitised
         // away to nothing - `nick` handler leaves `player.nick` at the "-"
         // default in that case).
-        if (player.nick === "-" || player.nick === "") {
+        const identity = conn.portalIdentity;
+        if (identity) {
+            player.portalIdentity = identity;
+            player.nick = identity.nickname;
+        } else if (player.nick === "-" || player.nick === "") {
             player.nick = `~anonym-${Math.floor(Math.random() * 10000)}`;
         }
         player.emailVerified = true;
-        player.registered = false;
+        player.registered = identity?.registered ?? false;
         // Tell the client about server-level toggles before it builds any UI.
         // Today only `chat` exists; clients that don't recognise the verb just
         // ignore the packet, so we can extend `srvinfo` later without breakage.
@@ -197,6 +203,7 @@ register({
         conn.sendData("status", "lobbyselect", "300");
         logEvent("player_login", {
             id: player.id,
+            ...(identity ? { profile: identity.profileId, registered: identity.registered } : {}),
             nick: player.nick,
             language: player.language ?? "-",
             cid: conn.clientId,

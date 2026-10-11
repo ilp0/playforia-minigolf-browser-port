@@ -81,6 +81,32 @@ Set on the command line or via env vars when launching the server:
 | --------------- | ------------------ | -------------------------------------------------------------- |
 | `CHAT_ENABLED`  | `--chat-disabled`  | Set `CHAT_ENABLED=0` (or pass `--chat-disabled`) to drop all lobby/game chat server-side. The sender is told once via a system whisper; gameplay traffic is unaffected. Useful for hosting without taking on chat-moderation duty. |
 
+#### Aapeli portal integration (opt-in)
+
+Passing `--portal-key-file` hosts the game inside the
+[Aapeli library](https://aapeli.0m.fi), which owns accounts. It is off by
+default, so standalone deployments keep the guest-nickname login.
+
+| CLI flag                | Effect |
+| ----------------------- | ------ |
+| `--portal-key-file`     | Shared HMAC key of the portal game family. Enables the integration. |
+| `--portal-internal-url` | Portal base the server posts results to, e.g. `http://library-portal:8000`. |
+| `--portal-public-api`   | Browser-facing portal API, e.g. `https://aapeli.0m.fi/api`. |
+| `--portal-game`         | Game name in portal tickets (default `minigolf-native`). |
+
+When it is enabled:
+
+- The client reads `GET /api/portal-config`. It fetches a signed game ticket
+  from the portal before every WebSocket connect (`/ws?ticket=…`).
+- The server refuses upgrades without a valid ticket.
+- Players are named by their portal nickname.
+- `c old` only re-attaches the same portal profile.
+- Finished Daily Cup runs of registered accounts are posted to
+  `/internal/daily-result`, and the client receives
+  `game dailyrecord saved|duplicate|guest|error`.
+- The portal keeps the first run per account and day. Each day's best holed
+  score is that day's win.
+
 ## Tests
 
 ```sh
@@ -92,6 +118,7 @@ node --experimental-strip-types --no-warnings server/src/test-multi.ts      # 2-
 node --experimental-strip-types --no-warnings server/src/test-forfeit.ts    # async forfeit + maxStrokes auto-cap
 node --experimental-strip-types --no-warnings server/src/test-filter.ts     # track-category filtering
 node --experimental-strip-types --no-warnings server/src/test-daily.ts      # daily-challenge room flow + re-entry
+node --experimental-strip-types --no-warnings server/src/test-portal.ts     # Aapeli portal tickets + daily result reporting
 ```
 
 Each smoke test boots its own self-contained server on a private port

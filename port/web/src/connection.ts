@@ -72,18 +72,54 @@ export class Connection extends EventTarget {
    *  flag suppresses that redundant follow-up. */
   private finalEventEmitted = false;
 
-  constructor(url: string) {
+  /** Optional per-connect URL decoration (portal tickets are single-use
+   *  and short-lived, so every socket - reconnects included - needs one). */
+  private readonly resolveUrl: ((url: string) => Promise<string>) | null;
+
+  constructor(url: string, resolveUrl: ((url: string) => Promise<string>) | null = null) {
     super();
     this.url = url;
+    this.resolveUrl = resolveUrl;
     this.connect();
   }
 
   private connect(): void {
-    const ws = new WebSocket(this.url);
+    if (!this.resolveUrl) {
+      this.open(this.url);
+      return;
+    }
+    this.resolveUrl(this.url).then(
+      (url) => {
+        if (!this.userClosed) this.open(url);
+      },
+      (err) => {
+        if (this.userClosed) return;
+        if (this.reconnecting && this.reconnectAttempt < RECONNECT_MAX_ATTEMPTS) {
+          this.scheduleReconnect();
+          return;
+        }
+        if (this.reconnecting) {
+          this.reconnecting = false;
+          this.finalEventEmitted = true;
+          this.dispatchEvent(
+            new CustomEvent<{ reason: "rcf" | "exhausted" }>("reconnect-failed", {
+              detail: { reason: "exhausted" },
+            }),
+          );
+          return;
+        }
+        this.emitError("connection setup failed: " + String(err), err);
+        this.dispatchEvent(new CloseEvent("close", { code: 1006, reason: "setup failed", wasClean: false }));
+      },
+    );
+  }
+
+  private open(url: string): void {
+    const ws = new WebSocket(url);
     this.ws = ws;
 
     ws.addEventListener("open", (ev) => {
-      if (DEV) console.debug("[conn] open", this.url);
+      if (DEV) console.debug("[conn] open", url);
       // The 'open' event is suppressed during reconnect - the panel doesn't
       // need to redo handshake-bound bookkeeping (it already mounted on the
       // first open). It'll get a 'reconnected' event once `c rcok` lands.

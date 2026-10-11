@@ -9,6 +9,7 @@ import { TrackManager } from "./tracks.ts";
 import { getReplay, saveReplay } from "./replay-store.ts";
 import { LobbyType } from "./lobby.ts";
 import { logEvent } from "./log.ts";
+import { loadPortalConfig, type PortalConfig, verifyTicket } from "./portal.ts";
 
 /** Cadence for the analytics `snapshot` event - short enough to give a
  *  reasonable population time-series, long enough that an idle server
@@ -28,6 +29,8 @@ interface CliArgs {
      *  via `CHAT_ENABLED=0` (or `--chat-disabled`) to host without moderating chat.
      *  Optional in CliArgs so smoke-test fixtures can omit it; main() always populates. */
     chatEnabled?: boolean;
+    /** Aapeli portal integration (see portal.ts). Disabled when absent. */
+    portal?: PortalConfig | null;
 }
 
 const DEFAULT_MAX_CONNS_PER_IP = 16;
@@ -53,6 +56,7 @@ function parseArgs(argv: string[]): CliArgs {
         allowAnyOrigin: false,
         chatEnabled: envBool("CHAT_ENABLED", true),
     };
+    const portal = { keyFile: "", internalUrl: "", publicApi: "", game: "minigolf-native" };
     for (let i = 2; i < argv.length; i++) {
         const a = argv[i];
         if (a === "--port" && i + 1 < argv.length) {
@@ -71,8 +75,17 @@ function parseArgs(argv: string[]): CliArgs {
             args.chatEnabled = false;
         } else if (a === "--chat-enabled") {
             args.chatEnabled = true;
+        } else if (a === "--portal-key-file" && i + 1 < argv.length) {
+            portal.keyFile = argv[++i];
+        } else if (a === "--portal-internal-url" && i + 1 < argv.length) {
+            portal.internalUrl = argv[++i];
+        } else if (a === "--portal-public-api" && i + 1 < argv.length) {
+            portal.publicApi = argv[++i];
+        } else if (a === "--portal-game" && i + 1 < argv.length) {
+            portal.game = argv[++i];
         }
     }
+    if (portal.keyFile) args.portal = loadPortalConfig(portal);
     return args;
 }
 
@@ -187,6 +200,15 @@ function handleReplayApi(req: IncomingMessage, res: ServerResponse): boolean {
     return true;
 }
 
+/** `GET /api/portal-config` tells the web client where to fetch its game
+ *  ticket. 404 (the static fallback) means the integration is disabled. */
+function handlePortalConfig(req: IncomingMessage, res: ServerResponse, portal: PortalConfig | null): boolean {
+    if (!portal || req.method !== "GET" || req.url !== "/api/portal-config") return false;
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ api: portal.publicApi, game: portal.game }));
+    return true;
+}
+
 function tryServeStatic(req: IncomingMessage, res: ServerResponse, webDist: string): boolean {
     if (!req.url) return false;
     if (req.url === "/ws") return false;
@@ -256,7 +278,8 @@ export async function startServer(args: CliArgs): Promise<RunningServer> {
     const trackManager = new TrackManager();
     await trackManager.load(args.tracksDir);
     const chatEnabled = args.chatEnabled ?? true;
-    const golfServer = new GolfServer(trackManager, { chatEnabled });
+    const portal = args.portal ?? null;
+    const golfServer = new GolfServer(trackManager, { chatEnabled, portal });
     if (!chatEnabled) {
         console.log("[chat] disabled - say/sayp packets will be dropped with a notice to the sender");
     }
@@ -272,6 +295,7 @@ export async function startServer(args: CliArgs): Promise<RunningServer> {
     const webDist = path.resolve(args.tracksDir, "..", "..", "web", "dist");
 
     const http = createServer((req, res) => {
+        if (handlePortalConfig(req, res, portal)) return;
         if (handleReplayApi(req, res)) return;
         if (tryServeStatic(req, res, webDist)) return;
         res.writeHead(404, { "Content-Type": "text/plain" });
@@ -291,8 +315,14 @@ export async function startServer(args: CliArgs): Promise<RunningServer> {
     const ipConnCount = new Map<string, number>();
 
     http.on("upgrade", (req, sock, head) => {
-        if (req.url !== "/ws") {
+        const upgradeUrl = new URL(req.url ?? "/", "http://upgrade.invalid");
+        if (upgradeUrl.pathname !== "/ws" || (!portal && upgradeUrl.search !== "")) {
             sock.destroy();
+            return;
+        }
+        const portalIdentity = portal ? verifyTicket(portal, upgradeUrl.searchParams.get("ticket")) : null;
+        if (portal && !portalIdentity) {
+            sock.end("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
             return;
         }
 
@@ -336,7 +366,8 @@ export async function startServer(args: CliArgs): Promise<RunningServer> {
         const ua = String(req.headers["user-agent"] ?? "");
 
         wss.handleUpgrade(req, sock, head, (ws) => {
-            new Connection(ws, golfServer, args.verbose, remote, ua);
+            const conn = new Connection(ws, golfServer, args.verbose, remote, ua);
+            conn.portalIdentity = portalIdentity;
             ws.on("close", () => {
                 if (maxConnsPerIp > 0) {
                     const cur = ipConnCount.get(remote) ?? 0;
@@ -355,6 +386,7 @@ export async function startServer(args: CliArgs): Promise<RunningServer> {
         port: args.port,
         chat: chatEnabled,
         tracks_total: counts[0],
+        portal: portal !== null,
     });
 
     // Periodic population snapshot - one structured line per minute summarising
