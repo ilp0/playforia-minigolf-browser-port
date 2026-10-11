@@ -50,6 +50,11 @@ export class App {
     this.portal = portal;
     const url = this.resolveWsUrl();
     this.connection = new Connection(url, portal ? (base) => portal.socketUrl(base) : null);
+    if (portal) {
+      // The portal's activity script (injected by the host page) counts this
+      // player in the catalogue's presence numbers once a game socket is up.
+      this.connection.addEventListener("open", () => window.dispatchEvent(new Event("aapeli-runtime-ready")));
+    }
 
     this.connection.addEventListener("packet", (ev) => {
       const pkt = ev.detail;
