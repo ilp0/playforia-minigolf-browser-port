@@ -13,6 +13,7 @@ import {
   SNAP_FLAG_ON_LIQUID,
   SNAP_FLAG_TELEPORTED,
   SNAP_FLAG_CAUSED_BY_SHOT,
+  resolveStrokeOrigin,
 } from "@minigolf/shared";
 import type { App } from "../app.ts";
 import type { Panel } from "../panel.ts";
@@ -1653,11 +1654,12 @@ export class GamePanel implements Panel {
     const slot = this.players[id];
     if (!slot) return;
 
-    // Take the ball position the server believed at stroke begin - this keeps
-    // every client's physics agreement bit-exact even if our local ball drifted.
+    // The server's ball position is truncated to whole pixels; keep our exact
+    // position when it matches and resync only a ball that really drifted.
     const ballCoords = decodeCoords(ballRaw);
-    slot.ball.x = ballCoords.x;
-    slot.ball.y = ballCoords.y;
+    const origin = resolveStrokeOrigin(ballCoords.x, ballCoords.y, slot.ball.x, slot.ball.y);
+    slot.ball.x = origin.x;
+    slot.ball.y = origin.y;
 
     const mouse = decodeCoords(mouseRaw);
     // Snapshot all OTHER players' resting positions for the movable-block

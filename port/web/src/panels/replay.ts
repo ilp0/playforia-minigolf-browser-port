@@ -13,7 +13,7 @@
  * current ball comes to rest, mirroring the way GamePanel sequences peers.
  */
 
-import { PacketType, Seed, type Packet } from "@minigolf/shared";
+import { PacketType, Seed, resolveStrokeOrigin, type Packet } from "@minigolf/shared";
 import { loadAtlases, type Atlases } from "../game/sprites.ts";
 import { buildMap, type ParsedMap } from "../game/map.ts";
 import { TrackRenderer } from "../game/render.ts";
@@ -187,8 +187,13 @@ export class ReplayPanel implements Panel {
 
   private placeAtFirstStrokeOrigin(): void {
     if (this.replay.s.length > 0) {
+      // Recordings hold truncated pixels; start from the exact tee (tile
+      // centre) the live run used so the replay follows the same path.
       const c = decodeCoords(this.replay.s[0][0]);
-      this.ball = newBall(c.x, c.y);
+      const map = this.parsedMap;
+      const tees = map ? [...map.startPositions, ...map.resetPositions.filter((r): r is [number, number] => r !== null)] : [];
+      const tee = tees.find(([x, y]) => Math.trunc(x) === c.x && Math.trunc(y) === c.y);
+      this.ball = tee ? newBall(tee[0], tee[1]) : newBall(c.x, c.y);
     } else {
       // Empty recording - drop the ball roughly centre-ish so the canvas
       // isn't blank. The user only sees this when the run was forfeited
@@ -245,11 +250,11 @@ export class ReplayPanel implements Panel {
     const b = decodeCoords(ballRaw);
     const m = decodeCoords(mouseRaw);
 
-    // Snap the ball to the recorded start-of-stroke position. Even if our
-    // local sim drifted by a sub-pixel from the original (it shouldn't, but
-    // defence-in-depth), this keeps each subsequent stroke faithful.
-    this.ball.x = b.x;
-    this.ball.y = b.y;
+    // Same rule as the live game: the recording is truncated to whole
+    // pixels, so keep the exact simulated position when it matches.
+    const origin = resolveStrokeOrigin(b.x, b.y, this.ball.x, this.ball.y);
+    this.ball.x = origin.x;
+    this.ball.y = origin.y;
 
     this.ctx = {
       map: this.parsedMap,

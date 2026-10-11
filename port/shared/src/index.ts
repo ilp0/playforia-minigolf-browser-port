@@ -1,6 +1,7 @@
 // Public barrel for @minigolf/shared.
 
 export { Seed } from "./seed.ts";
+export { resolveStrokeOrigin } from "./stroke-origin.ts";
 
 export {
     PacketType,
