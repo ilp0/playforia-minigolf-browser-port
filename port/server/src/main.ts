@@ -56,7 +56,7 @@ function parseArgs(argv: string[]): CliArgs {
         allowAnyOrigin: false,
         chatEnabled: envBool("CHAT_ENABLED", true),
     };
-    const portal = { keyFile: "", internalUrl: "", publicApi: "", game: "minigolf-native" };
+    const portal = { keyFile: "", internalUrl: "", publicApi: "", game: "minigolf-native", shareUrl: "" };
     for (let i = 2; i < argv.length; i++) {
         const a = argv[i];
         if (a === "--port" && i + 1 < argv.length) {
@@ -81,6 +81,8 @@ function parseArgs(argv: string[]): CliArgs {
             portal.internalUrl = argv[++i];
         } else if (a === "--portal-public-api" && i + 1 < argv.length) {
             portal.publicApi = argv[++i];
+        } else if (a === "--portal-share-url" && i + 1 < argv.length) {
+            portal.shareUrl = argv[++i];
         } else if (a === "--portal-game" && i + 1 < argv.length) {
             portal.game = argv[++i];
         }
@@ -205,7 +207,7 @@ function handleReplayApi(req: IncomingMessage, res: ServerResponse): boolean {
 function handlePortalConfig(req: IncomingMessage, res: ServerResponse, portal: PortalConfig | null): boolean {
     if (!portal || req.method !== "GET" || req.url !== "/api/portal-config") return false;
     res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-    res.end(JSON.stringify({ api: portal.publicApi, game: portal.game }));
+    res.end(JSON.stringify({ api: portal.publicApi, game: portal.game, shareUrl: portal.shareUrl }));
     return true;
 }
 

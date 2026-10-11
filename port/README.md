@@ -93,6 +93,7 @@ default, so standalone deployments keep the guest-nickname login.
 | `--portal-internal-url` | Portal base the server posts results to, e.g. `http://library-portal:8000`. |
 | `--portal-public-api`   | Browser-facing portal API, e.g. `https://aapeli.0m.fi/api`. |
 | `--portal-game`         | Game name in portal tickets (default `minigolf-native`). |
+| `--portal-share-url`    | Page that replay share links open, e.g. `https://aapeli.0m.fi/games/minigolf-native/`. It must forward `?r=` and `#replay=` to this client. |
 
 When it is enabled:
 

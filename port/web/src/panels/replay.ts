@@ -117,9 +117,12 @@ export class ReplayPanel implements Panel {
     exitBtn.className = "btn-blue";
     exitBtn.textContent = t("Port_Replay_Exit", "Exit replay");
     exitBtn.addEventListener("click", () => {
-      // Clearing the hash & reloading drops us back into the regular app boot.
-      window.location.hash = "";
-      window.location.reload();
+      // Short links carry the replay in `?r=`, so clearing only the hash
+      // reloaded the same replay. Drop both and boot the regular app.
+      const url = new URL(window.location.href);
+      url.searchParams.delete("r");
+      url.hash = "";
+      window.location.replace(url.href);
     });
     controls.appendChild(exitBtn);
 

@@ -1,5 +1,5 @@
 import { App } from "./app.ts";
-import { fetchReplayById, readReplayFromHash, readReplayIdFromQuery, type DailyReplay } from "./daily.ts";
+import { fetchReplayById, readReplayFromHash, readReplayIdFromQuery, setShareBase, type DailyReplay } from "./daily.ts";
 import { ReplayPanel } from "./panels/replay.ts";
 import { i18n, loadSavedLang } from "./i18n.ts";
 import { loadPortal } from "./portal.ts";
@@ -220,6 +220,7 @@ async function boot(): Promise<void> {
       mountReplay(embedded);
     } else {
       const portal = await loadPortal();
+      setShareBase(portal?.shareUrl ?? null);
       if (root) new App(root, portal).start();
     }
   }

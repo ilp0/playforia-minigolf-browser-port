@@ -182,11 +182,22 @@ export function decodeReplay(s: string): DailyReplay | null {
     }
 }
 
+/** Page that share links open; an embedding site (Aapeli) replaces it with
+ *  its own game page, which forwards `?r=` / `#replay=` to this client. */
+let shareBase: string | null = null;
+
+export function setShareBase(url: string | null): void {
+    shareBase = url;
+}
+
+function shareBaseUrl(): string {
+    return shareBase ?? window.location.origin + window.location.pathname;
+}
+
 /** Build a shareable URL with the replay payload in the fragment. */
 export function replayLink(r: DailyReplay): string {
     const enc = encodeReplay(r);
-    const base = window.location.origin + window.location.pathname;
-    return `${base}#replay=${enc}`;
+    return `${shareBaseUrl()}#replay=${enc}`;
 }
 
 /**
@@ -203,8 +214,7 @@ export async function shortReplayLink(r: DailyReplay): Promise<string> {
     if (!res.ok) throw new Error(`replay save failed: ${res.status}`);
     const { id } = (await res.json()) as { id?: string };
     if (typeof id !== "string" || id.length === 0) throw new Error("server returned no id");
-    const base = window.location.origin + window.location.pathname;
-    return `${base}?r=${id}`;
+    return `${shareBaseUrl()}?r=${id}`;
 }
 
 /** Fetch a replay by id from the server. Returns null if expired/not found. */

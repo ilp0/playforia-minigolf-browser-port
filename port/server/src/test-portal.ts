@@ -156,6 +156,7 @@ async function main(): Promise<void> {
         internalUrl: `http://${HOST}:${PORTAL_PORT}`,
         publicApi: "https://aapeli.example/api",
         game: GAME,
+        shareUrl: "https://aapeli.example/games/minigolf-native/",
     });
 
     assert(verifyTicket(portal, ticket({ registered: true, nickname: "Ok" })), "valid ticket rejected");
@@ -169,8 +170,9 @@ async function main(): Promise<void> {
     try {
         server = await startServer({ host: HOST, port: PORT, tracksDir: tracksDir(), verbose: false, portal });
 
-        const config = (await (await fetch(`http://${HOST}:${PORT}/api/portal-config`)).json()) as { api?: string; game?: string };
+        const config = (await (await fetch(`http://${HOST}:${PORT}/api/portal-config`)).json()) as { api?: string; game?: string; shareUrl?: string };
         assert(config.api === "https://aapeli.example/api" && config.game === GAME, "portal-config mismatch");
+        assert(config.shareUrl === "https://aapeli.example/games/minigolf-native/", "portal-config shareUrl mismatch");
         console.log("[OK] /api/portal-config");
 
         await expectRefused("", "upgrade without ticket");

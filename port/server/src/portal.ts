@@ -20,6 +20,8 @@ export interface PortalConfig {
     publicApi: string;
     /** Game name the portal knows this server as. */
     game: string;
+    /** Page replay share links open (the portal's game page), or null. */
+    shareUrl: string | null;
 }
 
 export interface PortalIdentity {
@@ -50,6 +52,7 @@ export function loadPortalConfig(opts: {
     internalUrl: string;
     publicApi: string;
     game: string;
+    shareUrl?: string;
 }): PortalConfig {
     const key = readFileSync(opts.keyFile, "ascii").trim();
     if (key.length < 16 || key.length > 256) throw new Error("portal key must be 16-256 characters");
@@ -59,11 +62,16 @@ export function loadPortalConfig(opts: {
         throw new Error("portal URLs must be http(s)");
     }
     if (!/^[a-z0-9-]{1,32}$/.test(opts.game)) throw new Error("invalid portal game name");
+    const shareUrl = opts.shareUrl ? new URL(opts.shareUrl) : null;
+    if (shareUrl && (!/^https?:$/.test(shareUrl.protocol) || shareUrl.search || shareUrl.hash)) {
+        throw new Error("portal share URL must be a plain http(s) page URL");
+    }
     return {
         key,
         internalUrl: internal.href.replace(/\/$/, ""),
         publicApi: publicApi.href.replace(/\/$/, ""),
         game: opts.game,
+        shareUrl: shareUrl?.href ?? null,
     };
 }
 

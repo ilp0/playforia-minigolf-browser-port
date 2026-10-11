@@ -7,16 +7,37 @@ export interface PortalProfile {
   username: string | null;
 }
 
+const RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
+/** A fresh session is reused for the first socket instead of fetched twice. */
+const SESSION_REUSE_MS = 30_000;
+
+/** Retries rate-limited (429), unavailable (5xx) and network failures. */
+async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetch(url, init);
+      if ((res.status !== 429 && res.status < 500) || attempt >= RETRY_DELAYS_MS.length) return res;
+    } catch (err) {
+      if (attempt >= RETRY_DELAYS_MS.length) throw err;
+    }
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+  }
+}
+
 export class PortalClient {
   readonly api: string;
   readonly game: string;
+  /** Page that replay share links point to, if the host provides one. */
+  readonly shareUrl: string | null;
   profile: PortalProfile | null = null;
   private csrfToken = "";
+  private sessionAt = 0;
   private readonly sessionId = newSessionId();
 
-  constructor(api: string, game: string) {
+  constructor(api: string, game: string, shareUrl: string | null = null) {
     this.api = api;
     this.game = game;
+    this.shareUrl = shareUrl;
   }
 
   get registered(): boolean {
@@ -24,11 +45,12 @@ export class PortalClient {
   }
 
   async refreshSession(): Promise<PortalProfile> {
-    const res = await fetch(`${this.api}/session`, { credentials: "include", cache: "no-store" });
+    const res = await fetchWithRetry(`${this.api}/session`, { credentials: "include", cache: "no-store" });
     if (!res.ok) throw new Error(`portal session ${res.status}`);
     const body = (await res.json()) as { profile: PortalProfile; csrfToken: string };
     this.profile = { nickname: body.profile.nickname, username: body.profile.username ?? null };
     this.csrfToken = body.csrfToken;
+    this.sessionAt = Date.now();
     return this.profile;
   }
 
@@ -36,7 +58,7 @@ export class PortalClient {
   async ticket(): Promise<string> {
     for (let attempt = 0; attempt < 2; attempt++) {
       if (!this.csrfToken || attempt > 0) await this.refreshSession();
-      const res = await fetch(`${this.api}/game-ticket`, {
+      const res = await fetchWithRetry(`${this.api}/game-ticket`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json", "X-CSRF-Token": this.csrfToken },
@@ -50,13 +72,13 @@ export class PortalClient {
 
   async socketUrl(base: string): Promise<string> {
     // Pick up nickname/login changes made on the portal since the last connect.
-    await this.refreshSession();
+    if (Date.now() - this.sessionAt > SESSION_REUSE_MS) await this.refreshSession();
     return `${base}?ticket=${encodeURIComponent(await this.ticket())}`;
   }
 }
 
 export async function loadPortal(): Promise<PortalClient | null> {
-  let config: { api?: unknown; game?: unknown };
+  let config: { api?: unknown; game?: unknown; shareUrl?: unknown };
   try {
     const res = await fetch("/api/portal-config", { cache: "no-store" });
     if (!res.ok) return null;
@@ -65,7 +87,7 @@ export async function loadPortal(): Promise<PortalClient | null> {
     return null;
   }
   if (typeof config.api !== "string" || typeof config.game !== "string") return null;
-  const portal = new PortalClient(config.api, config.game);
+  const portal = new PortalClient(config.api, config.game, typeof config.shareUrl === "string" ? config.shareUrl : null);
   try {
     await portal.refreshSession();
   } catch (err) {
