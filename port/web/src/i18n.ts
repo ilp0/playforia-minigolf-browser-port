@@ -27,6 +27,13 @@ function isLang(s: string | null): s is Lang {
 
 /** Read the saved choice, or `en` if no saved choice / invalid value. */
 export function loadSavedLang(): Lang {
+  // Embedding pages pass their locale as `?lang=fi` or `?lang=fi_FI`.
+  try {
+    const requested = new URLSearchParams(location.search).get("lang")?.slice(0, 2).toLowerCase() ?? null;
+    if (isLang(requested)) return requested;
+  } catch {
+    // location unavailable - fall through.
+  }
   try {
     const v = window.localStorage.getItem(STORAGE_KEY);
     if (isLang(v)) return v;
