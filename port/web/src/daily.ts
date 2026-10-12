@@ -138,8 +138,11 @@ export interface DailyReplay {
      * stroke's recorded ballCoords and the seed alone reproduces the trajectory.
      */
     t: string;
-    /** Strokes in order. Tuple = [ballCoords, mouseCoords, seed]. */
-    s: Array<[string, string, number]>;
+    /**
+     * Strokes in order. Tuple = [ballCoords, mouseCoords, seed, exactOrigin?].
+     * The optional exact origin ("x,y") came later; older links omit it.
+     */
+    s: Array<[string, string, number, string?]>;
     /** True if the player holed in; false if forfeited. */
     holed: boolean;
 }

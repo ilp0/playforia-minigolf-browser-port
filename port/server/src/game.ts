@@ -8,6 +8,9 @@ import {
     type BallSnapshotEntry,
     SNAPSHOT_AGREEMENT_EPSILON_PX,
     resolveSnapshots,
+    decodeWireOrigin,
+    encodeExactOrigin,
+    parseExactOrigin,
 } from "@minigolf/shared";
 import type { Player } from "./player.ts";
 import type { Lobby } from "./lobby.ts";
@@ -27,6 +30,8 @@ export const STROKETIMEOUT_INFINITE = 0;
 export const COLLISION_NO = 0;
 export const COLLISION_YES = 1;
 const COORDS_RE = /^-?[0-9a-z]{1,8}$/;
+/** An unsettled stroke older than this is counted and closed (physics caps one at ~24 s). */
+const STROKE_ABANDON_MS = 30_000;
 export const SCORING_STROKE = 0;
 export const SCORING_TRACK = 1;
 export const SCORING_WEIGHT_END_NONE = 0;
@@ -346,8 +351,11 @@ export class GolfGame extends Game {
      */
     private ballEndObservations = new Map<number, BallEndObservation[]>();
 
-    /** Players whose own `beginstroke` has not yet been settled by `endstroke`. Cleared on `markTrackStart`. */
-    private strokesInFlight = new Set<Player>();
+    /**
+     * Players whose own `beginstroke` has not yet been settled by `endstroke`,
+     * with when it began. Cleared on `markTrackStart`.
+     */
+    private strokesInFlight = new Map<Player, number>();
 
     /**
      * In-flight snapshot recovery sessions, keyed by the divergence nonce.
@@ -462,7 +470,10 @@ export class GolfGame extends Game {
                 const mouseCoords = fields[3] ?? ballCoords;
                 // Relayed verbatim to every peer, so accept only the client's base36 coordinate form.
                 if (!COORDS_RE.test(ballCoords) || !COORDS_RE.test(mouseCoords)) return true;
-                this.beginStroke(player, ballCoords, mouseCoords);
+                // Optional exact origin; relayed re-serialized, and only when it lies in the wire pixel.
+                const wire = decodeWireOrigin(ballCoords);
+                const exact = parseExactOrigin(fields[4], wire.x, wire.y);
+                this.beginStroke(player, ballCoords, mouseCoords, exact ? encodeExactOrigin(exact.x, exact.y) : null);
                 return true;
             }
             case "endstroke": {
@@ -710,12 +721,22 @@ export class GolfGame extends Game {
      *         server → all     : game beginstroke <playerId> <ballCoords>
      *                            <mouseCoords> <seed> <apply_tick>
      */
-    protected beginStroke(p: Player, ballCoords: string, mouseCoords: string): void {
+    protected beginStroke(p: Player, ballCoords: string, mouseCoords: string, exactOrigin: string | null = null): void {
         const playerId = this.getPlayerId(p);
         // Defensive guard: ignore begin from a player whose ball is already in
         // play or already in the hole.
-        if (this.playStatus.charAt(playerId) !== "f" || this.strokesInFlight.has(p)) return;
-        this.strokesInFlight.add(p);
+        if (this.playStatus.charAt(playerId) !== "f") return;
+        const begunAt = this.strokesInFlight.get(p);
+        if (begunAt !== undefined) {
+            // A stroke whose endstroke never came (its client lost the ball to a
+            // snapshot correction, say) must not lock the player out. Physics
+            // caps a stroke at ~24 s, so past that it counts as an ordinary stroke.
+            if (Date.now() - begunAt < STROKE_ABANDON_MS) return;
+            this.strokesInFlight.delete(p);
+            this.endStroke(p, this.playStatus);
+            if (this.playStatus.charAt(playerId) !== "f") return;
+        }
+        this.strokesInFlight.set(p, Date.now());
         this.strokeSeedCounter++;
         // 32-bit composite - distinct per (game, stroke) so all clients pick
         // up a fresh independent random stream.
@@ -747,7 +768,9 @@ export class GolfGame extends Game {
             );
         }
         this.writeAll(
-            tabularize("game", "beginstroke", playerId, ballCoords, mouseCoords, seed, applyTick),
+            exactOrigin === null
+                ? tabularize("game", "beginstroke", playerId, ballCoords, mouseCoords, seed, applyTick)
+                : tabularize("game", "beginstroke", playerId, ballCoords, mouseCoords, seed, applyTick, exactOrigin),
         );
     }
 
@@ -2021,12 +2044,12 @@ export class MultiGame extends GolfGame {
      * which catches doubled-up strokes; this override only adds the per-room
      * turn check on top.
      */
-    protected override beginStroke(p: Player, ballCoords: string, mouseCoords: string): void {
+    protected override beginStroke(p: Player, ballCoords: string, mouseCoords: string, exactOrigin: string | null = null): void {
         if (this.turnBased && !this.practiceActive) {
             const id = this.getPlayerId(p);
             if (id !== this.currentTurn) return;
         }
-        super.beginStroke(p, ballCoords, mouseCoords);
+        super.beginStroke(p, ballCoords, mouseCoords, exactOrigin);
     }
 
     /**

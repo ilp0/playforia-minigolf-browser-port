@@ -62,7 +62,13 @@ The determinism contract is now (see [Determinism](#determinism) below):
    absolute `apply_tick` (a future world-tick number) at which all clients
    apply the impulse.
 2. Server broadcasts `game beginstroke <playerId> <ballCoords> <mouseCoords>
-   <seed> <apply_tick>` to **all** clients (including the shooter).
+   <seed> <apply_tick> [<exactOrigin>]` to **all** clients (including the
+   shooter). `ballCoords` is truncated to whole pixels; the optional
+   `exactOrigin` (`x,y`, each the shortest round-trip form of the shooter's
+   double) is relayed only when it truncates to `ballCoords`. Every client
+   starts the stroke from it, so a late joiner that only knew whole-pixel
+   positions agrees with the clients that watched the whole track. Without
+   it clients fall back to `resolveStrokeOrigin` (shared/src/stroke-origin.ts).
 3. Each client buffers the impulse against `apply_tick` and constructs
    `Seed(seed)` for `applyStrokeImpulse` when its local `worldTick` reaches
    that value. The physics is fully deterministic so every client computes

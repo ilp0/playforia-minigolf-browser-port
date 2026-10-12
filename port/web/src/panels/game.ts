@@ -14,6 +14,8 @@ import {
   SNAP_FLAG_TELEPORTED,
   SNAP_FLAG_CAUSED_BY_SHOT,
   resolveStrokeOrigin,
+  parseExactOrigin,
+  encodeExactOrigin,
 } from "@minigolf/shared";
 import type { App } from "../app.ts";
 import type { Panel } from "../panel.ts";
@@ -464,7 +466,7 @@ export class GamePanel implements Panel {
    * server's `beginstroke` broadcasts (which carry the deterministic inputs)
    * so the run can be replayed bit-exactly without server cooperation.
    */
-  private dailyReplayStrokes: Array<[string, string, number]> = [];
+  private dailyReplayStrokes: Array<[string, string, number, string?]> = [];
   /** Raw `T <map>` line from the most recent starttrack - embedded in replay links. */
   private dailyTLine: string | null = null;
   /** Track author from starttrack - surfaced in playback HUD. */
@@ -722,13 +724,7 @@ export class GamePanel implements Panel {
       if (Math.sqrt(dx * dx + dy * dy) < 6.5) return;
       // Don't apply impulse here - wait for server broadcast (which includes
       // the seed) so we run identical physics with everyone else.
-      const ix = (me.ball.x | 0);
-      const iy = (me.ball.y | 0);
-      this.app.connection.sendData(
-        "game",
-        "beginstroke",
-        encodeCoords(ix, iy, 0) + "\t" + encodeCoords((mx | 0), (my | 0), this.shootingMode),
-      );
+      this.sendBeginStroke(me.ball, mx, my);
     };
     canvas.addEventListener("mousedown", clickHandler);
     this.clickHandler = clickHandler;
@@ -815,13 +811,7 @@ export class GamePanel implements Panel {
       const dx = me.ball.x - mx;
       const dy = me.ball.y - my;
       if (Math.sqrt(dx * dx + dy * dy) < TOUCH_SHOT_DEADZONE) return;
-      const ix = (me.ball.x | 0);
-      const iy = (me.ball.y | 0);
-      this.app.connection.sendData(
-        "game",
-        "beginstroke",
-        encodeCoords(ix, iy, 0) + "\t" + encodeCoords((mx | 0), (my | 0), this.shootingMode),
-      );
+      this.sendBeginStroke(me.ball, mx, my);
     };
     canvas.addEventListener("touchend", touchEndHandler, { passive: false });
     this.touchEndHandler = touchEndHandler;
@@ -1288,6 +1278,7 @@ export class GamePanel implements Panel {
           const elapsedRaw = parseInt(f[2] ?? "", 10);
           if (Number.isFinite(elapsedRaw) && elapsedRaw >= 0) {
             this.trackStartedAtMs = performance.now() - elapsedRaw;
+            this.trackClockSet = true;
             this.worldTick = Math.floor(elapsedRaw / PHYSICS_STEP_MS);
             // Pending impulses were keyed against the stale clock; their
             // applyTicks could now be in the past or far future. Drop them
@@ -1335,6 +1326,7 @@ export class GamePanel implements Panel {
         ? Math.max(0, parseInt(elapsedRaw, 10))
         : 0;
     this.trackStartedAtMs = performance.now() - elapsedMs;
+    this.trackClockSet = true;
     this.worldTick = Math.floor(elapsedMs / PHYSICS_STEP_MS);
     // Drop any leftover pending impulses from a previous track - their
     // apply_ticks were on the prior track's clock and are meaningless now.
@@ -1485,7 +1477,7 @@ export class GamePanel implements Panel {
     }
     const applyTickRaw = parseInt(f[6] ?? "", 10);
     const validApplyTick =
-      Number.isFinite(applyTickRaw) && applyTickRaw >= 0 && this.trackStartedAtMs > 0;
+      Number.isFinite(applyTickRaw) && applyTickRaw >= 0 && this.trackClockSet;
     if (!validApplyTick) {
       // Legacy server (no apply_tick) or no track clock yet: apply now.
       this.applyBeginStroke(f);
@@ -1602,6 +1594,9 @@ export class GamePanel implements Panel {
       const slot = this.players[e.slot];
       if (!slot) continue;
       const b = slot.ball;
+      const own = e.slot === this.myPlayerId;
+      // Our stroke is unsettled until we send its endstroke; the server waits for it.
+      const ownStrokeInFlight = own && slot.simulating && b.causedByShot;
       b.x = e.x;
       b.y = e.y;
       b.vx = e.vx;
@@ -1632,10 +1627,24 @@ export class GamePanel implements Panel {
           // Malformed hex - leave seed as-is rather than crash the tick loop.
         }
       }
+      if (own && !ownStrokeInFlight && b.inHole && !slot.holedThisTrack) {
+        // Peers' view put our resting ball in the hole, but the server still
+        // has us playing: keep it on the course or no shot is ever allowed.
+        b.inHole = false;
+        b.onHole = false;
+        b.stopped = true;
+        b.vx = 0;
+        b.vy = 0;
+      }
       // If the snapped state has the ball moving, it should resume
       // simulating; if at rest, it should not. simulating tracks
       // motion intent, not position.
       slot.simulating = !b.stopped && !b.inHole;
+      if (ownStrokeInFlight && !slot.simulating) {
+        // The correction settled our stroke; report it as the tick loop would have.
+        this.app.connection.sendData("game", "endstroke", String(e.slot), this.myPlayStatus(), "s");
+        b.causedByShot = false;
+      }
     }
   }
 
@@ -1654,10 +1663,14 @@ export class GamePanel implements Panel {
     const slot = this.players[id];
     if (!slot) return;
 
-    // The server's ball position is truncated to whole pixels; keep our exact
-    // position when it matches and resync only a ball that really drifted.
+    // Every client starts the stroke from the shooter's exact origin when the
+    // server relays one. Older shooters send only the whole-pixel position;
+    // then keep our exact position when it matches and resync only a ball
+    // that really drifted.
     const ballCoords = decodeCoords(ballRaw);
-    const origin = resolveStrokeOrigin(ballCoords.x, ballCoords.y, slot.ball.x, slot.ball.y);
+    const origin =
+      parseExactOrigin(f[7], ballCoords.x, ballCoords.y) ??
+      resolveStrokeOrigin(ballCoords.x, ballCoords.y, slot.ball.x, slot.ball.y);
     slot.ball.x = origin.x;
     slot.ball.y = origin.y;
 
@@ -1768,7 +1781,10 @@ export class GamePanel implements Panel {
     // raw (4-char base36 coords + uint32 seed) so encoding the link is just a
     // straight JSON pack - no further processing needed.
     if (this.dailyMode && id === this.myPlayerId) {
-      this.dailyReplayStrokes.push([ballRaw, mouseRaw, seedNum]);
+      const exact = parseExactOrigin(f[7], ballCoords.x, ballCoords.y);
+      this.dailyReplayStrokes.push(
+        exact ? [ballRaw, mouseRaw, seedNum, encodeExactOrigin(exact.x, exact.y)] : [ballRaw, mouseRaw, seedNum],
+      );
     }
     this.scoreboardDirty = true;
   }
@@ -1810,6 +1826,12 @@ export class GamePanel implements Panel {
    * loaded yet" - the tick loop skips world advancement until set.
    */
   private trackStartedAtMs = 0;
+  /**
+   * Whether `trackStartedAtMs` has been anchored. A separate flag because the
+   * anchor is legitimately negative when the track has run longer than this
+   * page has been open (a late joiner to a long-running Daily room).
+   */
+  private trackClockSet = false;
   /**
    * Most recent worldTick we drove physics through. Advances continuously
    * with wall-clock (NOT gated on motion) so server-issued `apply_tick`s
@@ -1890,7 +1912,7 @@ export class GamePanel implements Panel {
       // tick continuously is what makes server-issued `apply_tick`s line up
       // across clients with different pings. The per-ball physics step()
       // call is still skipped for at-rest balls inside `runWorldTick`.
-      if (this.trackStartedAtMs > 0) {
+      if (this.trackClockSet) {
         const targetTick = Math.floor(
           (performance.now() - this.trackStartedAtMs) / PHYSICS_STEP_MS,
         );
@@ -2037,7 +2059,7 @@ export class GamePanel implements Panel {
         // signal that drives snapshot recovery. Suppressed when there's
         // no shared world clock (offline / single-player), and when this
         // client's myPlayerId hasn't been resolved yet.
-        if (this.trackStartedAtMs > 0 && this.myPlayerId >= 0) {
+        if (this.trackClockSet && this.myPlayerId >= 0) {
           this.app.connection.sendData(
             "game",
             "ballend",
@@ -2050,6 +2072,20 @@ export class GamePanel implements Panel {
         }
       }
     }
+  }
+
+  /**
+   * Ask the server to start our stroke. Besides the whole-pixel wire origin we
+   * send the exact one, which every client then uses as the stroke origin.
+   */
+  private sendBeginStroke(ball: BallState, mx: number, my: number): void {
+    this.app.connection.sendData(
+      "game",
+      "beginstroke",
+      encodeCoords(ball.x | 0, ball.y | 0, 0) + "\t" +
+        encodeCoords(mx | 0, my | 0, this.shootingMode) + "\t" +
+        encodeExactOrigin(ball.x, ball.y),
+    );
   }
 
   /** Build a status string for OUR ball (we're authoritative for ourselves). */

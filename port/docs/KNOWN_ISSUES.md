@@ -81,7 +81,7 @@ Things we deferred for MVP that the original Java game has:
   daily room mid-play, they see existing players' balls at the spawn position
   rather than wherever those balls have actually come to rest. The next stroke
   by an existing player corrects this (the server's `beginstroke` broadcast
-  carries the authoritative ball coords). To fix: have the server track each
+  carries the shooter's exact origin). To fix: have the server track each
   player's last-stop position (e.g. by recording `ballCoords` from each
   `beginstroke`) and send a snapshot to newcomers via a new `game ghoststate`
   packet inside `DailyGame.joinDaily`. Files: `port/server/src/game.ts`
