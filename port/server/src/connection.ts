@@ -65,6 +65,11 @@ const RTT_SAMPLE_CEILING_MS = 30_000;
  * tiny entries. Legit traffic is one packet per WS message.
  */
 const MAX_FRAMES_PER_MESSAGE = 32;
+/** Sustained inbound frame rate and burst per connection; beyond it the peer is flooding. */
+const INBOUND_FRAMES_PER_SEC = 100;
+const INBOUND_FRAME_BURST = 400;
+/** Unsent bytes queued for one peer before it is dropped as too slow to keep up. */
+const MAX_BUFFERED_BYTES = 1024 * 1024;
 
 export class Connection {
     /** Outbound DATA sequence number (server -> client). Increments per server-sent DATA packet. */
@@ -73,6 +78,8 @@ export class Connection {
     public inSeq = 0;
 
     public player: Player | null = null;
+    private inboundTokens = INBOUND_FRAME_BURST;
+    private inboundRefilledAt = Date.now();
     public lastActivity: number = Date.now();
     private heartbeatTimer: NodeJS.Timeout | null = null;
     private rttProbeTimer: NodeJS.Timeout | null = null;
@@ -185,6 +192,17 @@ export class Connection {
                 `[connection] frame-burst from ${this.playerLabel()}: ${frames.length} frames in one message`,
             );
             this.close("frame-burst");
+            return;
+        }
+        const now = Date.now();
+        this.inboundTokens = Math.min(
+            INBOUND_FRAME_BURST,
+            this.inboundTokens + ((now - this.inboundRefilledAt) * INBOUND_FRAMES_PER_SEC) / 1000,
+        );
+        this.inboundRefilledAt = now;
+        this.inboundTokens -= frames.length;
+        if (this.inboundTokens < 0) {
+            this.close("inbound-rate");
             return;
         }
         for (const frame of frames) {
@@ -308,6 +326,11 @@ export class Connection {
     /** Raw frame send. Used for h/c packets that have no per-direction sequence number. */
     sendRaw(line: string): void {
         if (this.closed || this.ws.readyState !== this.ws.OPEN) return;
+        if (this.ws.bufferedAmount > MAX_BUFFERED_BYTES) {
+            // Closing here would mutate player lists mid-broadcast; defer it.
+            setImmediate(() => this.close("send-backlog"));
+            return;
+        }
         if (this.verbose) console.log(`>>> ${line}`);
         this.ws.send(line);
     }

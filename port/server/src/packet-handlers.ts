@@ -27,6 +27,10 @@ register({
     type: PacketType.COMMAND,
     pattern: /^new$/,
     handle: (server, conn) => {
+        if (conn.player) {
+            conn.close("duplicate-new");
+            return;
+        }
         const id = server.getNextPlayerId();
         const player = new Player(conn, id);
         conn.player = player;

@@ -8,9 +8,14 @@
 //
 // Capacity is a hard upper bound: oldest entries are evicted as new ones
 // arrive. Sized for "lots of daily players sharing freely" without letting
-// the server's heap balloon - 10k replays at ~2 KB each ≈ 20 MB.
+// the server's heap balloon - 10k replays at ~2 KB each ≈ 20 MB. Bodies may be
+// up to 64 KB, so total stored characters are capped too.
+
+import { randomBytes } from "node:crypto";
 
 const MAX_REPLAYS = 10_000;
+const MAX_STORED_CHARS = 16 * 1024 * 1024;
+let storedChars = 0;
 
 /**
  * Stored replays as a Map (insertion-ordered) so eviction picks the oldest.
@@ -21,10 +26,10 @@ const store = new Map<string, string>();
 
 /** 8-char base36 id - 36^8 ≈ 2.8e12, collision-free at our scale. */
 function generateId(): string {
-    // Two 32-bit chunks ensure ≥ 4 bytes of entropy each.
-    const a = Math.floor(Math.random() * 0xffffffff).toString(36);
-    const b = Math.floor(Math.random() * 0xffffffff).toString(36);
-    return (a + b).padEnd(8, "0").slice(0, 8);
+    const bytes = randomBytes(8);
+    let id = "";
+    for (const byte of bytes) id += (byte % 36).toString(36);
+    return id;
 }
 
 export function saveReplay(payload: string): string {
@@ -32,9 +37,11 @@ export function saveReplay(payload: string): string {
     // Vanishingly rare, but handle it.
     while (store.has(id)) id = generateId();
     store.set(id, payload);
-    while (store.size > MAX_REPLAYS) {
+    storedChars += payload.length;
+    while (store.size > MAX_REPLAYS || storedChars > MAX_STORED_CHARS) {
         const oldestKey = store.keys().next().value;
         if (oldestKey === undefined) break;
+        storedChars -= store.get(oldestKey)?.length ?? 0;
         store.delete(oldestKey);
     }
     return id;
@@ -47,4 +54,5 @@ export function getReplay(id: string): string | null {
 /** Test hook - wipes the store. */
 export function _clearReplayStore(): void {
     store.clear();
+    storedChars = 0;
 }

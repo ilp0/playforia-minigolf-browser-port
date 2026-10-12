@@ -26,6 +26,7 @@ export const STROKES_UNLIMITED = 0;
 export const STROKETIMEOUT_INFINITE = 0;
 export const COLLISION_NO = 0;
 export const COLLISION_YES = 1;
+const COORDS_RE = /^-?[0-9a-z]{1,8}$/;
 export const SCORING_STROKE = 0;
 export const SCORING_TRACK = 1;
 export const SCORING_WEIGHT_END_NONE = 0;
@@ -345,6 +346,9 @@ export class GolfGame extends Game {
      */
     private ballEndObservations = new Map<number, BallEndObservation[]>();
 
+    /** Players whose own `beginstroke` has not yet been settled by `endstroke`. Cleared on `markTrackStart`. */
+    private strokesInFlight = new Set<Player>();
+
     /**
      * In-flight snapshot recovery sessions, keyed by the divergence nonce.
      * Each entry collects per-observer snapshot reports until a quorum
@@ -456,6 +460,8 @@ export class GolfGame extends Game {
                 // wire (async multi): game\tbeginstroke\t<ballCoords>\t<mouseCoords>
                 const ballCoords = fields[2] ?? "";
                 const mouseCoords = fields[3] ?? ballCoords;
+                // Relayed verbatim to every peer, so accept only the client's base36 coordinate form.
+                if (!COORDS_RE.test(ballCoords) || !COORDS_RE.test(mouseCoords)) return true;
                 this.beginStroke(player, ballCoords, mouseCoords);
                 return true;
             }
@@ -467,6 +473,9 @@ export class GolfGame extends Game {
                 //                        their stroke counter.
                 const newPlayStatus = fields[3] ?? this.playStatus;
                 const src = fields[4] ?? "s";
+                // A stroke ends once, after its own beginstroke; only collisions can push a ball in.
+                if (this.playStatus.charAt(this.getPlayerId(player)) !== "f") return true;
+                if (src === "k" ? this.collision !== COLLISION_YES : !this.strokesInFlight.delete(player)) return true;
                 this.endStroke(player, newPlayStatus, src === "k" ? "k" : "s");
                 return true;
             }
@@ -578,6 +587,7 @@ export class GolfGame extends Game {
         // re-anchored, prior strokes are no longer comparable to current ones,
         // and any pending session would resolve against meaningless ticks.
         this.ballEndObservations.clear();
+        this.strokesInFlight.clear();
         for (const session of this.pendingRecoveries.values()) {
             clearTimeout(session.timer);
         }
@@ -599,6 +609,8 @@ export class GolfGame extends Game {
      * lobby-like state). Subclasses override for daily/practice variants.
      */
     override sendReconnectResync(player: Player): void {
+        // The resynced client re-simulates from rest; a stroke begun before the drop cannot end.
+        this.strokesInFlight.delete(player);
         if (this.trackStartedAtMs === 0) return;
         this.sendReconnectCatchup(player);
     }
@@ -702,7 +714,8 @@ export class GolfGame extends Game {
         const playerId = this.getPlayerId(p);
         // Defensive guard: ignore begin from a player whose ball is already in
         // play or already in the hole.
-        if (this.playStatus.charAt(playerId) !== "f") return;
+        if (this.playStatus.charAt(playerId) !== "f" || this.strokesInFlight.has(p)) return;
+        this.strokesInFlight.add(p);
         this.strokeSeedCounter++;
         // 32-bit composite - distinct per (game, stroke) so all clients pick
         // up a fresh independent random stream.
