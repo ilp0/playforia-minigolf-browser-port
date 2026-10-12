@@ -66,8 +66,8 @@ const RTT_SAMPLE_CEILING_MS = 30_000;
  */
 const MAX_FRAMES_PER_MESSAGE = 32;
 /** Sustained inbound frame rate and burst per connection; beyond it the peer is flooding. */
-const INBOUND_FRAMES_PER_SEC = 100;
-const INBOUND_FRAME_BURST = 400;
+const INBOUND_FRAMES_PER_SEC = 500;
+const INBOUND_FRAME_BURST = 2000;
 /** Unsent bytes queued for one peer before it is dropped as too slow to keep up. */
 const MAX_BUFFERED_BYTES = 1024 * 1024;
 

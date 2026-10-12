@@ -164,7 +164,7 @@ async function main(): Promise<void> {
         const flood = new Client("flood");
         await flood.open();
         await login(flood);
-        for (let i = 0; i < 20; i++) flood.send(Array(32).fill("c pong").join("\n"));
+        for (let i = 0; i < 100; i++) flood.send(Array(32).fill("c pong").join("\n"));
         if (!(await closed(flood))) throw new Error("frame flood did not close the connection");
         console.log("[OK] inbound frame flood closes the connection");
 
