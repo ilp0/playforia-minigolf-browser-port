@@ -167,8 +167,41 @@ async function main(): Promise<void> {
         Date.now = () => realNow() + 31_000;
         a.sendData("game", "beginstroke", ball, mouse);
         await a.waitFor((s) => new RegExp(`\\tendstroke\\t0\\t${strokesBefore + 1}\\tf$`).test(s), "abandoned stroke counted");
-        await a.waitFor((s) => begin.test(s), "stroke after abandonment");
-        console.log("[OK] an unsettled stroke is counted and closed after 30 s");
+        if (!(await a.expectAbsent((s) => begin.test(s), "stroke launched by the closing packet"))) {
+            throw new Error("closing an abandoned stroke also launched the new one");
+        }
+        // (The clock stays shifted: winding it back would starve rate limiters.)
+        a.sendData("game", "beginstroke", ball, mouse);
+        await a.waitFor((s) => begin.test(s), "next stroke after abandonment");
+        console.log("[OK] an unsettled stroke is counted and closed after 30 s; the next click shoots");
+
+        // Snapshot recovery must never hole, or leave rolling, a ball whose
+        // owner the server still has playing with no stroke in flight: no
+        // endstroke would ever settle it and a holed ball cannot shoot.
+        // A's stroke is in flight here, B's is not.
+        const entry = (slot: number, flags: number, vx: number): string =>
+            [slot, 300.25, 150.5, vx, 0, 1, 1, flags, 0, 10, 0, 0, 0, 300, 150, 300, 150, "1"].join(",");
+        const holedAtRest = 1 | 2;
+        const rolling = 0;
+        const blob = `${entry(0, holedAtRest, 0)};${entry(1, holedAtRest, 0)}`;
+        const recover = async (subject: number, snapBlob: string): Promise<string[]> => {
+            a.sendData("game", "ballend", 0, subject, "10.000", "10.000", 1);
+            b.sendData("game", "ballend", 1, subject, "90.000", "90.000", 1);
+            const req = await a.waitFor((s) => /\tsnapreq\t/.test(s), "snapreq on A");
+            await b.waitFor((s) => /\tsnapreq\t/.test(s), "snapreq on B");
+            const nonce = req.split("\t")[2];
+            a.sendData("game", "snap", nonce, 0, 0, snapBlob);
+            b.sendData("game", "snap", nonce, 1, 0, snapBlob);
+            const apply = await a.waitFor((s) => /\tsnapapply\t/.test(s), "snapapply");
+            return apply.split("\t")[3].split(";").map((e) => e.split(",")).map((e) => `${e[0]}:${e[7]}:${e[3]}`);
+        };
+        let applied = await recover(0, blob);
+        if (applied.join(" ") !== "0:3:0 1:1:0") throw new Error(`holed resting ball not kept out: ${applied.join(" ")}`);
+        a.sendData("game", "endstroke", 0, "f", "s");
+        await a.waitFor((s) => /\tendstroke\t0\t\d+\tf$/.test(s), "A settles its stroke");
+        applied = await recover(1, `${entry(0, rolling, 2.5)};${entry(1, 1, 0)}`);
+        if (applied.join(" ") !== "0:1:0 1:1:0") throw new Error(`rolling resting ball not stopped: ${applied.join(" ")}`);
+        console.log("[OK] recovery keeps balls without a stroke in flight at rest on the course");
 
         a.close();
         b.close();

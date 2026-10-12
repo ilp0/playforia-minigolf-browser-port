@@ -11,6 +11,10 @@ import {
     decodeWireOrigin,
     encodeExactOrigin,
     parseExactOrigin,
+    SNAP_FLAG_STOPPED,
+    SNAP_FLAG_IN_HOLE,
+    SNAP_FLAG_ON_HOLE,
+    SNAP_FLAG_CAUSED_BY_SHOT,
 } from "@minigolf/shared";
 import type { Player } from "./player.ts";
 import type { Lobby } from "./lobby.ts";
@@ -733,8 +737,10 @@ export class GolfGame extends Game {
             // caps a stroke at ~24 s, so past that it counts as an ordinary stroke.
             if (Date.now() - begunAt < STROKE_ABANDON_MS) return;
             this.strokesInFlight.delete(p);
+            // Closing it can finish the hole, the track or the turn, so don't
+            // launch the new stroke from here; the client simply shoots again.
             this.endStroke(p, this.playStatus);
-            if (this.playStatus.charAt(playerId) !== "f") return;
+            return;
         }
         this.strokesInFlight.set(p, Date.now());
         this.strokeSeedCounter++;
@@ -1037,8 +1043,28 @@ export class GolfGame extends Game {
 
         // Re-encode in a form that round-trips through `decodeBallSnapshot`
         // on the receiving client.
-        const blob = encodeBallSnapshot(result.winning);
+        const blob = encodeBallSnapshot(result.winning.map((e) => this.keepUnfinishedBallOut(e)));
         this.writeAll(tabularize("game", "snapapply", applyTick, blob));
+    }
+
+    /**
+     * Peers' sims can put a ball in the hole that its owner's sim stopped just
+     * short of, or still have it rolling after its stroke ended. When we have
+     * that player playing with no stroke in flight, no endstroke will ever
+     * settle it, and a holed ball can't shoot: leave it at rest on the course,
+     * the same way on every client. With collisions on a resting ball may
+     * really be rolling after a push (its `endstroke k` is accepted), so only
+     * the hole is refused there.
+     */
+    private keepUnfinishedBallOut(e: BallSnapshotEntry): BallSnapshotEntry {
+        if (this.playStatus.charAt(e.slot) !== "f") return e;
+        const owner = this.players[this.playersNumber.indexOf(e.slot)];
+        if (owner && this.strokesInFlight.has(owner)) return e;
+        const holed = (e.flags & SNAP_FLAG_IN_HOLE) !== 0;
+        const rolling = (e.flags & SNAP_FLAG_STOPPED) === 0 || e.vx !== 0 || e.vy !== 0;
+        if (!holed && !(rolling && this.collision !== COLLISION_YES)) return e;
+        const flags = (e.flags & ~(SNAP_FLAG_IN_HOLE | SNAP_FLAG_ON_HOLE | SNAP_FLAG_CAUSED_BY_SHOT)) | SNAP_FLAG_STOPPED;
+        return { ...e, flags, vx: 0, vy: 0 };
     }
 
     /**

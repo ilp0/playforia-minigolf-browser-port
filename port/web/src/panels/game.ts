@@ -1627,15 +1627,10 @@ export class GamePanel implements Panel {
           // Malformed hex - leave seed as-is rather than crash the tick loop.
         }
       }
-      if (own && !ownStrokeInFlight && b.inHole && !slot.holedThisTrack) {
-        // Peers' view put our resting ball in the hole, but the server still
-        // has us playing: keep it on the course or no shot is ever allowed.
-        b.inHole = false;
-        b.onHole = false;
-        b.stopped = true;
-        b.vx = 0;
-        b.vy = 0;
-      }
+      // Whether our ball's motion is our own stroke is ours to know, not the
+      // winning peer's: an endstroke 's' must follow exactly the strokes the
+      // server is waiting on.
+      if (own) b.causedByShot = ownStrokeInFlight;
       // If the snapped state has the ball moving, it should resume
       // simulating; if at rest, it should not. simulating tracks
       // motion intent, not position.
