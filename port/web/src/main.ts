@@ -75,12 +75,19 @@ function detectTouchMode(): boolean {
   if (uaMobile === true) return true;
   // Standard pointer media query - fires on iOS Safari and most Androids.
   if (window.matchMedia?.("(hover: none) and (pointer: coarse)").matches) return true;
-  // Fallback: any touch capability + a phone/tablet-sized viewport. Catches
+  // Fallback: any touch capability + a phone/tablet-sized screen. Catches
   // phones where the media query above lies (Galaxy S23 Chrome) without
-  // false-positiving on touch-screen laptops.
+  // false-positiving on touch-screen laptops. Measures the physical screen,
+  // not the window: embedded in an iframe the window is always the 735x525
+  // game, which turned touch-screen desktops into touch mode (no aim line).
   const hasTouch = "ontouchstart" in window || navigator.maxTouchPoints > 0;
-  const smallScreen = Math.min(window.innerWidth, window.innerHeight) < 1024;
-  return hasTouch && smallScreen;
+  return hasTouch && screenMinDim() < 1024;
+}
+
+function screenMinDim(): number {
+  const w = window.screen?.width || window.innerWidth;
+  const h = window.screen?.height || window.innerHeight;
+  return Math.min(w, h);
 }
 
 function setupTouchMode(): void {
@@ -94,7 +101,7 @@ function setupTouchMode(): void {
     hoverNone: window.matchMedia?.("(hover: none)").matches,
     pointerCoarse: window.matchMedia?.("(pointer: coarse)").matches,
     maxTouchPoints: navigator.maxTouchPoints,
-    minDim: Math.min(window.innerWidth, window.innerHeight),
+    minDim: screenMinDim(),
   });
 }
 
