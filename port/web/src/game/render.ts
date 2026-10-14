@@ -1,3 +1,4 @@
+import "../replay-capture.ts";
 // Track renderer. Builds a 735*375 background image once from the parsed track,
 // then per-frame draws the ball and (optionally) an aim line on top.
 //
@@ -276,6 +277,7 @@ export class TrackRenderer {
   }
 
   private buildBackground(): void {
+    this.replayTerrainRevision++;
     const ctx = this.bgCanvas.getContext("2d");
     if (!ctx) return;
     // Default fill - outside the playable area gets a dark border colour.
@@ -384,6 +386,29 @@ export class TrackRenderer {
    * allocation every frame; callers reuse a scratch array (see GamePanel.draw)
    * and don't depend on insertion order being preserved.
    */
+  private replayTerrainRevision = 0;
+  private replayLastRevision = -1;
+  private replaySession = "";
+  private replayBackground = "";
+  private replayLast = 0;
+  private replayImages: string[] = [];
+  private captureReplay(balls: BallSprite[]): void {
+    const r=window.aapeliReplay;if(!r?.active())return;
+    const now=performance.now();if(now-this.replayLast<40)return;this.replayLast=now;
+    const frame: {width:number;height:number;balls:number[][];background?:string;sprites?:string[]}={width:735,height:375,balls:[]};
+    if(this.replaySession !== r.id()) {this.replaySession=r.id();this.replayBackground="";this.replayLastRevision=-1;this.replayImages=[];}
+    if(!this.replayImages.length) {
+      const c=document.createElement('canvas');c.width=c.height=13;const g=c.getContext('2d')!;
+      for(let i=0;i<8;i++){g.clearRect(0,0,13,13);const src=spriteSrc13(i,4);g.drawImage(this.atlases.balls,src.sx,src.sy,13,13,0,0,13,13);this.replayImages.push(c.toDataURL('image/png'));}
+      frame.sprites=this.replayImages;
+    }
+    if(this.replayLastRevision !== this.replayTerrainRevision) {
+      const background=this.bgCanvas.toDataURL('image/png');frame.background=background;this.replayBackground=background;this.replayLastRevision=this.replayTerrainRevision;
+    }
+    for(const b of balls){if(b.hidden)continue;const shrink=b.shrink||0;const size=Math.max(0,Math.trunc(13-2*shrink));frame.balls.push([((b.playerIdx%4)+4)%4+(b.moving?4:0),shrink>0?Math.floor(Math.round(b.x-6.5)+shrink):Math.round(b.x-6.5),shrink>0?Math.floor(Math.round(b.y-6.5)+shrink):Math.round(b.y-6.5),size,size,b.ghost?0.5:1]);}
+    r.frame(frame);
+  }
+
   drawFrame(
     ctx: CanvasRenderingContext2D,
     balls: BallSprite[],
@@ -474,6 +499,7 @@ export class TrackRenderer {
       if (ga !== gb) return ga - gb;
       return Number(a.moving) - Number(b.moving);
     });
+    this.captureReplay(balls);
     for (const b of balls) {
       if (b.hidden) continue;
       // balls.gif layout (matches Java's `ballSprites[playerid + offset]` at

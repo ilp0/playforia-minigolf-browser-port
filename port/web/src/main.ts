@@ -218,7 +218,7 @@ async function boot(): Promise<void> {
     void fetchReplayById(id)
       .then((r) => {
         if (r) mountReplay(r);
-        else showError("Replay expired or not found.");
+        else showError("Replay not found.");
       })
       .catch(() => showError("Replay failed to load."));
   } else {
@@ -226,7 +226,8 @@ async function boot(): Promise<void> {
     if (embedded) {
       mountReplay(embedded);
     } else {
-      const portal = await loadPortal();
+      const portal = new URLSearchParams(location.search).has('replay')?null:await loadPortal();
+      if(!new URLSearchParams(location.search).has('replay')){const response=await fetch('/replay-client.json');if(response.ok)window.aapeliReplayEngine=await response.json();}
       setShareBase(portal?.shareUrl ?? null);
       if (root) new App(root, portal).start();
     }

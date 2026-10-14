@@ -136,7 +136,7 @@ class TextManager {
 
   private async fetchAndParse(lang: Lang): Promise<Map<string, string>> {
     const url = `/l10n/${lang}/AGolf.xml`;
-    const res = await fetch(url, { credentials: "same-origin" });
+    const res = await fetch(window.aapeliClientPlayback?.asset(url)??url, { credentials: "same-origin" });
     if (!res.ok) {
       throw new Error(`l10n fetch failed: ${url} (${res.status})`);
     }

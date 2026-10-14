@@ -1,3 +1,5 @@
+import { GolfGame } from './game.ts';
+import { createMatchRecording, finishMatchRecording, matchEvent, type MatchRecording } from './match-replays.ts';
 // Per-WebSocket connection wrapper. Mirrors Java's Channel + ClientState + IdleStateHandler.
 //
 // Wire framing: one packet per WebSocket text frame. No trailing "\n" - the WS frame
@@ -72,6 +74,37 @@ const INBOUND_FRAME_BURST = 2000;
 const MAX_BUFFERED_BYTES = 1024 * 1024;
 
 export class Connection {
+    public matchRecording: MatchRecording | null = null;
+    public replayResuming = false;
+    public finishReplay(state = 'completed'): void {
+        if(this.matchRecording) {
+            try { const game=this.player?.game;
+                const slot=game&&this.player?game.getPlayerId(this.player):0;
+                const strokes=game instanceof GolfGame?game.replayStrokes(slot):undefined;
+                finishMatchRecording(this.matchRecording,state,strokes===undefined?undefined:{strokes:Math.max(0,strokes)}); } catch(e) {console.error('Replay storage:',e);this.sendRaw('r replay-error Replay storage unavailable');}
+            this.sendRaw('r replay-end');
+        }
+    }
+    private observeReplay(body: string): void {
+        try {
+        if(body === 'game\tstart' && this.replayResuming && this.matchRecording) {
+            this.replayResuming=false;
+            this.sendRaw('r replay '+JSON.stringify({...this.matchRecording,view:0,elapsed:Date.now()-this.matchRecording.started,seq:Date.now()%90000000}));
+        } else if(body === 'game\tstart') {
+            if(this.matchRecording) finishMatchRecording(this.matchRecording,'restarted');
+            const player=this.player;
+            const names=player?.game?.getPlayers().map(p=>p.nick) || [];
+            if(player && !names.includes(player.nick))names.push(player.nick);
+            this.matchRecording=createMatchRecording(names,{room:player?.game?.name||'',mode:player?.game?.constructor.name==='TrainingGame'?'practice':({'1':'championship','2':'duel','x':'multiplayer','d':'daily'}[player?.game?.lobbyType||'1']||'solo'),perspective:player?.nick||''},this.portalIdentity?.profileId);
+            this.sendRaw('r replay '+JSON.stringify({...this.matchRecording,view:0,elapsed:Date.now()-this.matchRecording.started}));
+        }
+        if(this.matchRecording && body.startsWith('game\t')) {
+            matchEvent(this.matchRecording,body);
+            if(body === 'game\tend') this.finishReplay();
+        }
+        } catch(e) {console.error('Replay storage:',e);this.sendRaw('r replay-error Replay storage unavailable');}
+    }
+
     /** Outbound DATA sequence number (server -> client). Increments per server-sent DATA packet. */
     public outSeq = 0;
     /** Expected next inbound DATA sequence number (client -> server). */
@@ -340,12 +373,14 @@ export class Connection {
     }
 
     sendData(...fields: (string | number | boolean)[]): void {
+        this.observeReplay(fields.map(String).join('\t'));
         const seq = this.outSeq++;
         this.sendRaw(buildData(seq, ...fields));
     }
 
     /** Send an already-built tab-joined data body (no double-tabbing). */
     sendDataRaw(body: string): void {
+        this.observeReplay(body);
         const seq = this.outSeq++;
         this.sendRaw(`d ${seq} ${body}`);
     }

@@ -1,3 +1,4 @@
+import { configureMatchReplayPortal } from './match-replays.ts';
 // GolfServer - singleton container for state. Mirrors org.moparforia.server.Server.
 import { type Packet, PacketType } from "@minigolf/shared";
 import type { Connection } from "./connection.ts";
@@ -47,6 +48,7 @@ export class GolfServer {
         this.trackManager = trackManager;
         this.chatEnabled = options.chatEnabled ?? true;
         this.portal = options.portal ?? null;
+        configureMatchReplayPortal(this.portal);
         this.lobbies.set(LobbyType.SINGLE, new Lobby(LobbyType.SINGLE));
         this.lobbies.set(LobbyType.DUAL, new Lobby(LobbyType.DUAL));
         this.lobbies.set(LobbyType.MULTI, new Lobby(LobbyType.MULTI));
@@ -245,6 +247,8 @@ export class GolfServer {
         if (conn.clientId === null && player.connection.clientId !== null) {
             conn.clientId = player.connection.clientId;
         }
+        conn.matchRecording = player.connection.matchRecording;
+        conn.replayResuming = conn.matchRecording !== null;
         player.connection = conn;
         conn.player = player;
         // The new Connection's outSeq/inSeq are 0 by construction; no reset
@@ -274,6 +278,8 @@ export class GolfServer {
                 console.error("[reconnect] resync failed:", err);
             }
         }
+        // A later new game must start a new recording, even if resync sent no start packet.
+        conn.replayResuming = false;
         return true;
     }
 

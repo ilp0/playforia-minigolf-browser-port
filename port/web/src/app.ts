@@ -95,7 +95,7 @@ export class App {
   }
 
   start(): void {
-    this.setPanel("loading");
+    this.setPanel(window.aapeliClientPlayback?"game":"loading");
   }
 
   setPanel(name: PanelName): void {
@@ -113,6 +113,7 @@ export class App {
     }
 
     const panel = this.createPanel(name);
+    if(window.aapeliClientPlayback)window.aapeliClientPlayback.busy=()=>panel instanceof GamePanel&&panel.replayBusy();
     this.currentPanel = panel;
     this.currentName = name;
     panel.mount(this.root);

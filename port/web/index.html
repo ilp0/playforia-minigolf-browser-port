@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
+    <script src="/replay-language.js"></script><script src="/replay-recorder.js"></script>
     <div id="app"></div>
     <!-- Touch-only portrait prompt. Hidden by default; CSS shows it when the
          viewport is portrait on a coarse-pointer device. Kept in markup so it
@@ -41,6 +42,6 @@
         <span class="fullscreen-prompt__sub">Tap to play fullscreen</span>
       </button>
     </div>
-    <script type="module" src="/src/main.ts"></script>
+    <script src="/client-replay.js"></script><script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -216,6 +216,7 @@ export abstract class Game {
     removePlayer(player: Player, reason: number = PartReason.USERLEFT): boolean {
         const idx = this.players.indexOf(player);
         if (idx < 0) return false;
+        player.connection.finishReplay(reason === PartReason.CONN_PROBLEM ? "disconnected" : "abandoned");
         const num = this.playersNumber[idx];
         for (const p of this.players) {
             if (p !== player) p.connection.sendData("game", "part", num, reason);
@@ -322,6 +323,8 @@ export abstract class Game {
 }
 
 export class GolfGame extends Game {
+    public replayStrokes(slot:number):number {return Math.max(0,(this.playerStrokesTotal[slot]||0)+(this.currentTrack<this.tracks.length?Math.max(0,this.playerStrokesThisTrack[slot]||0):0));}
+
     public tracks: Track[];
     protected playStatus = "";
     protected currentTrack = 0;

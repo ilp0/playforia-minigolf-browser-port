@@ -171,8 +171,8 @@ async function main(): Promise<void> {
         _clearReplayStore();
         const first = saveReplay("a".repeat(64 * 1024));
         for (let i = 0; i < 300; i++) saveReplay("b".repeat(64 * 1024));
-        if (getReplay(first) !== null) throw new Error("replay store kept more than its size budget");
-        console.log("[OK] replay store evicts by total size");
+        if (getReplay(first) === null) throw new Error("permanent replay store evicted a saved replay");
+        console.log("[OK] permanent replay store preserves earlier shares");
 
         console.log("ALL HARDENING PHASES PASSED");
     } catch (err) {
