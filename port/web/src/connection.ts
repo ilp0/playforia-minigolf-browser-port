@@ -84,6 +84,11 @@ export class Connection extends EventTarget {
   }
 
   private connect(): void {
+    if(window.aapeliClientPlayback){
+      queueMicrotask(()=>{this.dispatchEvent(new Event('open'));window.aapeliClientPlayback!.ready();
+        this.keepaliveTimer=window.setInterval(()=>{if(this.userClosed)return;for(let i=0;i<100;i++){const next=window.aapeliClientPlayback!.next();if(!next)break;if(next[0]==='I')this.handleLine(buildData(this.inSeq,...next.slice(2).split('\t')));}},10);
+      });return;
+    }
     if (!this.resolveUrl) {
       this.open(this.url);
       return;
@@ -191,7 +196,8 @@ export class Connection extends EventTarget {
     ws.addEventListener("message", (ev) => {
       const data = typeof ev.data === "string" ? ev.data : "";
       if (!data) return;
-      this.handleLine(data);
+      const filtered = window.aapeliReplay?.control(data) ?? data;
+      if (filtered.trim()) this.handleLine(filtered);
     });
   }
 
@@ -285,6 +291,8 @@ export class Connection extends EventTarget {
       }
       this.inSeq++;
     }
+
+    if(pkt.type===PacketType.DATA&&!window.aapeliClientPlayback)window.aapeliReplay?.command(pkt.fields.join('\t'));
 
     // Auto-reply pong to ping commands.
     if (pkt.type === PacketType.COMMAND && pkt.fields[0] === "ping") {

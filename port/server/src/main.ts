@@ -6,6 +6,7 @@ import { WebSocketServer } from "ws";
 import { GolfServer } from "./server.ts";
 import { Connection } from "./connection.ts";
 import { TrackManager } from "./tracks.ts";
+import { handleMatchReplayApi } from './match-replays.ts';
 import { getReplay, saveReplay } from "./replay-store.ts";
 import { LobbyType } from "./lobby.ts";
 import { logEvent } from "./log.ts";
@@ -129,15 +130,15 @@ function cacheControlFor(urlPath: string): string {
 
 /**
  * `/api/replay` endpoints - POST a JSON-encoded `DailyReplay`, get back a
- * short id; GET `/api/replay/<id>` returns the stored payload. Sized for
+ * UUID; GET `/api/replay/<id>` returns the stored payload. Sized for
  * casual share-link traffic, not a public service: an ID-validation regex
- * gates GETs and a 64 KB cap gates POST bodies. Replays sit in memory
- * only - see replay-store.ts for the eviction policy.
+ * gates GETs and a 64 KB cap gates POST bodies. Replays are persisted on
+ * disk within an entry and byte budget, oldest evicted first - see replay-store.ts.
  *
  * Returns `true` if the request was an /api/replay route (handled here);
  * `false` to let the static-file path try.
  */
-const REPLAY_ID_RE = /^[a-z0-9]{8}$/;
+const REPLAY_ID_RE = /^(?:[a-z0-9]{8}|[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/;
 const MAX_REPLAY_BYTES = 64 * 1024;
 
 function handleReplayApi(req: IncomingMessage, res: ServerResponse): boolean {
@@ -175,7 +176,8 @@ function handleReplayApi(req: IncomingMessage, res: ServerResponse): boolean {
                 res.end("Invalid JSON");
                 return;
             }
-            const id = saveReplay(body);
+            let id: string;
+            try { id = saveReplay(body); } catch { res.writeHead(507);res.end('Replay storage unavailable');return; }
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ id }));
         });
@@ -298,6 +300,7 @@ export async function startServer(args: CliArgs): Promise<RunningServer> {
 
     const http = createServer((req, res) => {
         if (handlePortalConfig(req, res, portal)) return;
+        if (handleMatchReplayApi(req, res)) return;
         if (handleReplayApi(req, res)) return;
         if (tryServeStatic(req, res, webDist)) return;
         res.writeHead(404, { "Content-Type": "text/plain" });

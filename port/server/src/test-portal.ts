@@ -136,15 +136,26 @@ function assert(condition: unknown, message: string): void {
 }
 
 async function main(): Promise<void> {
+    // Route by path: match replay index entries (/internal/replay) arrive
+    // alongside, and often before, the daily result.
     const posts: { auth: string | undefined; body: Record<string, unknown> }[] = [];
+    const replayPosts: { auth: string | undefined; body: Record<string, unknown> }[] = [];
     const portalHttp = createServer((req, res) => {
         let raw = "";
         req.on("data", (c) => (raw += c));
         req.on("end", () => {
             const body = JSON.parse(raw);
-            posts.push({ auth: req.headers.authorization, body });
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ saved: posts.length === 1 }));
+            const reply = (status: number, payload: unknown): void => {
+                res.writeHead(status, { "Content-Type": "application/json" });
+                res.end(JSON.stringify(payload));
+            };
+            if (req.method === "POST" && req.url === "/internal/daily-result") {
+                posts.push({ auth: req.headers.authorization, body });
+                reply(200, { saved: posts.length === 1 });
+            } else if (req.method === "POST" && req.url === "/internal/replay") {
+                replayPosts.push({ auth: req.headers.authorization, body });
+                reply(200, { indexed: true });
+            } else reply(404, { error: "not found" });
         });
     });
     await new Promise<void>((r) => portalHttp.listen(PORTAL_PORT, HOST, r));
@@ -197,6 +208,12 @@ async function main(): Promise<void> {
         assert(post.body.holed === false && post.body.strokes === 1, `wrong result ${JSON.stringify(post.body)}`);
         assert(post.body.date === new Date().toISOString().slice(0, 10), "wrong date");
         console.log("[OK] registered daily result posted and acknowledged");
+        for (let i = 0; i < 100 && !replayPosts.some((p) => p.body.state !== "playing"); i++) await new Promise((r) => setTimeout(r, 20));
+        const indexed = replayPosts.find((p) => p.body.state !== "playing");
+        assert(indexed?.auth === `Bearer ${KEY}`, "replay index not posted with the bearer key");
+        const owners = indexed?.body.owners as { profileId: string }[] | undefined;
+        assert(owners?.length === 1 && owners[0].profileId === profileId, `wrong replay owners ${JSON.stringify(indexed?.body)}`);
+        console.log("[OK] finished match replay indexed for the verified profile");
 
         const guest = new Client("guest", `?ticket=${ticket({ registered: false, nickname: "Vieras" })}`);
         await guest.open();

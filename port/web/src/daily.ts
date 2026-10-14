@@ -204,7 +204,7 @@ export function replayLink(r: DailyReplay): string {
 }
 
 /**
- * POST a replay to the server's in-memory store and return the short URL.
+ * POST a replay to the server's permanent store and return the short URL.
  * The id is opaque base36; URL form is `…/?r=<id>`. Throws on network or
  * server failure so the caller can fall back to the embed-in-fragment link.
  */

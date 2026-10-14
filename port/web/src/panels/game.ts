@@ -918,6 +918,8 @@ export class GamePanel implements Panel {
 
   // ----- packet routing -------------------------------------------------
 
+  public replayBusy():boolean {return this.players.some(slot=>Boolean(slot?.simulating))||this.pendingImpulses.length>0;}
+
   onPacket(pkt: Packet): void {
     if (pkt.type !== PacketType.DATA) return;
     const f = pkt.fields;
@@ -1271,13 +1273,13 @@ export class GamePanel implements Panel {
         // Post-reconnect resync (port extension). Server resends current
         // track-elapsed ms so the client can re-anchor `trackStartedAtMs`
         // after a WS reconnect that may have spanned an OS sleep (in which
-        // case `performance.now()` paused locally and our worldTick would
+        // case `(window.aapeliClientPlayback?.now()??performance.now())` paused locally and our worldTick would
         // be behind the server's).
         // wire: game tracktick <elapsedMs>
         {
           const elapsedRaw = parseInt(f[2] ?? "", 10);
           if (Number.isFinite(elapsedRaw) && elapsedRaw >= 0) {
-            this.trackStartedAtMs = performance.now() - elapsedRaw;
+            this.trackStartedAtMs = (window.aapeliClientPlayback?.now()??performance.now()) - elapsedRaw;
             this.trackClockSet = true;
             this.worldTick = Math.floor(elapsedRaw / PHYSICS_STEP_MS);
             // Pending impulses were keyed against the stale clock; their
@@ -1325,7 +1327,7 @@ export class GamePanel implements Panel {
       elapsedRaw !== null && Number.isFinite(parseInt(elapsedRaw, 10))
         ? Math.max(0, parseInt(elapsedRaw, 10))
         : 0;
-    this.trackStartedAtMs = performance.now() - elapsedMs;
+    this.trackStartedAtMs = (window.aapeliClientPlayback?.now()??performance.now()) - elapsedMs;
     this.trackClockSet = true;
     this.worldTick = Math.floor(elapsedMs / PHYSICS_STEP_MS);
     // Drop any leftover pending impulses from a previous track - their
@@ -1814,7 +1816,7 @@ export class GamePanel implements Panel {
   // ----- physics tick ---------------------------------------------------
 
   /**
-   * Wall-clock `performance.now()` corresponding to worldTick=0 of the
+   * Wall-clock `(window.aapeliClientPlayback?.now()??performance.now())` corresponding to worldTick=0 of the
    * current track. Calibrated from the server's `E <elapsedMs>` field on
    * starttrack, so every client's `worldTick(t) = (t - trackStartedAtMs) / 6`
    * agrees on the same iteration regardless of ping. 0 means "no track
@@ -1900,7 +1902,7 @@ export class GamePanel implements Panel {
   private startLoop(): void {
     const tick = () => {
       this.rafHandle = requestAnimationFrame(tick);
-      this.maybeSendCursor(performance.now());
+      this.maybeSendCursor((window.aapeliClientPlayback?.now()??performance.now()));
       this.draw();
 
       // Advance the world tick clock-based, NOT motion-gated. Driving the
@@ -1909,7 +1911,7 @@ export class GamePanel implements Panel {
       // call is still skipped for at-rest balls inside `runWorldTick`.
       if (this.trackClockSet) {
         const targetTick = Math.floor(
-          (performance.now() - this.trackStartedAtMs) / PHYSICS_STEP_MS,
+          ((window.aapeliClientPlayback?.now()??performance.now()) - this.trackStartedAtMs) / PHYSICS_STEP_MS,
         );
         // Cap catchup per RAF frame so a tab returning from background
         // doesn't stall the browser. 2000 iterations ≈ 12 seconds of

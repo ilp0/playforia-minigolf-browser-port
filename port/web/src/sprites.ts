@@ -7,6 +7,6 @@ export function loadImage(url: string): Promise<HTMLImageElement> {
     const img = new Image();
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error(`Failed to load image: ${url}`));
-    img.src = url;
+    img.src = window.aapeliClientPlayback?.asset(url)??url;
   });
 }
