@@ -36,6 +36,7 @@ try {
  // Per-view capabilities: a view-0 token can never write view 1, ungranted views are refused, re-granting revokes.
  assert.equal((await put(record.id,'1-0',record.token,ballsOnly(1))).status,403);
  assert.equal((await put(record.id,'99999-0',record.token,ballsOnly(1))).status,403);
+ assert.equal((await put(record.id,'00-9',record.token,ballsOnly(1))).status,404);
  const view1=archive.grantReplayView(record.id,1);
  assert.equal((await put(record.id,'1-0',record.token,ballsOnly(1))).status,403);
  assert.equal((await put(record.id,'0-5',view1,ballsOnly(1))).status,403);

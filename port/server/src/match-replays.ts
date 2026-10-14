@@ -523,6 +523,8 @@ async function routeReplayRequest(req: IncomingMessage, res: ServerResponse, p: 
     const match = name ? chunkRE.exec(name) : null;
     if (rest.length || (name && !match)) { respond(404, '{}'); return; }
     if (req.method === 'PUT' && match) {
+        // Canonical names only, so one view and sequence number map to exactly one file.
+        if (match[1] !== String(Number(match[1])) || match[2] !== String(Number(match[2]))) { respond(404, '{}'); return; }
         await storeChunk(req, id, name, Number(match[1]));
         respond(200, '{"saved":true}');
         return;
