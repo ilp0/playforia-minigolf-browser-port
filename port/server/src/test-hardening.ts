@@ -11,7 +11,8 @@
 import * as path from "node:path";
 import { WebSocket } from "ws";
 import { startServer, type RunningServer } from "./main.ts";
-import { _clearReplayStore, getReplay, saveReplay } from "./replay-store.ts";
+import { _clearReplayStore, _disposeReplayStores, getReplay, saveReplay } from "./replay-store.ts";
+import { readdirSync } from "node:fs";
 
 const PORT = 4249;
 const HOST = "127.0.0.1";
@@ -169,10 +170,25 @@ async function main(): Promise<void> {
         console.log("[OK] inbound frame flood closes the connection");
 
         _clearReplayStore();
+        const kept = saveReplay("a".repeat(64 * 1024));
+        for (let i = 0; i < 20; i++) saveReplay("b".repeat(64 * 1024));
+        if (getReplay(kept) === null) throw new Error("replay store evicted a share within its budget");
+        console.log("[OK] replay store preserves shares within its budget");
+
+        const dir = _clearReplayStore({ maxEntries: 1000, maxBytes: 1024 * 1024 });
         const first = saveReplay("a".repeat(64 * 1024));
-        for (let i = 0; i < 300; i++) saveReplay("b".repeat(64 * 1024));
-        if (getReplay(first) === null) throw new Error("permanent replay store evicted a saved replay");
-        console.log("[OK] permanent replay store preserves earlier shares");
+        let last = first;
+        for (let i = 0; i < 40; i++) last = saveReplay("b".repeat(64 * 1024));
+        if (getReplay(first) !== null) throw new Error("replay store kept more than its byte budget");
+        if (getReplay(last) === null) throw new Error("replay store evicted the newest share");
+        const onDisk = readdirSync(dir).length;
+        if (onDisk > 16) throw new Error(`replay store holds ${onDisk} files over a 1 MiB budget`);
+        _clearReplayStore({ maxEntries: 5 });
+        const ids = Array.from({ length: 8 }, (_, i) => saveReplay(`{"n":${i}}`));
+        if (ids.slice(0, 3).some((id) => getReplay(id) !== null) || ids.slice(3).some((id) => getReplay(id) === null)) {
+            throw new Error("replay store did not evict the oldest shares beyond its entry budget");
+        }
+        console.log("[OK] replay store evicts oldest shares by size and count");
 
         console.log("ALL HARDENING PHASES PASSED");
     } catch (err) {
@@ -180,6 +196,7 @@ async function main(): Promise<void> {
         process.exitCode = 1;
     } finally {
         if (server) await server.close();
+        _disposeReplayStores();
         setTimeout(() => process.exit(process.exitCode ?? 0), 100);
     }
 }

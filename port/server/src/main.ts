@@ -132,7 +132,8 @@ function cacheControlFor(urlPath: string): string {
  * `/api/replay` endpoints - POST a JSON-encoded `DailyReplay`, get back a
  * UUID; GET `/api/replay/<id>` returns the stored payload. Sized for
  * casual share-link traffic, not a public service: an ID-validation regex
- * gates GETs and a 64 KB cap gates POST bodies. Replays are persisted on disk without eviction - see replay-store.ts.
+ * gates GETs and a 64 KB cap gates POST bodies. Replays are persisted on
+ * disk within an entry and byte budget, oldest evicted first - see replay-store.ts.
  *
  * Returns `true` if the request was an /api/replay route (handled here);
  * `false` to let the static-file path try.

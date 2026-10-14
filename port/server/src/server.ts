@@ -247,8 +247,10 @@ export class GolfServer {
         if (conn.clientId === null && player.connection.clientId !== null) {
             conn.clientId = player.connection.clientId;
         }
+        // The write capability moves with the seat; the dead socket keeps none.
         conn.matchRecording = player.connection.matchRecording;
         conn.replayResuming = conn.matchRecording !== null;
+        player.connection.matchRecording = null;
         player.connection = conn;
         conn.player = player;
         // The new Connection's outSeq/inSeq are 0 by construction; no reset

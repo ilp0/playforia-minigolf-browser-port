@@ -74,35 +74,55 @@ const INBOUND_FRAME_BURST = 2000;
 const MAX_BUFFERED_BYTES = 1024 * 1024;
 
 export class Connection {
+    /** This connection's write capability for the match being recorded, if any. */
     public matchRecording: MatchRecording | null = null;
+    /** Set by a reconnect: the next `game start` resumes the recording instead of starting one. */
     public replayResuming = false;
+    /** End this connection's recording once; later calls (and later packets) are no-ops. */
     public finishReplay(state = 'completed'): void {
-        if(this.matchRecording) {
-            try { const game=this.player?.game;
-                const slot=game&&this.player?game.getPlayerId(this.player):0;
-                const strokes=game instanceof GolfGame?game.replayStrokes(slot):undefined;
-                finishMatchRecording(this.matchRecording,state,strokes===undefined?undefined:{strokes:Math.max(0,strokes)}); } catch(e) {console.error('Replay storage:',e);this.sendRaw('r replay-error Replay storage unavailable');}
-            this.sendRaw('r replay-end');
-        }
+        const record = this.matchRecording;
+        if (!record) return;
+        this.matchRecording = null;
+        this.replayResuming = false;
+        try {
+            const game = this.player?.game;
+            const slot = game && this.player ? game.getPlayerId(this.player) : record.view;
+            const strokes = game instanceof GolfGame && slot !== undefined ? game.replayStrokes(slot) : undefined;
+            finishMatchRecording(record, state, strokes === undefined ? undefined : { strokes: Math.max(0, strokes) });
+        } catch (e) { console.error('Replay storage:', e); this.sendRaw('r replay-error Replay storage unavailable'); }
+        this.sendRaw('r replay-end');
+    }
+    private announceReplay(record: MatchRecording, extra: Record<string, unknown> = {}): void {
+        const { id, token, view, started } = record;
+        this.sendRaw('r replay ' + JSON.stringify({ id, token, view, started, elapsed: Date.now() - started, ...extra }));
     }
     private observeReplay(body: string): void {
         try {
-        if(body === 'game\tstart' && this.replayResuming && this.matchRecording) {
-            this.replayResuming=false;
-            this.sendRaw('r replay '+JSON.stringify({...this.matchRecording,view:0,elapsed:Date.now()-this.matchRecording.started,seq:Date.now()%90000000}));
-        } else if(body === 'game\tstart') {
-            if(this.matchRecording) finishMatchRecording(this.matchRecording,'restarted');
-            const player=this.player;
-            const names=player?.game?.getPlayers().map(p=>p.nick) || [];
-            if(player && !names.includes(player.nick))names.push(player.nick);
-            this.matchRecording=createMatchRecording(names,{room:player?.game?.name||'',mode:player?.game?.constructor.name==='TrainingGame'?'practice':({'1':'championship','2':'duel','x':'multiplayer','d':'daily'}[player?.game?.lobbyType||'1']||'solo'),perspective:player?.nick||''},this.portalIdentity?.profileId);
-            this.sendRaw('r replay '+JSON.stringify({...this.matchRecording,view:0,elapsed:Date.now()-this.matchRecording.started}));
-        }
-        if(this.matchRecording && body.startsWith('game\t')) {
-            matchEvent(this.matchRecording,body);
-            if(body === 'game\tend') this.finishReplay();
-        }
-        } catch(e) {console.error('Replay storage:',e);this.sendRaw('r replay-error Replay storage unavailable');}
+            if (body === 'game\tstart' && this.replayResuming && this.matchRecording) {
+                // Same page, same recording: the shared recorder keeps the token it
+                // already holds for this id, so the existing capability is re-sent.
+                this.replayResuming = false;
+                this.announceReplay(this.matchRecording, { seq: Date.now() % 90000000 });
+            } else if (body === 'game\tstart') {
+                if (this.matchRecording) finishMatchRecording(this.matchRecording, 'restarted');
+                const player = this.player;
+                const game = player?.game;
+                const names = game?.getPlayers().map(p => p.nick) || [];
+                if (player && !names.includes(player.nick)) names.push(player.nick);
+                const slot = game && player ? game.getPlayerId(player) : 0;
+                const settings = { room: game?.name || '', mode: game?.constructor.name === 'TrainingGame' ? 'practice' : ({ '1': 'championship', '2': 'duel', 'x': 'multiplayer', 'd': 'daily' }[game?.lobbyType || '1'] || 'solo'), perspective: player?.nick || '' };
+                let record: MatchRecording | null = null;
+                record = createMatchRecording(names, settings, this.portalIdentity?.profileId, Number.isInteger(slot) ? slot : 0, () => {
+                    if (record && this.matchRecording?.id === record.id) this.sendRaw('r replay-error Replay storage unavailable');
+                });
+                this.matchRecording = record;
+                this.announceReplay(record);
+            }
+            if (this.matchRecording && body.startsWith('game\t')) {
+                matchEvent(this.matchRecording, body);
+                if (body === 'game\tend') this.finishReplay();
+            }
+        } catch (e) { console.error('Replay storage:', e); this.sendRaw('r replay-error Replay storage unavailable'); }
     }
 
     /** Outbound DATA sequence number (server -> client). Increments per server-sent DATA packet. */
