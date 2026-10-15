@@ -8,6 +8,7 @@
  *
  * Disk limits (all overridable through the environment):
  *   AAPELI_REPLAY_END_GRACE_MS      120000      late uploads accepted after a match ends (else 409)
+ *   AAPELI_REPLAY_RESTART_GRACE_MS  600000      late uploads accepted for recordings a restart interrupted
  *   AAPELI_REPLAY_MAX_AGE_MS        21600000    uploads rejected once a recording is 6 h old (409)
  *   AAPELI_REPLAY_MAX_VIEW_BYTES    48 MiB      compressed chunk + new asset bytes per view (413)
  *   AAPELI_REPLAY_MAX_CHUNKS        20000       chunks per recording (413)
@@ -23,7 +24,8 @@
 import { configureReplayIndex, queueReplayIndex } from './replay-profile-index.ts';
 import type { PortalConfig } from './portal.ts';
 import { atomicWrite, envLimit } from './replay-fs.ts';
-import { access, appendFile, cp, link, lstat, mkdir, open, readdir, readFile, rename, statfs, unlink } from 'node:fs/promises';
+import { access, appendFile, cp, link, lstat, mkdir, open, readdir, readFile, rename, stat, statfs, unlink, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { gzip, gunzip, crc32 } from 'node:zlib';
 import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
@@ -43,6 +45,7 @@ const gzipAsync = promisify(gzip), gunzipAsync = promisify(gunzip);
 export function replayLimits() {
     return {
         endGraceMs: envLimit('AAPELI_REPLAY_END_GRACE_MS', 120_000),
+        restartGraceMs: envLimit('AAPELI_REPLAY_RESTART_GRACE_MS', 600_000),
         maxAgeMs: envLimit('AAPELI_REPLAY_MAX_AGE_MS', 6 * 3600_000),
         maxViewBytes: envLimit('AAPELI_REPLAY_MAX_VIEW_BYTES', 48 * 1024 * 1024),
         maxChunks: envLimit('AAPELI_REPLAY_MAX_CHUNKS', 20_000),
@@ -172,6 +175,8 @@ const live = new Map<string, Live>();
 const storedAssets = new Set<string>();
 const digest = (s: string) => createHash('sha256').update(s).digest('hex');
 const dirOf = (id: string) => path.join(root, id);
+/** One marker per recording this process holds live, so a restart can close it properly. */
+const markerOf = (id: string) => path.join(root, 'live', id);
 
 function enqueue(rec: Live, task: () => Promise<void>): Promise<void> {
     rec.io = rec.io.then(task).catch(e => {
@@ -201,7 +206,57 @@ function indexMeta(rec: Live): void {
 }
 
 export function configureMatchReplayPortal(config: PortalConfig | null): void {
-    configureReplayIndex(config, root, id => live.has(id));
+    // A marker means recovery has not reached that recording yet; it is still ours.
+    configureReplayIndex(config, root, id => live.has(id) || existsSync(markerOf(id)));
+    recovery ||= recoverMatchRecordings().catch(e => console.error('Replay recovery:', e));
+}
+
+let recovery: Promise<void> | null = null;
+/**
+ * Recordings left live by the previous process become interrupted at their last
+ * activity. They stay writable for the restart grace, so uploads the browsers
+ * queued while the server was down still land.
+ */
+export async function recoverMatchRecordings(): Promise<void> {
+    let names: string[];
+    try { names = await readdir(path.join(root, 'live')); }
+    catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return; throw e; }
+    for (const id of names) {
+        if (!idRE.test(id) || live.has(id)) continue;
+        try { await reviveRecording(id); }
+        catch (e) { console.error('Replay recovery skipped', id, e); }
+        await unlink(markerOf(id)).catch(() => {});
+    }
+}
+
+async function reviveRecording(id: string): Promise<void> {
+    const dir = dirOf(id);
+    const meta = JSON.parse(await readFile(path.join(dir, 'meta.json'), 'utf8'));
+    if (meta.state !== 'playing') return;
+    const now = Date.now();
+    let last = meta.started, eventBytes = 0;
+    const chunks = new Set<string>(), viewBytes = new Map<number, number>();
+    for (const name of await readdir(dir)) {
+        if (name.startsWith('meta.json')) continue;
+        const info = await stat(path.join(dir, name));
+        last = Math.max(last, Math.floor(info.mtimeMs));
+        const chunk = name.endsWith('.json') ? chunkRE.exec(name.slice(0, -5)) : null;
+        if (chunk) { chunks.add(name.slice(0, -5)); viewBytes.set(Number(chunk[1]), (viewBytes.get(Number(chunk[1])) ?? 0) + info.size); }
+        if (name === 'events.jsonl') eventBytes = info.size;
+    }
+    const assets = new Set((await readFile(path.join(dir, 'assets.list'), 'utf8').catch(() => '')).split('\n').filter(Boolean));
+    const writers = new Map(Object.entries(meta.writeHashes || {}).map(([view, hash]) => [Number(view), Buffer.from(String(hash), 'hex')]));
+    // `ended` here opens the upload grace; the recording itself ended at its last activity.
+    const rec: Live = {
+        id, started: meta.started, ended: now, meta: { ...meta, state: 'interrupted', ended: last, reopened: now },
+        io: Promise.resolve(), ready: Promise.resolve(), puts: Promise.resolve(), failed: false,
+        writers, chunks, viewBytes, assets, eventBuffer: [], eventBytes, eventFlushQueued: false,
+    };
+    live.set(id, rec);
+    writeMeta(rec);
+    indexMeta(rec);
+    await rec.io;
+    setTimeout(() => { if (live.get(id) === rec) live.delete(id); }, replayLimits().restartGraceMs + 1000).unref();
 }
 
 /**
@@ -221,6 +276,8 @@ export function createMatchRecording(players: string[], settings: Record<string,
     enqueue(rec, async () => {
         await mkdir(dirOf(id), { recursive: true });
         await appendFile(path.join(dirOf(id), 'assets.list'), '');
+        await mkdir(path.dirname(markerOf(id)), { recursive: true });
+        await writeFile(markerOf(id), '');
     });
     const token = grantReplayView(id, view);
     rec.ready = rec.io;
@@ -255,6 +312,7 @@ export function finishMatchRecording(record: MatchRecording, state = 'completed'
     flushEvents(rec);
     rec.meta = { ...rec.meta, state, ended: rec.ended, scores: score ? { [String(record.view)]: score } : rec.meta.scores };
     writeMeta(rec);
+    enqueue(rec, () => unlink(markerOf(rec.id)).catch(() => {}));
     indexMeta(rec);
     // Keep accepting late uploads for the grace period, then forget the recording.
     setTimeout(() => { if (live.get(rec.id) === rec) live.delete(rec.id); }, replayLimits().endGraceMs + 1000).unref();
@@ -358,7 +416,7 @@ async function storeChunk(req: IncomingMessage, id: string, name: string, view: 
         throw new HttpError(404, 'Replay not found');
     }
     const limits = replayLimits(), now = Date.now();
-    if (rec.ended !== null && now - rec.ended > limits.endGraceMs) throw new HttpError(409, 'Recording closed');
+    if (rec.ended !== null && now - rec.ended > (rec.meta.reopened ? limits.restartGraceMs : limits.endGraceMs)) throw new HttpError(409, 'Recording closed');
     if (now - rec.started > limits.maxAgeMs) throw new HttpError(409, 'Recording closed');
     const expected = rec.writers.get(view);
     const token = (req.headers.authorization || '').replace(/^Bearer /, '');

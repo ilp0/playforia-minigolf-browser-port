@@ -16,6 +16,7 @@ import * as path from "node:path";
 import { WebSocket } from "ws";
 import { startServer, type RunningServer } from "./main.ts";
 import { loadPortalConfig, verifyTicket } from "./portal.ts";
+import { matchEvent } from "./match-replays.ts";
 
 const PORT = 4251;
 const PORTAL_PORT = 4252;
@@ -198,6 +199,13 @@ async function main(): Promise<void> {
         console.log("[OK] ticket nickname overrides client nick");
 
         await enterDaily(member);
+        // Only replays with saved play are listed: store a chunk and stand in for a shot.
+        const announced = JSON.parse((await member.waitFor((s) => s.startsWith("r replay {"), "replay announcement")).slice("r replay ".length).trim());
+        const stored = await fetch(`http://${HOST}:${PORT}/api/replays/${announced.id}/${announced.view}-0`, {
+            method: "PUT", headers: { Authorization: `Bearer ${announced.token}` }, body: JSON.stringify({ frames: [{ t: 0, balls: [[0, 1, 1, 13, 13]] }] }),
+        });
+        assert(stored.status === 200, `replay chunk refused (${stored.status})`);
+        matchEvent(announced, "game\tbeginstroke\t0\t0000");
         member.sendData("game", "forfeit");
         await member.waitFor((s) => /^d \d+ game\tend$/.test(s), "member end");
         await member.waitFor((s) => /^d \d+ game\tdailyrecord\tsaved$/.test(s), "dailyrecord saved");

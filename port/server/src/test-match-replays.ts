@@ -1,7 +1,8 @@
 import type { Game } from './game.ts';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { existsSync, mkdtempSync, readFileSync, rmSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, readdirSync, writeFileSync, mkdirSync, utimesSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -192,6 +193,25 @@ try {
  await new Promise(resolve=>setTimeout(resolve,50));
  assert.ok(!existsSync(join(outbox,empty.id+'.json')),'queued entries for empty recordings are dropped at startup');
  assert.ok(existsSync(join(outbox,listed.id+'.json')));
- console.log('PASS: per-view capabilities, upload windows, byte and chunk caps, PNG validation, asset scoping, share eviction, idempotent finish, profile listing, and viewer HTTP');
+ // Restart recovery: a recording the previous process left live closes at its last
+ // activity and keeps taking queued uploads for the restart grace.
+ const kept=archive.createMatchRecording(['Kept'],{mode:'solo'});
+ await archive.flushMatchReplays();
+ assert.ok(existsSync(join(root,'live',kept.id)),'live recordings carry a marker');
+ const orphan={id:'4f3c2b1a-0d9e-4c8b-a7f6-e5d4c3b2a190',token:'ab'.repeat(32)};
+ mkdirSync(join(root,orphan.id));
+ writeFileSync(join(root,orphan.id,'meta.json'),JSON.stringify({v:1,id:orphan.id,game:'minigolf-native',players:['Orphan'],settings:{mode:'solo'},started:Date.now()-60000,state:'playing',writeHashes:{'0':createHash('sha256').update(orphan.token).digest('hex')}}));
+ writeFileSync(join(root,orphan.id,'0-0.json'),ballsOnly(1));writeFileSync(join(root,orphan.id,'assets.list'),'');
+ const lastActivity=new Date(Date.now()-30000);utimesSync(join(root,orphan.id,'0-0.json'),lastActivity,lastActivity);utimesSync(join(root,orphan.id,'assets.list'),lastActivity,lastActivity);
+ writeFileSync(join(root,'live',orphan.id),'');
+ await archive.recoverMatchRecordings();
+ assert.equal(meta(orphan.id).state,'interrupted');assert.equal(meta(orphan.id).ended,Math.floor(lastActivity.getTime()));
+ assert.ok(!existsSync(join(root,'live',orphan.id)));assert.ok(existsSync(join(root,'live',kept.id)),'recovery leaves this process\'s recordings alone');
+ assert.equal((await put(orphan.id,'0-1',orphan.token,ballsOnly(2))).status,200);
+ assert.deepEqual(((await (await fetch(`${base}/api/replays/${orphan.id}`)).json()) as {chunks:string[]}).chunks,['0-0','0-1']);
+ await withEnv('AAPELI_REPLAY_RESTART_GRACE_MS','0',async()=>{await new Promise(resolve=>setTimeout(resolve,5));assert.equal((await put(orphan.id,'0-2',orphan.token,ballsOnly(3))).status,409);});
+ archive.finishMatchRecording(kept);await archive.flushMatchReplays();
+ assert.ok(!existsSync(join(root,'live',kept.id)),'finishing removes the marker');
+ console.log('PASS: per-view capabilities, upload windows, byte and chunk caps, PNG validation, asset scoping, share eviction, idempotent finish, profile listing, restart recovery, and viewer HTTP');
 }finally {await new Promise<void>((resolve,reject)=>server.close(e=>e?reject(e):resolve()));rmSync(root,{recursive:true,force:true});}
 process.exit(0);
