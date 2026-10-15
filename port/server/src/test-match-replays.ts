@@ -1,7 +1,7 @@
 import type { Game } from './game.ts';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { existsSync, mkdtempSync, readFileSync, rmSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -171,6 +171,27 @@ try {
  await withEnv('AAPELI_REPLAY_MIN_FREE_BYTES',String(Number.MAX_SAFE_INTEGER),async()=>{assert.equal((await put(full.id,'0-0',full.token,ballsOnly(1))).status,507);});
  assert.equal((await put(full.id,'0-0',full.token,ballsOnly(1))).status,200);
  await archive.flushMatchReplays();
- console.log('PASS: per-view capabilities, upload windows, byte and chunk caps, PNG validation, asset scoping, share eviction, idempotent finish, and viewer HTTP');
+
+ // Profile listing: only once a stroke was played and a chunk saved; stale empty entries are dropped.
+ const outbox=join(root,'profile-outbox'),owner='6f1c2a4e-8b7d-4c3a-9e2f-1a2b3c4d5e6f';
+ archive.configureMatchReplayPortal(null);
+ const listed=archive.createMatchRecording(['Listed'],{mode:'solo'},owner);
+ await archive.flushMatchReplays();
+ assert.ok(!existsSync(join(outbox,listed.id+'.json')),'a recording without play is not listed');
+ assert.equal((await put(listed.id,'0-0',listed.token,ballsOnly(1))).status,200);
+ await archive.flushMatchReplays();
+ assert.ok(!existsSync(join(outbox,listed.id+'.json')),'a saved chunk without a stroke is not listed');
+ archive.matchEvent(listed,'game\tbeginstroke\t0\taaaa');
+ await new Promise(resolve=>setImmediate(resolve));await archive.flushMatchReplays();
+ assert.deepEqual(JSON.parse(readFileSync(join(outbox,listed.id+'.json'),'utf8')).owners,[{profileId:owner,score:{}}]);
+ // A recording left by an earlier process, queued before listing required saved play.
+ const empty={id:'0b8f6c1e-3d2a-4f5b-8c7d-9e0f1a2b3c4d'};mkdirSync(join(root,empty.id));
+ writeFileSync(join(root,empty.id,'meta.json'),JSON.stringify({id:empty.id,state:'abandoned'}));
+ writeFileSync(join(outbox,empty.id+'.json'),JSON.stringify({id:empty.id,state:'abandoned',owners:[]}));
+ archive.configureMatchReplayPortal(null);
+ await new Promise(resolve=>setTimeout(resolve,50));
+ assert.ok(!existsSync(join(outbox,empty.id+'.json')),'queued entries for empty recordings are dropped at startup');
+ assert.ok(existsSync(join(outbox,listed.id+'.json')));
+ console.log('PASS: per-view capabilities, upload windows, byte and chunk caps, PNG validation, asset scoping, share eviction, idempotent finish, profile listing, and viewer HTTP');
 }finally {await new Promise<void>((resolve,reject)=>server.close(e=>e?reject(e):resolve()));rmSync(root,{recursive:true,force:true});}
 process.exit(0);

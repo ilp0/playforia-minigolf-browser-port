@@ -25,9 +25,13 @@ export function configureReplayIndex(cfg: PortalConfig | null, root: string, isL
     void (async () => {
         try {
             for (const name of await listOutbox()) {
-                if (isLive(name.slice(0, -'.json'.length))) continue;
+                const id = name.slice(0, -'.json'.length);
+                if (isLive(id)) continue;
                 const file = path.join(directory, name);
                 try {
+                    // Entries queued before listing required saved play would show empty replays.
+                    const recording = JSON.parse(await readFile(path.join(root, id, 'meta.json'), 'utf8'));
+                    if (!recording.played || !recording.saved) { await unlink(file).catch(() => {}); continue; }
                     const meta = JSON.parse(await readFile(file, 'utf8'));
                     if (meta.state === 'playing') await atomicWrite(file, JSON.stringify({ ...meta, state: 'interrupted', ended: Date.now() }));
                 } catch { /* Unreadable entries are retried or dropped by publish(). */ }
@@ -39,7 +43,7 @@ export function configureReplayIndex(cfg: PortalConfig | null, root: string, isL
 
 /** Durably queue the profile index entry for `meta`. Resolves once the outbox file is written. */
 export async function queueReplayIndex(meta: Record<string, any>): Promise<void> {
-    if (!directory || !meta.owners || !Object.keys(meta.owners).length) return;
+    if (!directory || !meta.owners || !Object.keys(meta.owners).length || !meta.played || !meta.saved) return;
     const body = JSON.stringify({
         id: meta.id, game: meta.game, mode: meta.settings?.mode, started: meta.started, ended: meta.ended ?? null, state: meta.state,
         owners: Object.entries(meta.owners).map(([profileId, view]) => ({ profileId, score: meta.scores?.[String(view)] || {} })),
