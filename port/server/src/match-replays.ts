@@ -13,8 +13,12 @@
  *   AAPELI_REPLAY_MAX_CHUNKS        20000       chunks per recording (413)
  *   AAPELI_REPLAY_MAX_EVENT_BYTES   4 MiB       events.jsonl per recording (later events dropped)
  *   AAPELI_REPLAY_MAX_ASSET_BYTES   1 MiB       per PNG asset (413)
- *   AAPELI_REPLAY_MIN_FREE_BYTES    2 GiB       free-space floor on the archive filesystem (507)
- *   AAPELI_REPLAY_MAX_BYTES         10 GiB      total archive size (507)
+ *   AAPELI_REPLAY_MIN_FREE_BYTES    256 MiB     free-space floor on the archive filesystem (507)
+ *   AAPELI_REPLAY_MAX_BYTES         512 MiB     total archive size (507)
+ *
+ * A floor at or above the volume's size refuses every chunk while matches are
+ * still created. A recording is indexed to its owner's profile only once a
+ * stroke was played (`played`) and a chunk stored (`saved`).
  */
 import { configureReplayIndex, queueReplayIndex } from './replay-profile-index.ts';
 import type { PortalConfig } from './portal.ts';
@@ -44,8 +48,8 @@ export function replayLimits() {
         maxChunks: envLimit('AAPELI_REPLAY_MAX_CHUNKS', 20_000),
         maxEventBytes: envLimit('AAPELI_REPLAY_MAX_EVENT_BYTES', 4 * 1024 * 1024),
         maxAssetBytes: envLimit('AAPELI_REPLAY_MAX_ASSET_BYTES', 1024 * 1024),
-        minFreeBytes: envLimit('AAPELI_REPLAY_MIN_FREE_BYTES', 2 * 1024 * 1024 * 1024),
-        maxTotalBytes: envLimit('AAPELI_REPLAY_MAX_BYTES', 10 * 1024 * 1024 * 1024),
+        minFreeBytes: envLimit('AAPELI_REPLAY_MIN_FREE_BYTES', 256 * 1024 * 1024),
+        maxTotalBytes: envLimit('AAPELI_REPLAY_MAX_BYTES', 512 * 1024 * 1024),
     };
 }
 
@@ -183,6 +187,13 @@ function writeMeta(rec: Live): void {
         addArchiveBytes(body.length);
     });
 }
+/** Set `played` or `saved` once; the first time both hold, the recording is indexed. */
+function markRecording(rec: Live, flag: 'played' | 'saved'): void {
+    if (rec.meta[flag]) return;
+    rec.meta[flag] = true;
+    writeMeta(rec);
+    indexMeta(rec);
+}
 function indexMeta(rec: Live): void {
     const snapshot = structuredClone(rec.meta);
     // Index failures are logged but never stop the recording itself.
@@ -255,6 +266,7 @@ export function matchEvent(record: MatchRecording, body: string): void {
     if (!rec || rec.ended !== null) return;
     const fields = body.split('\t').slice(1);
     if (!recorded.has(fields[0])) return;
+    if (fields[0] === 'beginstroke' || fields[0] === 'endstroke') markRecording(rec, 'played');
     const line = JSON.stringify({ t: Date.now(), fields }) + '\n';
     const size = Buffer.byteLength(line);
     if (rec.eventBytes + size > replayLimits().maxEventBytes) {
@@ -427,6 +439,7 @@ async function storeValidated(rec: Live, name: string, view: number, raw: Buffer
     rec.viewBytes.set(view, (rec.viewBytes.get(view) ?? 0) + needed);
     addArchiveBytes(needed);
     if (chunk.engine && !rec.meta.engine) { rec.meta.engine = chunk.engine; writeMeta(rec); await rec.io; }
+    markRecording(rec, 'saved');
 }
 
 // ---- Reads -----------------------------------------------------------------
