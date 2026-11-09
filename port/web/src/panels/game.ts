@@ -22,6 +22,7 @@ import type { Panel } from "../panel.ts";
 import { loadAtlases, type Atlases } from "../game/sprites.ts";
 import { buildMap, type ParsedMap } from "../game/map.ts";
 import { TrackRenderer, slotNickColor, type AimLine, type BallSprite, type PeerAim } from "../game/render.ts";
+import { AimPointer } from "../game/aim-pointer.ts";
 import {
   applyStrokeImpulse,
   newBall,
@@ -408,12 +409,11 @@ export class GamePanel implements Panel {
   /**
    * Active touch-aim state. `activeTouchId` is the identifier of the touch we
    * are tracking (so a second finger doesn't hijack the aim); `null` when no
-   * touch is in progress. `aimingByTouch` gates the aim-line render and the
+   * touch is in progress. `aimPointer` gates the aim-line render and the
    * loupe so we don't draw a stale aim from the last finger position after
    * release.
    */
   private activeTouchId: number | null = null;
-  private aimingByTouch = false;
   /** Magnifier loupe - circular canvas floating above the finger during a
    *  drag-to-shoot. Painted from the main canvas inside `draw()` so the
    *  zoomed-in view always reflects the current aim line. */
@@ -432,13 +432,14 @@ export class GamePanel implements Panel {
    * the same verdict as the CSS gates - single source of truth for both
    * the touch-only menu rows + shoot-mode button and the aim/cursor
    * suppression while no finger is down. On `true`, the aim line and
-   * cursor broadcasts are gated on an active touch - otherwise mouseX/Y
-   * starts at (0,0) and the aim line would point to the top-left corner
-   * before the user has even tapped.
+   * cursor broadcasts are gated on an active touch or a moving mouse -
+   * otherwise mouseX/Y starts at (0,0) and the aim line would point to the
+   * top-left corner before the user has even tapped.
    */
   private isTouchPrimary =
     typeof document !== "undefined" &&
     document.body?.classList?.contains("is-touch-mode") === true;
+  private aimPointer = new AimPointer(this.isTouchPrimary);
   /** Toggleable user prefs (names, cursor send/recv) - persisted via localStorage. */
   private settings: GameSettings = loadSettings();
   private settingsMenuEl: HTMLElement | null = null;
@@ -696,6 +697,7 @@ export class GamePanel implements Panel {
       const [mx, my] = localCoords(ev);
       this.mouseX = mx;
       this.mouseY = my;
+      this.aimPointer.mouseMoved();
     };
     canvas.addEventListener("mousemove", mouseMoveHandler);
     this.mouseMoveHandler = mouseMoveHandler;
@@ -768,7 +770,7 @@ export class GamePanel implements Panel {
       this.mouseY = my;
       this.touchClientX = t.clientX;
       this.touchClientY = t.clientY;
-      this.aimingByTouch = true;
+      this.aimPointer.touchStarted();
       this.showLoupe();
     };
     canvas.addEventListener("touchstart", touchStartHandler, { passive: false });
@@ -801,7 +803,7 @@ export class GamePanel implements Panel {
       ev.preventDefault();
       const [mx, my] = localCoordsTouch(t);
       this.activeTouchId = null;
-      this.aimingByTouch = false;
+      this.aimPointer.touchEnded();
       this.hideLoupe();
       // Mirror the mousedown shoot path. Same gating: ball must be at rest.
       const me = this.players[this.myPlayerId];
@@ -821,7 +823,7 @@ export class GamePanel implements Panel {
       const t = findActiveTouch(ev.changedTouches);
       if (!t) return;
       this.activeTouchId = null;
-      this.aimingByTouch = false;
+      this.aimPointer.touchEnded();
       this.hideLoupe();
     };
     canvas.addEventListener("touchcancel", touchCancelHandler);
@@ -880,7 +882,7 @@ export class GamePanel implements Panel {
     this.touchEndHandler = null;
     this.touchCancelHandler = null;
     this.activeTouchId = null;
-    this.aimingByTouch = false;
+    this.aimPointer.touchEnded();
     if (this.loupeEl && this.loupeEl.parentNode) {
       this.loupeEl.parentNode.removeChild(this.loupeEl);
     }
@@ -1881,7 +1883,7 @@ export class GamePanel implements Panel {
     if (me.simulating || me.ball.inHole || me.holedThisTrack || me.forfeitedThisTrack) return;
     // Touch devices: only broadcast while actively aiming, otherwise peers
     // would see a frozen aim line at our last finger position.
-    if (this.isTouchPrimary && !this.aimingByTouch) return;
+    if (!this.aimPointer.live) return;
     if (nowMs - this.lastCursorSentMs < 66) return; // 15 Hz cap
     const cx = this.mouseX | 0;
     const cy = this.mouseY | 0;
@@ -2405,9 +2407,10 @@ export class GamePanel implements Panel {
     let aim: AimLine | null = null;
     const me = this.players[this.myPlayerId];
     // On touch-primary devices the aim line only shows while a finger is
-    // actively dragging - without this gate, mouseX/Y stays at the last
-    // touch point (or the initial 0,0) and we'd render a stale/origin aim.
-    const aimSuppressedByTouch = this.isTouchPrimary && !this.aimingByTouch;
+    // actively dragging or a mouse is in use - without this gate, mouseX/Y
+    // stays at the last touch point (or the initial 0,0) and we'd render a
+    // stale/origin aim.
+    const aimSuppressedByTouch = !this.aimPointer.live;
     // Turn-based: hide our own aim line until it's actually our turn.
     // Drawing it on a peer's turn would be misleading - you can't actually
     // shoot, and the line would still update with the cursor as if you could.
@@ -2513,7 +2516,7 @@ export class GamePanel implements Panel {
     // Update the magnifier loupe AFTER the renderer has painted this frame,
     // so the zoomed-in copy includes the just-drawn aim line. Sampling in a
     // touchmove callback would lag the aim line by one frame.
-    if (this.aimingByTouch) this.drawLoupe();
+    if (this.aimPointer.touching) this.drawLoupe();
   }
 
   // ----- magnifier loupe (mobile) ---------------------------------------

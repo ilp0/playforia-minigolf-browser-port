@@ -113,6 +113,7 @@ When it is enabled:
 ```sh
 cd port
 npm test                                                                    # shared (Seed, RLE, codec, tools, tiles, tracks)
+npm -w web test                                                             # web (aim line input gating)
 node --experimental-strip-types --no-warnings server/src/test-handshake.ts  # connect + login handshake
 node --experimental-strip-types --no-warnings server/src/test-fullflow.ts   # single-player end-to-end
 node --experimental-strip-types --no-warnings server/src/test-multi.ts      # 2-client async-MP determinism + cursor relay
