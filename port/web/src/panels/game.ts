@@ -2955,6 +2955,13 @@ export class GamePanel implements Panel {
     this.app.connection.sendData("game", "back");
   }
 
+  /** Portal servers count a Daily Cup run abandoned after its first stroke. */
+  private leavingEndsDailyRun(): boolean {
+    const me = this.players[this.myPlayerId];
+    return this.dailyMode && this.app.portal !== null && this.dailyReplayStrokes.length > 0
+      && !!me && !me.holedThisTrack && !me.forfeitedThisTrack;
+  }
+
   /** Toggle the in-game settings menu. Closes if already open. */
   private toggleSettingsMenu(): void {
     if (this.settingsMenuEl) {
@@ -3177,6 +3184,13 @@ export class GamePanel implements Panel {
       this.closeSettingsMenu();
       this.quit();
     });
+    if (this.leavingEndsDailyRun()) {
+      const note = document.createElement("div");
+      note.textContent = t("Port_Daily_LeaveEndsRun", "Leaving now ends today's Daily Cup run as forfeited.");
+      note.style.marginTop = "6px";
+      note.style.color = "#a00";
+      menu.appendChild(note);
+    }
     menu.appendChild(quitBtn);
 
     parent.appendChild(menu);

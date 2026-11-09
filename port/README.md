@@ -107,6 +107,9 @@ When it is enabled:
   `game dailyrecord saved|duplicate|guest|error`.
 - The portal keeps the first run per account and day. Each day's best holed
   score is that day's win.
+- A Daily Cup run that has begun a stroke is the player's run for the day:
+  leaving the room or losing the connection ends it as a forfeit, so a rejoin
+  or page reload cannot replace it. A run with no stroke yet stays open.
 
 ## Tests
 

@@ -362,7 +362,7 @@ export class GolfGame extends Game {
      * Players whose own `beginstroke` has not yet been settled by `endstroke`,
      * with when it began. Cleared on `markTrackStart`.
      */
-    private strokesInFlight = new Map<Player, number>();
+    protected strokesInFlight = new Map<Player, number>();
 
     /**
      * In-flight snapshot recovery sessions, keyed by the divergence nonce.
@@ -1305,6 +1305,9 @@ export class GolfGame extends Game {
  *     `game end` so the share dialog can appear; the room continues for others.
  *   - On `back`, the player is sent straight to `lobbyselect` (no daily lobby
  *     panel exists on the client).
+ *   - With result reporting on (`onFinish`, the Aapeli portal), a run that has
+ *     begun a stroke is the player's run for the day: leaving or dropping
+ *     the connection ends it as a forfeit instead of allowing a fresh start.
  *   - On a date roll-over, the track is swapped and per-player counters reset
  *     so today's players see today's track.
  */
@@ -1322,6 +1325,7 @@ export class DailyGame extends GolfGame {
     /** Called once per finished run (holed or forfeited). */
     public onFinish: ((player: Player, record: DailyRecord) => void) | null = null;
     private dailyTrackManager: TrackManager;
+    private recordStatus = new WeakMap<Player, string>();
 
     constructor(gameId: number, trackManager: TrackManager, dateKey: string) {
         super(
@@ -1398,6 +1402,7 @@ export class DailyGame extends GolfGame {
     /** Late-join entry. Called from the daily-select handler. */
     joinDaily(player: Player): void {
         if (this.players.includes(player)) return;
+        this.recordStatus.delete(player);
         // Singleton room: previous occupants leave incremented `numberIndex`
         // and finished `playStatus` chars ('t'/'p') behind. A fresh joiner into
         // an empty room must start from id 0 with a 'f' slot, otherwise the
@@ -1411,6 +1416,9 @@ export class DailyGame extends GolfGame {
                 this.playerStrokesThisTrack[i] = 0;
                 this.playerStrokesTotal[i] = 0;
             }
+            // Start the track clock; until a day rotation nothing else does,
+            // and the reconnect resync is skipped while it reads 0.
+            this.markTrackStart();
         } else if (this.numberIndex >= DAILY_MAX_SPARSE_IDS) {
             // Sparse-id cap reached and room still has occupants. Refusing
             // the join keeps memory bounded; the player stays in the daily
@@ -1500,8 +1508,9 @@ export class DailyGame extends GolfGame {
     }
 
     protected override forfeit(player: Player): void {
+        // Ids are sparse here, so `players[id]` is not this player's slot.
+        if (!this.players.includes(player)) return;
         const id = this.getPlayerId(player);
-        if (!this.players[id]) return;
         const cur = this.playStatus.charAt(id);
         if (cur === "t" || cur === "p") return;
         const cap = (this.playerStrokesThisTrack[id] ?? 0) + 1;
@@ -1523,8 +1532,37 @@ export class DailyGame extends GolfGame {
         this.onFinish?.(player, { date: this.dateKey, strokes: cap, holed: false, track: this.tracks[0]?.name ?? "" });
     }
 
+    /** True once the player has begun a stroke on a run that is still open. */
+    private hasOpenRun(player: Player): boolean {
+        if (!this.players.includes(player)) return false;
+        const id = this.getPlayerId(player);
+        const status = this.playStatus.charAt(id);
+        if (status === "t" || status === "p") return false;
+        return (this.playerStrokesThisTrack[id] ?? 0) > 0 || this.strokesInFlight.has(player);
+    }
+
+    override handlePlayerDisconnect(player: Player): void {
+        if (!this.onFinish) {
+            super.handlePlayerDisconnect(player);
+            return;
+        }
+        // An untouched run stays open for the reconnect; a begun one is over.
+        if (this.hasOpenRun(player)) this.forfeit(player);
+    }
+
+    /** Portal save outcome; kept so a reconnecting player still learns it. */
+    setRecordStatus(player: Player, status: string): void {
+        this.recordStatus.set(player, status);
+        if (player.disconnectedAt === null && player.game === this) {
+            player.connection.sendData("game", "dailyrecord", status);
+        }
+    }
+
     override handlePacket(player: Player, fields: string[]): boolean {
         if (fields.length >= 2 && fields[1] === "back") {
+            if (this.onFinish && this.hasOpenRun(player)) this.forfeit(player);
+            // A stroke still in flight would block this player's shots on a rejoin.
+            this.strokesInFlight.delete(player);
             this.removePlayer(player);
             // No daily lobby panel - bounce straight to lobbyselect.
             player.connection.sendData("status", "lobbyselect", "300");
@@ -1549,6 +1587,8 @@ export class DailyGame extends GolfGame {
             const status = this.playStatus.charAt(slotId);
             if (status === "t" || status === "p") {
                 player.connection.sendData("game", "end");
+                const saved = this.recordStatus.get(player);
+                if (saved) player.connection.sendData("game", "dailyrecord", saved);
             }
         }
     }

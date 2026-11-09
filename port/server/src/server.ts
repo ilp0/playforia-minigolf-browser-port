@@ -88,7 +88,7 @@ export class GolfServer {
         if (!portal || !identity) return;
         void recordDailyResult(portal, identity, record).then((status) => {
             logEvent("daily_record", { date: record.date, id: player.id, status });
-            if (player.disconnectedAt === null) player.connection.sendData("game", "dailyrecord", status);
+            this.dailyGame?.setRecordStatus(player, status);
         });
     }
 

@@ -4,7 +4,9 @@
 // ticket-less and forged upgrades are refused, the ticket nickname overrides
 // the client `nick`, finished daily runs of registered players are posted to
 // `/internal/daily-result` and acknowledged with `game dailyrecord`, guests
-// are not posted, and `c old` cannot adopt another profile's seat.
+// are not posted, `c old` cannot adopt another profile's seat, and a run
+// abandoned after its first stroke (leave, reload or dropped connection) is
+// posted as that day's forfeit so a rejoin cannot replace it.
 //
 // Usage: node --experimental-strip-types --no-warnings src/test-portal.ts
 
@@ -132,6 +134,21 @@ async function enterDaily(c: Client): Promise<void> {
     await c.waitFor((s) => /^d \d+ game\tdailymode\t/.test(s), "dailymode");
 }
 
+const BALL = (200 * 1500 + 200 * 4).toString(36).padStart(4, "0");
+const MOUSE = (300 * 1500 + 250 * 4).toString(36).padStart(4, "0");
+
+/** Begin a stroke and wait for the server's broadcast of it. */
+async function shoot(c: Client, slot: number): Promise<void> {
+    c.sendData("game", "beginstroke", BALL, MOUSE);
+    await c.waitFor((s) => new RegExp(`^d \\d+ game\tbeginstroke\t${slot}\t`).test(s), "own beginstroke");
+}
+
+async function holeOut(c: Client, slot: number): Promise<void> {
+    await shoot(c, slot);
+    c.sendData("game", "endstroke", slot, "f".repeat(slot) + "t");
+    await c.waitFor((s) => /^d \d+ game\tend$/.test(s), "end after holing out");
+}
+
 function assert(condition: unknown, message: string): void {
     if (!condition) throw new Error(message);
 }
@@ -151,8 +168,10 @@ async function main(): Promise<void> {
                 res.end(JSON.stringify(payload));
             };
             if (req.method === "POST" && req.url === "/internal/daily-result") {
+                // First result per profile and day wins, like the portal.
+                const first = !posts.some((p) => p.body.profileId === body.profileId && p.body.date === body.date);
                 posts.push({ auth: req.headers.authorization, body });
-                reply(200, { saved: posts.length === 1 });
+                reply(200, { saved: first });
             } else if (req.method === "POST" && req.url === "/internal/replay") {
                 replayPosts.push({ auth: req.headers.authorization, body });
                 reply(200, { indexed: true });
@@ -248,7 +267,93 @@ async function main(): Promise<void> {
         await owner.waitFor((s) => s === "c rcok", "rcok for same profile");
         console.log("[OK] reconnect bound to portal profile");
 
-        for (const c of [guest, intruder, owner]) c.close();
+        const today = new Date().toISOString().slice(0, 10);
+        const daily = server.golfServer.getDailyGame();
+        const slotOf = (id: number): number => daily.getPlayerId(server!.golfServer.getPlayer(id)!);
+        const postsOf = (id: string) => posts.filter((p) => p.body.profileId === id);
+        const join = async (name: string, profile: string): Promise<[Client, number]> => {
+            const c = new Client(name, `?ticket=${ticket({ registered: true, nickname: name, profileId: profile })}`);
+            await c.open();
+            const id = await login(c, name);
+            await enterDaily(c);
+            return [c, id];
+        };
+
+        // The guest leaves first so later joiners get ids past players.length.
+        guest.sendData("game", "back");
+        await guest.waitFor((s) => /^d \d+ status\tlobbyselect/.test(s), "guest back in lobbyselect");
+
+        // Looking at the track without shooting is not a run.
+        const lookerProfile = randomUUID();
+        const [looker] = await join("Looker", lookerProfile);
+        looker.sendData("game", "back");
+        await looker.waitFor((s) => /^d \d+ status\tlobbyselect/.test(s), "looker back in lobbyselect");
+        await new Promise((r) => setTimeout(r, 150));
+        assert(postsOf(lookerProfile).length === 0, "leaving before the first stroke was posted");
+        console.log("[OK] leaving before the first stroke costs nothing");
+
+        // Menu -> Leave after a stroke, then rejoin and hole out in one.
+        const leaverProfile = randomUUID();
+        const [leaver, leaverId] = await join("Leaver", leaverProfile);
+        await shoot(leaver, slotOf(leaverId));
+        leaver.sendData("game", "back");
+        await leaver.waitFor((s) => /^d \d+ game\tend$/.test(s), "leaver told the run ended");
+        await leaver.waitFor((s) => /^d \d+ status\tlobbyselect/.test(s), "leaver back in lobbyselect");
+        await enterDaily(leaver);
+        await holeOut(leaver, slotOf(leaverId));
+        await leaver.waitFor((s) => /^d \d+ game\tdailyrecord\tduplicate$/.test(s), "rejoined run is a duplicate");
+        const left = postsOf(leaverProfile);
+        assert(left.length === 2, `expected 2 posts for the leaver, got ${left.length}`);
+        assert(left[0].body.holed === false && left[0].body.strokes === 1 && left[0].body.date === today,
+            `abandoned run not posted as a forfeit: ${JSON.stringify(left[0].body)}`);
+        console.log("[OK] leaving mid-run counts as the day's run; the rejoin does not replace it");
+
+        // Page reload: the socket dies mid-run and a fresh login rejoins.
+        const reloaderProfile = randomUUID();
+        const [reloader, reloaderId] = await join("Reloader", reloaderProfile);
+        await shoot(reloader, slotOf(reloaderId));
+        reloader.ws.terminate();
+        for (let i = 0; i < 100 && postsOf(reloaderProfile).length === 0; i++) await new Promise((r) => setTimeout(r, 20));
+        assert(postsOf(reloaderProfile)[0]?.body.holed === false, "run dropped mid-stroke was not posted as a forfeit");
+        const [reloaded, reloadedId] = await join("Reloader", reloaderProfile);
+        await holeOut(reloaded, slotOf(reloadedId));
+        await reloaded.waitFor((s) => /^d \d+ game\tdailyrecord\tduplicate$/.test(s), "run after reload is a duplicate");
+        console.log("[OK] reloading mid-run counts as the day's run");
+
+        // Transparent reconnect to the same seat after a drop mid-run.
+        const dropperProfile = randomUUID();
+        const [dropper, dropperId] = await join("Dropper", dropperProfile);
+        await shoot(dropper, slotOf(dropperId));
+        dropper.ws.terminate();
+        for (let i = 0; i < 100 && postsOf(dropperProfile).length === 0; i++) await new Promise((r) => setTimeout(r, 20));
+        await new Promise((r) => setTimeout(r, 100));
+        const back = new Client("dropper2", `?ticket=${ticket({ registered: true, nickname: "Dropper", profileId: dropperProfile })}`);
+        await back.open();
+        await back.waitFor((s) => s === "c ctr", "c ctr");
+        back.sendCommand("old", String(dropperId));
+        await back.waitFor((s) => s === "c rcok", "rcok");
+        await back.waitFor((s) => /^d \d+ game\tend$/.test(s), "reconnected player sees the run ended");
+        await back.waitFor((s) => /^d \d+ game\tdailyrecord\tsaved$/.test(s), "reconnected player learns the save outcome");
+        assert(postsOf(dropperProfile).length === 1, "reconnect posted the run again");
+        console.log("[OK] reconnecting cannot resume or restart an abandoned run");
+
+        // A drop before the first stroke keeps the run open.
+        const idleProfile = randomUUID();
+        const [idle, idleId] = await join("Idle", idleProfile);
+        idle.ws.terminate();
+        await new Promise((r) => setTimeout(r, 200));
+        const idleBack = new Client("idle2", `?ticket=${ticket({ registered: true, nickname: "Idle", profileId: idleProfile })}`);
+        await idleBack.open();
+        await idleBack.waitFor((s) => s === "c ctr", "c ctr");
+        idleBack.sendCommand("old", String(idleId));
+        await idleBack.waitFor((s) => s === "c rcok", "rcok");
+        await idleBack.waitFor((s) => /^d \d+ game\tdailymode\t/.test(s), "idle resync");
+        await holeOut(idleBack, slotOf(idleId));
+        await idleBack.waitFor((s) => /^d \d+ game\tdailyrecord\tsaved$/.test(s), "untouched run still counts after a drop");
+        assert(postsOf(idleProfile).length === 1 && postsOf(idleProfile)[0].body.holed === true, "idle drop was posted as a forfeit");
+        console.log("[OK] a drop before the first stroke keeps the run open");
+
+        for (const c of [guest, intruder, owner, looker, leaver, reloaded, back, idleBack]) c.close();
         console.log("\nALL PORTAL CHECKS PASSED");
     } finally {
         await server?.close();
